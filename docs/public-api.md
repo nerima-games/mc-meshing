@@ -1,7 +1,7 @@
 # 公開 API
 
 - 出典: plan.md §3.3 + **参照実装の実コードによる検証**
-- 参照実装ルート: `/Users/take/ghq/github.com/takeokunn/ts-minecraft`（以下パスはこれ相対）
+- 参照実装ルート: `<reference-impl>`（以下パスはこれ相対）
 
 ## 1. 最重要の差分: `mesh` という関数は参照実装に存在しない
 

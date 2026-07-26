@@ -1,10 +1,18 @@
 # mc-meshing ドキュメント
 
-このリポジトリを実装するために必要な情報を、`/Users/take/Documents/plan.md` を
+このリポジトリを実装するために必要な情報を、plan.md（**非公開**）を
 読み返さずに済むよう、また参照実装の事実を再調査せずに済むようにまとめたもの。
 
 参照実装（`takeokunn/ts-minecraft`）の記述には**すべて file:line の裏付け**を付けてある。
 plan.md の数値のうち再検証で食い違ったものは `porting.md` に訂正として記録した。
+
+## 表記
+
+| 表記 | 意味 |
+| --- | --- |
+| `<reference-impl>` | **参照実装のチェックアウトのルート**。凍結された `takeokunn/ts-minecraft` の作業コピーを指す。本ドキュメント群では `<reference-impl>/packages/…` の形か、単に `packages/…`（同じくルート相対）で引用する。手元のどこに clone してあっても読み替えられるようにするためのプレースホルダである |
+| plan.md | リポジトリ構成仕様書（16 リポジトリ、確定済み）。**非公開**であり、公開読者は開けない。だから本ドキュメント群は「plan.md を読まなくても追える」ことを要件にしている —— plan.md の主張を引くときは必ず原文を引用し、参照実装での裏づけを file:line で添える |
+| `nerima-games/<repo>` | 同 org の兄弟リポジトリ。リンクは GitHub の URL で張る |
 
 ## 読む順番
 
@@ -28,9 +36,9 @@ plan.md の数値のうち再検証で食い違ったものは `porting.md` に�
 
 ## 上位資料
 
-- `/Users/take/Documents/plan.md` —— リポジトリ構成仕様書（16 リポジトリ、確定済み）
-- `/Users/take/ghq/github.com/nerima-games/mc-kernel/` —— 共有語彙。全リポジトリの雛形
-- `/Users/take/ghq/github.com/takeokunn/ts-minecraft` —— 参照実装（凍結。仕様書兼テストオラクル）
+- plan.md（非公開） —— リポジトリ構成仕様書（16 リポジトリ、確定済み）
+- `nerima-games/mc-kernel` —— 共有語彙。全リポジトリの雛形
+- `<reference-impl>` —— 参照実装（凍結。仕様書兼テストオラクル）
 
 ## 本ドキュメントの方針
 

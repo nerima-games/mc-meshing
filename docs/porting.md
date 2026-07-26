@@ -1,6 +1,6 @@
 # 移植元と実測 LOC
 
-- 参照実装ルート: `/Users/take/ghq/github.com/takeokunn/ts-minecraft`（以下パスはこれ相対）
+- 参照実装ルート: `<reference-impl>`（以下パスはこれ相対）
 - 計測日: 2026-07-26
 - 計測方法: `wc -l`（コメント・空行を含む物理行数）
 
