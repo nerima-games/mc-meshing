@@ -1,0 +1,64 @@
+{
+  // Shared compiler options for every tsconfig in this repository.
+  // Copied from @nerima-games/mc-kernel; keep the two in sync.
+  // Strictness policy: `strict: true` PLUS every additional strictness flag
+  // spelled out explicitly, so that a future TypeScript release changing a
+  // default cannot silently weaken this repository.
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // mc-meshing is platform-agnostic pure computation: no DOM, no WebWorker,
+    // no Node globals, and in particular no Three.js. Meshing runs in a worker in
+    // production and in Node under vitest; the type environment must permit both.
+    "lib": ["ES2024"],
+    "types": [],
+
+    "allowJs": false,
+    "checkJs": false,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "useUnknownInCatchVariables": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "resolvePackageJsonExports": true,
+    "resolvePackageJsonImports": true,
+    "skipLibCheck": true,
+
+    "newLine": "lf",
+    "stripInternal": true,
+
+    // No build step yet (see README 現状). Every tsconfig here is check-only;
+    // `package.json#exports` points at TypeScript source. The emitting
+    // build/publish pipeline is added when this repo reaches completion.
+    "noEmit": true,
+
+    "baseUrl": "."
+  }
+}
