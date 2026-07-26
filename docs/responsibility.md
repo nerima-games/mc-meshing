@@ -32,14 +32,41 @@
 | **Three.js のあらゆる型** | mc-render | typed array を `BufferGeometry` にするのはレンダラの仕事。§3.1 |
 | マテリアル（水シェーダ・アトラス・アルファブレンド） | mc-render | 「どう描くか」は「どこに面があるか」とは別 |
 | どのブロックが水 / ガラスか | mc-kernel（能力フラグ）+ 消費側 | `config` で注入する。§3.2 |
-| チャンクのロード / アンロード / dirty 管理 | mc-worldgen（`ChunkManager`） | plan.md §3.7 |
-| メッシュ更新の発火（dirty 購読） | mc-render（`WorldRenderer`） | plan.md §3.9 |
+| チャンクのロード / アンロード / dirty 管理 | mc-worldgen（`ChunkStore` = plan.md §3.7 の `ChunkManager`） | plan.md §3.7。実装済み |
+| メッシュ更新の発火（dirty 購読） | mc-render（`WorldRenderer`）が mc-worldgen の `ChunkStore.subscribeDirty` を購読する | plan.md §3.9 |
+| **座標の語彙**（`ChunkCoord` / チャンク座標系） | mc-kernel（型）+ mc-worldgen（キーとしての運用） | §3.3 |
 | ワーカープールの実装 | mc-render | plan.md §3.9。mc-meshing は worker の中で**呼ばれる**側 |
 | ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は読むだけ（現時点では未対応） |
 | LOD 簡約 | 未定 | 参照実装の `lod-simplification.ts`（288 LOC）。距離の概念が要るので mc-render 寄りかもしれない |
 | アンビエントオクルージョン | 保留 | 参照実装の `greedy-meshing-ao.ts`（149 LOC）。メッシュに焼き込む以上ここだが、まず基本を固める |
 | 植生メッシュ（十字板） | 保留 | 参照実装の `plant-mesh.ts`（258 LOC） |
 | 流体の高さ / 流れ方向 | 保留 | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）。流体伝播ルール自体は mx-gameplay |
+
+### 3.3 このリポジトリは座標を持たない（意図的）
+
+`ChunkNeighbours`（`domain/chunk-view.ts`）は 4 つの optional な `ChunkView` であり、
+「どの `ChunkView` がどの隣接チャンクか」を決める座標はここに無い。
+縦切りスパイクはこれを穴として指摘した — 座標をキーにしたストアから
+`ChunkNeighbours` を埋めるには、呼び出し側が 4 回手でルックアップすることになる、と。
+
+**決着: 座標はここに入れない。ルックアップはキーを所有する側が持つ。**
+
+`mc-worldgen` の `ChunkStore.neighbours(coord)` がその 4 回を行い、
+`{ xPos?, xNeg?, zPos?, zNeg? }` を返す。その戻り値は本リポジトリの
+`ChunkNeighbours` に**構造的に**適合する（mc-worldgen は mc-meshing を import できない —
+そのエッジは plan.md §2.1 のグラフに無く `pnpm check:deps` が落とす — ので名前的な適合ではない）。
+両方に依存する mc-render がそのまま渡す。
+
+理由は 2 つ。
+
+1. **本リポジトリは純粋関数の集合であり、`mesh(chunk, neighbours, config)` は
+   バッファしか見ない。** 座標を入れると「どのチャンクか」という第 2 の変更理由が増える。
+2. **座標系は mc-kernel の資産である**（plan.md §3.1: `Position` / `AABB` / チャンク座標系）。
+   ここで `ChunkCoord` を宣言すれば、ロスターに 3 つ目の綴りが増える。
+   2 つ目（mc-worldgen の `{x, z}`）は kernel の `{cx, cz}` に統合されたばかりである。
+
+将来 mc-kernel を消費するようになったら、必要なら kernel の `ChunkCoord` を
+そのまま使う。本リポジトリ独自の座標型を作ることはしない。
 
 ### 3.1 Three.js 非依存は絶対条件
 

@@ -9,9 +9,11 @@
 | `pnpm typecheck` | `tsconfig.build.json`（出荷ソース）と `tsconfig.test.json`（テスト・ツール）の両方 |
 | `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`oxlint.json` は 5 カテゴリすべてと個別 67 ルールが `warn`、`error` は 4 つだけ。このフラグが無かった頃は実質その 4 つしかゲートになっていなかった） |
 | `pnpm check:deps` | 依存ホワイトリスト + 循環検査 + `Date.now()` 禁止 |
+| `pnpm api:check` | `api-lock.md` が実際の公開 API と食い違えば非ゼロ終了（[versioning.md](./versioning.md) §6） |
+| `pnpm api:update` | `api-lock.md` を書き直す |
 | `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
 | `pnpm test:coverage` | カバレッジ計測（閾値は未設定。§3 参照） |
-| `pnpm verify` | 上記 4 つを直列実行。**CI と同じ内容** |
+| `pnpm verify` | `typecheck` / `lint` / `check:deps` / `api:check` / `test` を直列実行。**CI と同じ内容** |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
@@ -121,9 +123,11 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
 6. `pnpm lint`
 7. `pnpm check:deps` —— **ハードゲート**。参照実装の `check-package-dag.ts` と違い、
    違反があれば必ず非ゼロ終了する
-8. `pnpm test`
-9. `pnpm test:coverage`（閾値なし。§3）
-10. カバレッジレポートを artifact に upload（7 日保持）
+8. `pnpm api:check`（step 名は `API lock`）—— **ハードゲート**。`api-lock.md` が
+   現在の公開 API と食い違えば非ゼロ終了する（[versioning.md](./versioning.md) §6）
+9. `pnpm test`
+10. `pnpm test:coverage`（閾値なし。§3）
+11. カバレッジレポートを artifact に upload（7 日保持）
 
 ## 6. 現時点のテスト一覧
 
