@@ -131,7 +131,7 @@ describe('the recorded 16-repository roster', () => {
         ['mx-redstone', ['mc-sim', 'mc-worldgen']],
         ['mx-ui', ['mc-audio', 'mc-sim']],
         ['mx-multiplayer', ['mc-sim']],
-        ['mc-compose', ['mx-gameplay', 'mx-multiplayer', 'mx-redstone', 'mx-ui']],
+        ['mc-compose', ['mc-render', 'mx-gameplay', 'mx-multiplayer', 'mx-redstone', 'mx-ui']],
       ]
       for (const [node, targets] of expected) {
         const actual = REPOSITORY_POLICY.dependencyGraph.get(`@nerima-games/${node}`) ?? new Set<string>()

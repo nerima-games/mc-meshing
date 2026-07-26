@@ -76,7 +76,12 @@ export const MESH_LAYERS: ReadonlyArray<MeshLayer> = ['opaque', 'water', 'transp
  * `ReadonlySet<number>` here means the built-in TypeScript type, backed by a
  * native `Set`. Effect's `HashSet` is BANNED in this type. Its `has` compares
  * by structural equality, which for a boxed number goes through Equal/Hash
- * dispatch — orders of magnitude slower than a native Set's hash lookup, on a
+ * dispatch — MEASURED at 1.9x a native Set's hash lookup, and at 12.2x the
+ * `Uint8Array` lookup the inner loop actually uses (`pnpm bench`, guard
+ * `set-membership/hashset-vs-lookup-table`; see docs/testing.md §7). An earlier
+ * version of this comment said "orders of magnitude", which the benchmark does
+ * not support: most of the 12.2x is Set-vs-table, not HashSet-vs-Set. The
+ * conclusion is unchanged and the reason is now the right one. This is on a
  * path the reference measures at roughly 400,000 calls per chunk
  * (`packages/rendering/infrastructure/meshing/greedy-meshing-passes.ts:105`:
  * "The inner mask-building loop (hot path, ~400k calls/chunk)"; 6 face passes

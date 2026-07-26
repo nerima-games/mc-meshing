@@ -64,6 +64,23 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 定義域全体が 256 バイトに収まり、内側ループはハッシュ検索ではなく配列インデックスになる。
 構築は config あたり O(256) 一回であって、チャンクごとでもセルごとでもない。
 
+### 実測（`pnpm bench`）—— 「桁違い」の訂正
+
+`scripts/bench-meshing.ts` が 1 チャンク分の 393,216 回のルックアップ上で実測している
+（M4 Max / Node 22.23.1、5 回通しの中央値）:
+
+| 比較 | 比 |
+| --- | --- |
+| Effect `HashSet.has` 対 `Uint8Array` ルックアップ | **12.2x** |
+| native `Set.has` 対 `Uint8Array` ルックアップ | **6.5x** |
+| Effect `HashSet.has` 対 native `Set.has` | **1.9x** |
+
+`opacity.ts` は `HashSet` を native `Set` より「桁違いに遅い」と書いているが、
+**実測は 1.9 倍**であって桁違いではない。結論は変わらず、理由が変わる:
+効いているのは `HashSet` 対 `Set` ではなく **`Set` 対 `Uint8Array` ルックアップテーブル**（6.5x）で、
+合わせた 12.2x が「内側ループを配列インデックスにする」ことの本当の値打ちである。
+本節が「native Set でも内側ループには遅すぎる」と書いているのは正しく、数字はそちらを支持している。
+
 ### 回帰テスト
 
 `test/public-api.test.ts`:
@@ -73,6 +90,11 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 - `the layer lookup table covers every representable block id`
   —— lookup が `layerOfBlockId` と全 256 値で一致することを検査。
   lookup の構築がずれたら落ちる。
+
+`pnpm bench`（`verify` には入らない。`testing.md` §7）:
+
+- guard `set-membership/hashset-vs-lookup-table` 他 2 本 —— 上表の比を baseline に対して検査する。
+  型テストは入れ替えを捕まえるが、入れ替えの**値段**は言わない。レビューで効くのは後者である。
 
 ---
 
@@ -103,6 +125,19 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 これはフォールバックではなく**意味的に正しい答え**である。
 隣接チャンクが未ロードの境界は「開いている」ものとしてメッシュされるべきで、
 そうすればストリーミング中のプレイヤーは黒い壁ではなく地形を見る。
+
+### 実測（`pnpm bench`）
+
+`Option` を返す版は素の `number` を返す版の **2.2 倍**（1 チャンク分 393,216 回の近傍読み出し、
+M4 Max / Node 22.23.1、5 回通しの中央値）。
+
+ゲート本体は guard `neighbour-read/shipped-vs-frozen-inline-reference`——
+出荷している `getBlock` を**その現在の形の凍結コピー**と比べる。
+書き換え版と比べるだけでは足りない: 比はどちらの辺が変わっても同じ向きに動くからである。
+
+検証済み: `getBlock` を「境界チェックをヘルパに切り出し `Option` を経由する」もっともらしい
+リファクタに一時的に書き換えると、このゲートは 0.944 → 0.392 に落ち、
+`meshChunk` は実際に **3.1 倍**遅くなり、`pnpm bench` は 6 件の regression で exit 1 する。
 
 ### 回帰テスト
 

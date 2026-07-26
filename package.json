@@ -50,6 +50,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check:deps": "tsx scripts/check-dependency-whitelist.ts",
+    "bench": "tsx scripts/bench-meshing.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm check:deps && pnpm test"
   },
   "dependencies": {

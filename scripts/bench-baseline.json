@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "recordedOn": "Apple M4 Max, macOS 26.5.2, Node 22.23.1 (the flake devShell's node — the version CI runs). Each figure is the median of FIVE whole-benchmark runs, not one.",
+  "note": "guards are slow/fast A/B ratios measured in one process against one data set: the machine cancels, so these are the real gate (tolerance 1.5). workloads are workload/yardstick ratios and are only approximately machine-independent — indicative, not authoritative (tolerance 2.0). Observed spread across the five recording runs: guards 6-11%, workloads 18-22%, both comfortably inside their tolerance. Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.",
+  "guards": {
+    "neighbour-read/shipped-vs-frozen-inline-reference": 0.944,
+    "set-membership/hashset-vs-lookup-table": 12.249,
+    "set-membership/hashset-vs-native-set": 1.876,
+    "set-membership/native-set-vs-lookup-table": 6.51,
+    "neighbour-read/option-vs-plain-number": 2.237
+  },
+  "workloads": {
+    "meshChunk/flat": 9.986,
+    "meshChunk/rolling": 10.135,
+    "meshChunk/checkerboard-worst": 7.835,
+    "meshChunk/layered-water-glass": 11.007
+  }
+}

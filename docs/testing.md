@@ -12,6 +12,7 @@
 | `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
 | `pnpm test:coverage` | カバレッジ計測（閾値は未設定。§3 参照） |
 | `pnpm verify` | 上記 4 つを直列実行。**CI と同じ内容** |
+| `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
 
@@ -131,3 +132,114 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
 | `test/mesh.test.ts` | 面数（孤立 1 ブロック = 6、隣接 2 ブロック = 10、N×N 平板 = `2N²+4N`、上限 6/セル）、面順序（正準順・決定論）、レイヤ振り分け（water / transparentSolid / 優先度・同レイヤ cull）、チャンク境界（隣接なし = 開放、隣接あり = 遮蔽）、`getBlock` の範囲外 = AIR |
 | `test/public-api.test.ts` | barrel の export、透過集合が native `Set`、レイヤ優先度、正準面順序と法線と role、`oppositeDirection` の対合性、lookup table の全域性、`occludes` の意味論 |
 | `test/check-dependency-whitelist.test.ts` | 16 リポジトリ roster の完全性、非循環、体験モジュール間エッジ 0、kit の devDependency 専用性、推移閉包の拒否、`Date.now()` 禁止、import 抽出 |
+
+## 7. ベンチマーク（`pnpm bench`）
+
+### なぜ必要か
+
+plan.md §5.2 は 5 つのパフォーマンス例外を「実測で確定した。Effect 慣用スタイルに
+『修正』するな」と定めている。うち 2 つ（M-1 透過集合はネイティブ `Set`、
+M-2 `getBlock` は境界チェックをインライン化し `Option` を割り当てない）はこのリポジトリにある。
+しかし**回帰を検出する手段が無かった**。M-1 のテストは `instanceof Set` という**型**を見るだけで、
+入れ替えたときにいくら遅くなるかは何も言わない。レビューで実際に効くのは後者の数字である。
+
+さらに、このリポジトリの本体であるグリーディメッシングは**まだ実装されていない**うえ、
+その存在理由は速さそのものである。比較対象が無いまま実装を入れると、
+「速くなった」ことを誰も示せないし、後から「まだ速いか」も分からなくなる。
+**だから計測が先で、実装が後**である。現在の素朴な面抽出の数字がグリーディが超えるべき基準になる。
+
+### 何を測っているか
+
+`scripts/bench-meshing.ts`。fixture（flat / rolling / checkerboard、および x81 チャンクという枠組み）は
+参照実装の `scripts/bench-meshing.ts` からの移植である。手法も参照実装のもの——
+**ウォームアップののち 7 回計測しその中央値**——であり、発明していない。
+`layered-water-glass` だけは追加である（参照実装のベンチは不透明ブロックしか流しておらず、
+本リポジトリ固有の 3 値レイヤ振り分けが計測から漏れるため）。
+
+fixture は完全に決定論的である。PRNG も時計も入力も無い。
+
+### 絶対値ではなく**比**を検査する
+
+「3.4 ms/chunk」という絶対値を baseline にしても機能しない。それは記録した機械を写しているだけで、
+遅いランナーでは常に落ち、速いランナーでは常に通る。捕まえたいのは
+**「3 倍遅くなった」**であって「4.2ms かかった」ではない。そこで 2 種類の比を使う:
+
+| 種類 | 定義 | 機械依存性 | 既定 tolerance |
+| --- | --- | --- | --- |
+| **guard** | 同一プロセス・同一データ上での 2 実装の A/B 比 | **無い**（機械が約分される） | 1.30x。ただし shipped-vs-frozen は 1.15x |
+| **workload** | 実測値 ÷ 同じ run 内で測った yardstick | 近似的にしか無い | 2.00x |
+
+`scripts/bench-baseline.json` がコミットされた baseline である。
+記録は **5 回の通し実行の中央値**であり、1 回の実行ではない。
+
+### guard の 2 つの役割
+
+- **shipped-vs-frozen（ゲート本体）** —— 出荷している `getBlock` を、
+  **その現在の形をそのまま凍結したコピー**と比較する。比は今 0.94 付近にあり、
+  `getBlock` が遅くなれば——理由が何であれ——落ちる。
+  書き換え版と比較するだけでは不十分である: 比はどちらの辺が変わっても同じ向きに動くので、
+  出荷側が遅くなったのか比較対象が速くなったのかを区別できない。
+- **price list（値札）** —— 「HashSet にしたら何倍か」を数字で示す。
+  レビューで「native `Set` でいい理由」を問われたときに出す答えがこれである。
+
+### 実測値（Apple M4 Max / Node 22.23.1、5 回通しの中央値）
+
+| guard | 比 |
+| --- | --- |
+| `set-membership/hashset-vs-lookup-table` | **12.2x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
+| `set-membership/native-set-vs-lookup-table` | **6.5x**（native `Set.has` 対 `Uint8Array`） |
+| `set-membership/hashset-vs-native-set` | **1.9x**（Effect `HashSet.has` 対 native `Set.has`） |
+| `neighbour-read/option-vs-plain-number` | **2.2x**（`Option` 返し 対 素の `number` 返し） |
+| `neighbour-read/shipped-vs-frozen-inline-reference` | 0.94（ゲート。1.0 付近であるべき値） |
+
+いずれも 1 チャンク分の 393,216 回（6 面 × 16×16×256）のルックアップ上での測定である。
+
+**M-1 の記述の訂正**: `opacity.ts` は Effect の `HashSet` を native `Set` より
+「桁違いに遅い」と書いているが、**実測は 1.9 倍**であって桁違いではない。
+結論は変わらない——ただし理由が変わる。効いているのは `HashSet` 対 `Set` ではなく
+**`Set` 対 `Uint8Array` ルックアップテーブル**（6.5x）のほうであり、
+両方を合わせた 12.2x が「内側ループを配列インデックスにする」ことの本当の値打ちである。
+design-notes M-1 が「native Set でも内側ループには遅すぎる」と書いているのは正しく、
+数字はそちらを支持している。
+
+### ゲートが実際に落ちることの確認
+
+`domain/chunk-view.ts` の `getBlock` を「境界チェックをヘルパに切り出し `Option` を経由する」
+という**もっともらしいリファクタ**に一時的に書き換えて実行したところ:
+
+```
+REGRESSED  neighbour-read/shipped-vs-frozen-inline-reference  observed 0.392  baseline 0.944  (0.41x)
+REGRESSED  neighbour-read/option-vs-plain-number              observed 0.932  baseline 2.237  (0.42x)
+REGRESSED  meshChunk/flat                                     observed 30.594 baseline 9.986  (3.06x)
+REGRESSED  meshChunk/rolling                                  observed 31.734 baseline 10.135 (3.13x)
+```
+
+6 件の regression と exit 1。`meshChunk` は実際に **3.1 倍**遅くなっていた。
+
+### ベンチが**できない**こと
+
+wall-clock は粗い道具である。tolerance より安い書き換えはすり抜ける。
+**綴りの不変条件は型システムと design-notes の名前付き回帰テストの仕事**であって、
+このファイルはそれに値札を付けるだけである。どちらか一方を他方の理由で消してはならない。
+
+### `verify` に入っていない理由と、CI について
+
+これらのリポジトリは public で、CI は **`pull_request` ごとに**走る。
+ベンチマークは 1 リポジトリあたり 4〜6 秒だが、それは共有ランナーの実時間であり、
+かつ共有ランナーの実時間は**負荷で揺れる**——つまり workload 比は CI ではここで測ったより不安定になる。
+
+**推奨**: いま CI ジョブを足すべきではない。理由は、グリーディメッシングが未実装で
+baseline がこれから大きく動くこと、そして落ちたときに人間が読んで判断する必要があることの 2 つである。
+足すとしたら**グリーディ実装が着地した後**、`push` on `main` か nightly（`pull_request` ではなく）で、
+`--workload-tolerance` を緩めて guard だけを見る形が妥当である。
+それまでは、`domain/` の hot path に触る PR のレビューで人間が走らせるものとして扱う。
+
+### baseline の更新手順
+
+```console
+$ pnpm bench --update-baseline
+```
+
+`BENCH_MACHINE` 環境変数に機械の説明を入れると `recordedOn` に記録される。
+**更新は必ず、何がどう動いたかをコミットメッセージに書いて行うこと。**
+baseline を黙って上書きするのは、ベンチマークを削除するのと同じである。
