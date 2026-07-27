@@ -23,6 +23,7 @@ import {
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../domain/opacity'
 import { PLANT_INSET, buildCrossPlantLookup, isCrossPlant, type CrossPlantQuad } from '../domain/plant-mesh'
+import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
 const GLASS = 2
@@ -202,6 +203,7 @@ describe('the two plates', () => {
         { numRuns: 120 },
       )
     }),
+    PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('a plant at the very top of the chunk is still meshed', () =>

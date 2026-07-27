@@ -35,6 +35,7 @@ import {
 import { FACES, FACE_DIRECTIONS, tangentAxes, type FaceDirection, type QuadAxis } from '../domain/faces'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../domain/mesh'
 import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../domain/opacity'
+import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
 const WATER = 2
@@ -885,7 +886,6 @@ describe('the greedy merge against the naive oracle', () => {
    * checked against. Trading it for four seconds would quietly weaken the one
    * thing holding up the goldens.
    */
-  const MERGE_PROPERTY_TIMEOUT_MS = 40_000
 
   it.effect('REGRESSION: merged output covers exactly the same block-faces as unmerged output', () =>
     Effect.sync(() => {
@@ -908,7 +908,7 @@ describe('the greedy merge against the naive oracle', () => {
         { numRuns: 120 },
       )
     }),
-    MERGE_PROPERTY_TIMEOUT_MS,
+    PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('REGRESSION: no two merged quads claim the same block-face', () =>
@@ -925,7 +925,7 @@ describe('the greedy merge against the naive oracle', () => {
         { numRuns: 120 },
       )
     }),
-    MERGE_PROPERTY_TIMEOUT_MS,
+    PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('never emits more quads than the naive mesher, and usually far fewer', () =>
@@ -949,7 +949,7 @@ describe('the greedy merge against the naive oracle', () => {
       )
       expect(sawRealReduction).toBe(true)
     }),
-    MERGE_PROPERTY_TIMEOUT_MS,
+    PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('REGRESSION: never merges two different block ids, however they are arranged', () =>
