@@ -247,3 +247,20 @@ $ pnpm bench --update-baseline
 `BENCH_MACHINE` 環境変数に機械の説明を入れると `recordedOn` に記録される。
 **更新は必ず、何がどう動いたかをコミットメッセージに書いて行うこと。**
 baseline を黙って上書きするのは、ベンチマークを削除するのと同じである。
+
+## 直前のカバレッジ拡張について — コミットメッセージの数字が誤っている
+
+`test: cover the code the suites were walking past` のコミットメッセージは
+「added 107 tests」と書いているが、**正しくは 27 本**である
+(mc-noise 8 + mc-meshing 13 + mc-physics 6)。本リポジトリの実測は **79 → 92**。
+
+107 は 1 日古いレビューの baseline (53/53/68) から引いた差であり、
+その時点から 3 リポジトリはすでに 79/79/96 まで育っていた。
+16 リポジトリ合計も 2,771 → 2,798 で、差は 27 と一致する。
+
+**この誤りをここに残すのは、それが本プロジェクトで最も多く記録されている欠陥だからである** ——
+「結論は正しく、証拠が間違っている」。`CONTINENTALNESS_CONTRAST`、`SETTLE_TICK_LIMIT`、
+mc-meshing の HashSet 主張、`setDayLength → setTimeOfDay` の作業例に続く 5 例目で、
+しかも**テストカバレッジを説明する文章の中で**やっている。
+default branch は `non_fast_forward` で保護されているため履歴は書き換えられない。
+書き換えられないこと自体は正しい設計であり、だから訂正はここに置く。
