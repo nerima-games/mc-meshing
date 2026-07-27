@@ -100,11 +100,27 @@ export type MeshConfig = {
   readonly waterBlockIds: ReadonlySet<number>
   /** See-through solids. Rendered with the atlas material plus alpha blending. */
   readonly transparentSolidBlockIds: ReadonlySet<number>
+  /**
+   * Blocks drawn as two diagonal panes rather than as a cube: flowers, tall
+   * grass, mushrooms, saplings. See `domain/plant-mesh.ts`.
+   *
+   * A THIRD SET, not a third value of the layer model above. The other two
+   * answer "which buffer does this face go in", which is a question about
+   * MATERIAL; this one answers "is this a cube at all", which is a question
+   * about SHAPE. A block can be both — a see-through cross plate is the normal
+   * case — so collapsing them would lose one of the two answers.
+   *
+   * Optional, so that a config written before cross plates existed still
+   * typechecks and behaves exactly as it did: absent means no id is a plant,
+   * which is what every such config meant.
+   */
+  readonly crossPlantBlockIds?: ReadonlySet<number>
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
   waterBlockIds: new Set<number>(),
   transparentSolidBlockIds: new Set<number>(),
+  crossPlantBlockIds: new Set<number>(),
 }
 
 /** Largest block id representable in the chunk's `Uint8Array` storage. */

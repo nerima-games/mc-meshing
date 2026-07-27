@@ -24,31 +24,49 @@
  * would only mean the property fails for reasons that are not about merging.
  *
  * ---------------------------------------------------------------------------
- * What may be merged, and why `blockId` alone is the whole key
+ * What may be merged: `blockId` AND ambient occlusion
  * ---------------------------------------------------------------------------
  *
  * Two faces merge when they are in the same direction, on the same depth slice,
- * and carry the same `blockId`. That looks too weak — the invariants say merging
+ * and carry the same `blockId` AND the same `ao`. The invariants say merging
  * must never join across layers, across block types, or across faces with
- * different occlusion — so each of the three is worth saying explicitly:
+ * different occlusion, so each of the three is worth saying explicitly:
  *
  *  - ACROSS LAYERS cannot happen, because the layer is a function of the block
  *    id alone (`layerOfBlockId`). Equal ids are in equal layers, always.
- *  - ACROSS BLOCK TYPES cannot happen, because the id IS the key.
+ *  - ACROSS BLOCK TYPES cannot happen, because the id IS half the key.
  *  - ACROSS DIFFERENT OCCLUSION cannot happen, because occlusion is decided
  *    BEFORE the mask is written: a face that is hidden is never entered into the
- *    mask, and the mask's zero cell is `AIR`, which the expansion refuses to
- *    grow through. Merging therefore cannot reach across a hidden face — there
- *    is nothing there to reach.
+ *    mask, and the mask's zero cell means "no face", which the expansion refuses
+ *    to grow through. Merging therefore cannot reach across a hidden face —
+ *    there is nothing there to reach.
  *
  * `role` is a function of `direction` and each direction is meshed in its own
- * pass, so it needs no place in the key either. The reference packs ambient
- * occlusion and four corner lights alongside the id
- * (`greedy-meshing-passes.ts:24-45`) because it merges lit quads; this
+ * pass, so it needs no place in the key.
+ *
+ * AO IS IN THE KEY BECAUSE THE REFERENCE PUTS IT THERE, and because there is no
+ * other place it can go. `packMask` writes the block id into bits 0-7 and the
+ * quantised AO into bits 8-9 of one 32-bit mask cell
+ * (`greedy-meshing-passes.ts:24-45`), and `runGreedyExpansion` grows a rectangle
+ * only while the WHOLE cell repeats (:77, :84) — so the reference merges two
+ * faces only when their AO agrees, and says so: "greedy expansion only merges
+ * quads with identical lighting+ao+blockId — the expected vanilla trade-off"
+ * (:20-22). The alternative, applying AO after merging, has nothing to apply:
+ * a quad spanning cells of differing AO has no single correct value, so it would
+ * have to pick one (a visibly wrong shade over most of its area) or split again,
+ * which is this, done later and twice.
+ *
+ * That works only because the reference's AO is PER FACE rather than per vertex
+ * — see `domain/ambient-occlusion.ts`, which is where that distinction and its
+ * consequences are argued. AO does not change WHICH faces are exposed, only how
+ * they group, so `totalQuadArea` is unmoved and the coverage property below
+ * holds exactly as before.
+ *
+ * The four CORNER LIGHTS the reference packs beside them are not here: this
  * repository has no lighting yet (docs/responsibility.md §3 lists the light grid
- * as mc-worldgen's and unread here), so the id is the whole of it. When lighting
- * arrives THIS is the comment to come back to: the key has to grow, or slabs
- * with different light will merge and the lighting will visibly flatten.
+ * as mc-worldgen's and unread here). When lighting arrives THIS is the comment
+ * to come back to: the key has to grow again, or slabs with different light will
+ * merge and the lighting will visibly flatten.
  *
  * ---------------------------------------------------------------------------
  * THE EMISSION ORDER CHANGED, AND IT HAD TO
@@ -94,6 +112,7 @@
  * fast path behind an explicit opt-in once there is a benchmark to justify it.
  * See docs/design-notes.md, regression `meshing-result-is-owned-not-aliased`.
  */
+import { ambientOcclusionAt } from './ambient-occlusion'
 import {
   AIR,
   CHUNK_HEIGHT,
@@ -104,7 +123,13 @@ import {
   type ChunkView,
 } from './chunk-view'
 import { FACES, type Face, type FaceDirection, type FaceRole } from './faces'
-import { buildLayerLookup, MESH_LAYERS, type MeshConfig, type MeshLayer } from './opacity'
+import { buildLayerLookup, MAX_BLOCK_ID, MESH_LAYERS, type MeshConfig, type MeshLayer } from './opacity'
+import {
+  buildCrossPlantLookup,
+  isCrossPlant,
+  meshCrossPlants,
+  type CrossPlantQuad,
+} from './plant-mesh'
 
 /**
  * One emitted quad. Positions are chunk-local; mc-render applies the offset.
@@ -126,10 +151,37 @@ export type Quad = {
   readonly width: number
   /** Extent along the face's second tangent axis. At least 1; larger when merged. */
   readonly height: number
+  /**
+   * Ambient occlusion for the WHOLE quad, in `[0, AO_MAX]`. Higher is darker.
+   *
+   * One value, not four, and that is the reference's model rather than a
+   * simplification of it — `domain/ambient-occlusion.ts` says why at length. It
+   * is uniform over the quad by construction: AO is part of the merge key, so a
+   * rectangle is only ever grown across cells that already agreed on it.
+   */
+  readonly ao: number
 }
 
 export type MeshLayers = {
   readonly [K in MeshLayer]: ReadonlyArray<Quad>
+} & {
+  /**
+   * Cross-plate plant geometry: flowers, grass, saplings. NOT block faces.
+   *
+   * A FOURTH LIST BESIDE THE THREE plan.md §3.3 SPECIFIES, and a deliberate
+   * deviation from that API rather than an oversight. A cross plate is a
+   * diagonal, fractionally-inset pane: it has no `FaceDirection`, no integer
+   * extents, and covers no block face, so it cannot be a `Quad` and cannot go in
+   * a `Quad` list. `domain/plant-mesh.ts` argues the alternatives; the short
+   * version is that the choice is not "deviate or not" but "deviate here, where
+   * it is visible in the type, or inside `Quad`, where it is not".
+   *
+   * It is NOT part of `totalQuadArea` or `totalQuadCount`. Those measure block
+   * faces — the quantity the greedy merge must conserve and reduce respectively
+   * — and a cross plate is neither covered by nor mergeable with one. Counting
+   * it would make the merge's central invariant read as violated by a flower.
+   */
+  readonly crossPlants: ReadonlyArray<CrossPlantQuad>
 }
 
 /**
@@ -191,8 +243,23 @@ const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId]
  * ~400k/chunk path plan.md §3.3 measures. The bench guard
  * `set-membership/native-set-vs-lookup-table` prices the difference at 6.5x.
  */
-const isFaceExposed = (lookup: Uint8Array, blockId: number, neighbourId: number): boolean => {
-  if (neighbourId === AIR) {
+const isFaceExposed = (
+  lookup: Uint8Array,
+  plants: Uint8Array,
+  blockId: number,
+  neighbourId: number,
+): boolean => {
+  // A cross-plant neighbour is treated exactly as air. Two diagonal panes
+  // occupying a tenth of a cell cannot hide a face, so this is the correct
+  // answer rather than a preference — and it is a DEVIATION: the reference's
+  // `isSolidFaceExposed` (`greedy-meshing-fluid-state.ts:145-157`) exposes a
+  // face only through air or a transparent solid, and plants are in neither
+  // set, so a flower beside a stone block culls that block's face there. See
+  // `domain/plant-mesh.ts` and docs/design-notes.md M-11.
+  //
+  // A byte-indexed table read, not a `Set.has`: this is the ~400k calls/chunk
+  // path that plan.md §3.3 measures and `domain/opacity.ts` prices at 6.5x.
+  if (neighbourId === AIR || isCrossPlant(plants, neighbourId)) {
     return true
   }
   const neighbourLayer = layerAt(lookup, neighbourId)
@@ -232,6 +299,38 @@ const solidCeiling = (blocks: Readonly<Uint8Array>): number => {
 }
 
 /**
+ * ---------------------------------------------------------------------------
+ * The mask cell: the merge key, packed
+ * ---------------------------------------------------------------------------
+ *
+ * `blockId` in bits 0-7, `ao` in bits 8-9 — the reference's layout for the same
+ * two fields (`greedy-meshing-passes.ts:8-11`). Two faces merge exactly when
+ * their whole cells are equal, so packing the key into one number is what makes
+ * `expandGreedy` a comparison of numbers rather than a comparison of records.
+ *
+ * `NO_FACE` is 0 and is UNAMBIGUOUS: a cell is only ever written for an exposed
+ * face, a face is only ever emitted for a non-air block, and `AIR` is 0 — so a
+ * packed cell whose id is 0 cannot occur, whatever its AO. The zero cell
+ * therefore means "no face here" and nothing else, and `expandGreedy` can use it
+ * as its terminator without a separate presence bit.
+ *
+ * `Uint16Array` rather than the reference's `Uint32Array`: the reference needs
+ * 26 bits because it packs eight corner-light fields beside these two. With only
+ * the id and the AO the key is 10 bits, and halving the mask halves the bytes
+ * the per-slice `fill` touches.
+ */
+const AO_SHIFT = 8
+
+/** Empty mask cell. See above for why 0 cannot collide with a real face. */
+const NO_FACE = 0
+
+const packFaceCell = (blockId: number, ao: number): number => blockId | (ao << AO_SHIFT)
+
+const faceCellBlockId = (cell: number): number => cell & MAX_BLOCK_ID
+
+const faceCellAo = (cell: number): number => cell >> AO_SHIFT
+
+/**
  * Called once per maximal rectangle found.
  *
  * `depth` is the slice index — the coordinate on the face's normal axis — and is
@@ -246,14 +345,14 @@ type EmitQuad = (
   inner: number,
   outerRun: number,
   innerRun: number,
-  blockId: number,
+  cell: number,
   depth: number,
 ) => void
 
-/** Do `length` cells starting at `start` all hold `blockId`? */
-const rowMatches = (mask: Uint8Array, start: number, length: number, blockId: number): boolean => {
+/** Do `length` cells starting at `start` all hold `cell`? */
+const rowMatches = (mask: Uint16Array, start: number, length: number, cell: number): boolean => {
   for (let offset = 0; offset < length; offset += 1) {
-    if (mask[start + offset] !== blockId) {
+    if (mask[start + offset] !== cell) {
       return false
     }
   }
@@ -263,11 +362,16 @@ const rowMatches = (mask: Uint8Array, start: number, length: number, blockId: nu
 /**
  * The 2-D greedy merge over one built mask. The heart of this file.
  *
- * The mask is `outerSize * innerSize` block ids, `AIR` meaning "no face here",
- * laid out inner-contiguous. For each cell not yet consumed: extend along the
- * INNER axis while the id repeats, then extend along the OUTER axis while every
- * one of those inner cells repeats on the next row, then clear the rectangle so
- * no later cell claims it again and emit it once.
+ * The mask is `outerSize * innerSize` packed cells, `NO_FACE` meaning "no face
+ * here", laid out inner-contiguous. For each cell not yet consumed: extend along
+ * the INNER axis while the cell repeats, then extend along the OUTER axis while
+ * every one of those inner cells repeats on the next row, then clear the
+ * rectangle so no later cell claims it again and emit it once.
+ *
+ * It compares WHOLE CELLS, so everything packed into one is automatically part
+ * of the merge key and nothing here has to know what the fields are. That is why
+ * adding AO changed the packing and left this function alone, and why adding
+ * light later will do the same.
  *
  * Inner-first is what makes the scan cheap: the inner run is a contiguous
  * memory walk, and the outer test only ever examines rows it is about to claim.
@@ -280,10 +384,10 @@ const rowMatches = (mask: Uint8Array, start: number, length: number, blockId: nu
  * This is not the MINIMAL number of rectangles — computing that is far more
  * expensive and nobody's mesher does it. It is the standard greedy sweep the
  * reference uses (`runGreedyExpansion`, `greedy-meshing-passes.ts:64-97`),
- * ported with the AO/light packing removed.
+ * ported with the corner-light packing removed.
  */
 const expandGreedy = (
-  mask: Uint8Array,
+  mask: Uint16Array,
   outerSize: number,
   innerSize: number,
   emit: EmitQuad,
@@ -292,30 +396,30 @@ const expandGreedy = (
   for (let outer = 0; outer < outerSize; outer += 1) {
     for (let inner = 0; inner < innerSize; inner += 1) {
       const base = outer * innerSize + inner
-      const blockId = mask[base] ?? AIR
-      if (blockId === AIR) {
+      const cell = mask[base] ?? NO_FACE
+      if (cell === NO_FACE) {
         continue
       }
 
       let innerRun = 1
-      while (inner + innerRun < innerSize && mask[base + innerRun] === blockId) {
+      while (inner + innerRun < innerSize && mask[base + innerRun] === cell) {
         innerRun += 1
       }
 
       let outerRun = 1
       while (
         outer + outerRun < outerSize &&
-        rowMatches(mask, (outer + outerRun) * innerSize + inner, innerRun, blockId)
+        rowMatches(mask, (outer + outerRun) * innerSize + inner, innerRun, cell)
       ) {
         outerRun += 1
       }
 
       for (let row = 0; row < outerRun; row += 1) {
         const rowStart = (outer + row) * innerSize + inner
-        mask.fill(AIR, rowStart, rowStart + innerRun)
+        mask.fill(NO_FACE, rowStart, rowStart + innerRun)
       }
 
-      emit(outer, inner, outerRun, innerRun, blockId, depth)
+      emit(outer, inner, outerRun, innerRun, cell, depth)
     }
   }
 }
@@ -333,14 +437,15 @@ const meshXPass = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
+  plants: Uint8Array,
   face: Face,
   yLimit: number,
-  mask: Uint8Array,
+  mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const emit: EmitQuad = (outer, inner, outerRun, innerRun, blockId, depth) => {
+  const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
-      blockId,
+      blockId: faceCellBlockId(cell),
       direction: face.direction,
       role: face.role,
       lx: depth,
@@ -348,20 +453,28 @@ const meshXPass = (
       lz: outer,
       width: innerRun,
       height: outerRun,
+      ao: faceCellAo(cell),
     })
   }
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    mask.fill(AIR, 0, CHUNK_SIZE * yLimit)
+    mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
     for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
       const rowBase = lz * yLimit
       for (let y = 0; y < yLimit; y += 1) {
         const blockId = getBlock(chunk.blocks, lx, y, lz)
-        if (blockId === AIR) {
+        // A plant emits no cube faces at all — it is drawn as two diagonal
+        // panes by `meshCrossPlants`. The reference guards all six passes the
+        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
+        // without it a flower is drawn as a solid cube AND as a cross.
+        if (blockId === AIR || isCrossPlant(plants, blockId)) {
           continue
         }
-        if (isFaceExposed(lookup, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
-          mask[rowBase + y] = blockId
+        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
+          mask[rowBase + y] = packFaceCell(
+            blockId,
+            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+          )
         }
       }
     }
@@ -383,14 +496,15 @@ const meshYPass = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
+  plants: Uint8Array,
   face: Face,
   yLimit: number,
-  mask: Uint8Array,
+  mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const emit: EmitQuad = (outer, inner, outerRun, innerRun, blockId, depth) => {
+  const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
-      blockId,
+      blockId: faceCellBlockId(cell),
       direction: face.direction,
       role: face.role,
       lx: outer,
@@ -398,20 +512,28 @@ const meshYPass = (
       lz: inner,
       width: outerRun,
       height: innerRun,
+      ao: faceCellAo(cell),
     })
   }
 
   for (let y = 0; y < yLimit; y += 1) {
-    mask.fill(AIR, 0, CHUNK_SIZE * CHUNK_SIZE)
+    mask.fill(NO_FACE, 0, CHUNK_SIZE * CHUNK_SIZE)
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       const rowBase = lx * CHUNK_SIZE
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         const blockId = getBlock(chunk.blocks, lx, y, lz)
-        if (blockId === AIR) {
+        // A plant emits no cube faces at all — it is drawn as two diagonal
+        // panes by `meshCrossPlants`. The reference guards all six passes the
+        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
+        // without it a flower is drawn as a solid cube AND as a cross.
+        if (blockId === AIR || isCrossPlant(plants, blockId)) {
           continue
         }
-        if (isFaceExposed(lookup, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
-          mask[rowBase + lz] = blockId
+        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
+          mask[rowBase + lz] = packFaceCell(
+            blockId,
+            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+          )
         }
       }
     }
@@ -429,14 +551,15 @@ const meshZPass = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
+  plants: Uint8Array,
   face: Face,
   yLimit: number,
-  mask: Uint8Array,
+  mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const emit: EmitQuad = (outer, inner, outerRun, innerRun, blockId, depth) => {
+  const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
-      blockId,
+      blockId: faceCellBlockId(cell),
       direction: face.direction,
       role: face.role,
       lx: outer,
@@ -444,20 +567,28 @@ const meshZPass = (
       lz: depth,
       width: outerRun,
       height: innerRun,
+      ao: faceCellAo(cell),
     })
   }
 
   for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-    mask.fill(AIR, 0, CHUNK_SIZE * yLimit)
+    mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       const rowBase = lx * yLimit
       for (let y = 0; y < yLimit; y += 1) {
         const blockId = getBlock(chunk.blocks, lx, y, lz)
-        if (blockId === AIR) {
+        // A plant emits no cube faces at all — it is drawn as two diagonal
+        // panes by `meshCrossPlants`. The reference guards all six passes the
+        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
+        // without it a flower is drawn as a solid cube AND as a cross.
+        if (blockId === AIR || isCrossPlant(plants, blockId)) {
           continue
         }
-        if (isFaceExposed(lookup, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
-          mask[rowBase + y] = blockId
+        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
+          mask[rowBase + y] = packFaceCell(
+            blockId,
+            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+          )
         }
       }
     }
@@ -468,6 +599,7 @@ const meshZPass = (
 /** The three per-layer sinks, and the routing rule, in one place. */
 const makeSink = (
   lookup: Uint8Array,
+  crossPlants: ReadonlyArray<CrossPlantQuad>,
 ): {
   readonly layers: MeshLayers
   readonly push: (quad: Quad) => void
@@ -477,7 +609,7 @@ const makeSink = (
   const transparentSolid: Array<Quad> = []
   const buckets = [opaque, water, transparentSolid]
   return {
-    layers: { opaque, water, transparentSolid },
+    layers: { opaque, water, transparentSolid, crossPlants },
     // MESH_LAYERS is ['opaque', 'water', 'transparentSolid'] and the lookup
     // stores an index into it, so the routing is the index — no re-spelling of
     // the priority order, which lives in `opacity.ts` and is tested there.
@@ -505,8 +637,12 @@ export const meshChunk = (
   config: MeshConfig,
 ): MeshLayers => {
   const lookup = buildLayerLookup(config)
-  const { layers, push } = makeSink(lookup)
+  const plants = buildCrossPlantLookup(config)
   const yLimit = solidCeiling(chunk.blocks)
+  // Plants are meshed BEFORE the sink is built, because the sink owns the
+  // result object and a cross plate is part of it. They are bounded by the same
+  // `yLimit`: a plant is a non-air block, so none can exist above the highest.
+  const { layers, push } = makeSink(lookup, meshCrossPlants(chunk, plants, yLimit))
   if (yLimit === 0) {
     return layers
   }
@@ -515,15 +651,15 @@ export const meshChunk = (
   // every slice of every pass. Allocating per slice would be 576 typed arrays
   // per chunk; `expandGreedy` consumes what it reads, and each pass refills the
   // region it is about to use, so sharing is safe.
-  const mask = new Uint8Array(CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE))
+  const mask = new Uint16Array(CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE))
 
   for (const face of FACES) {
     if (face.nx !== 0) {
-      meshXPass(chunk, neighbours, lookup, face, yLimit, mask, push)
+      meshXPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
     } else if (face.ny !== 0) {
-      meshYPass(chunk, neighbours, lookup, face, yLimit, mask, push)
+      meshYPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
     } else {
-      meshZPass(chunk, neighbours, lookup, face, yLimit, mask, push)
+      meshZPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
     }
   }
 
@@ -547,6 +683,13 @@ export const meshChunk = (
  * Emits in `lx` then `lz` then `y` within each direction, which is the order
  * this repository declared load-bearing before merging made it impossible to
  * keep for four of the six directions.
+ *
+ * IT COMPUTES AO, and must. `ambientOcclusionAt` is called here exactly as the
+ * merged pass calls it, so the oracle carries a per-face AO for every unit face
+ * and the coverage property can compare the two shade for shade. An oracle that
+ * left `ao` at 0 would still pin the merge's geometry and would say nothing
+ * whatever about whether the shading survived it — which is the half of the
+ * merge that AO actually changed.
  */
 export const meshChunkNaive = (
   chunk: ChunkView,
@@ -554,14 +697,18 @@ export const meshChunkNaive = (
   config: MeshConfig,
 ): MeshLayers => {
   const lookup = buildLayerLookup(config)
-  const { layers, push } = makeSink(lookup)
+  const plants = buildCrossPlantLookup(config)
+  // CHUNK_HEIGHT, not `solidCeiling`: the oracle deliberately does no such
+  // optimisation, so that `solidCeiling` itself is something the property tests
+  // can catch being wrong. The plates are identical either way.
+  const { layers, push } = makeSink(lookup, meshCrossPlants(chunk, plants, CHUNK_HEIGHT))
 
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
           const blockId = getBlock(chunk.blocks, lx, y, lz)
-          if (blockId === AIR) {
+          if (blockId === AIR || isCrossPlant(plants, blockId)) {
             continue
           }
           const neighbourId = getBlockAcrossBoundary(
@@ -571,7 +718,7 @@ export const meshChunkNaive = (
             y + face.ny,
             lz + face.nz,
           )
-          if (!isFaceExposed(lookup, blockId, neighbourId)) {
+          if (!isFaceExposed(lookup, plants, blockId, neighbourId)) {
             continue
           }
           push({
@@ -583,6 +730,7 @@ export const meshChunkNaive = (
             lz,
             width: 1,
             height: 1,
+            ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
           })
         }
       }

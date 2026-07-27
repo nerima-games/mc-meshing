@@ -80,6 +80,13 @@ test/mesh.test.ts
 同じ**集合**を作り、より大きい**多重集合**を作る。ソート済み配列の比較はこれを捕まえ、
 `new Set(...)` の比較は捕まえない。
 
+**AO 着地時にこの文字列へ `ao` を足した。主張の変更ではなく強化である。**
+マージ済み quad は矩形全体で AO を 1 つしか持たないので、それを覆う全単位面に書き出すことは
+「そのセルすべてが本当にその値を持つ」という主張になる。突き合わせる相手の `meshChunkNaive` は
+マージを一切せずセルごとに AO を計算するので、比較はセル単位の陰影の一致になる。
+足さなければ、この最強のテストはマージの**幾何**だけを固定し、
+**AO が実際に変えた側**については何も言わないままだった（`design-notes.md` M-10）。
+
 これがあるおかげで、**ゴールデン（出力順）を動かす判断が正当化できる**。
 順序が変わっても被覆が同じであることを、fixture ではなく性質として示せるからである。
 
@@ -187,9 +194,11 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 
 | ファイル | 内容 |
 | --- | --- |
-| `test/mesh.test.ts` | 被覆面積（孤立 1 ブロック = 6、隣接 2 ブロック = 10、N×N 平板 = `2N²+4N`、上限 6/セル）とマージ後の面数（それぞれ 6 / 6 / 6）、**マージ対オラクル**（被覆の多重集合一致・重複被覆なし・ブロック ID をまたがない・レイヤをまたがない）、面順序（正準な方向順、方向ごとの列、決定論）、レイヤ振り分け（water / transparentSolid / 優先度・同レイヤ cull）、チャンク境界（隣接なし = 開放、隣接あり = 遮蔽）、**Y 走査上限**（最上段 y=255 が消えないこと）、`getBlock` の範囲外 = AIR |
+| `test/mesh.test.ts` | 被覆面積（孤立 1 ブロック = 6、隣接 2 ブロック = 10、N×N 平板 = `2N²+4N`、上限 6/セル）とマージ後の面数（それぞれ 6 / 6 / 6）、**マージ対オラクル**（被覆の多重集合一致・重複被覆なし・ブロック ID をまたがない・レイヤをまたがない・**AO をまたがない**）、面順序（正準な方向順、方向ごとの列、決定論）、レイヤ振り分け（water / transparentSolid / 優先度・同レイヤ cull）、チャンク境界（隣接なし = 開放、隣接あり = 遮蔽）、**Y 走査上限**（最上段 y=255 が消えないこと）、`getBlock` の範囲外 = AIR |
+| `test/ambient-occlusion.test.ts` | サンプルするセル（面前の空気セルの接線 4 近傍がちょうど 1 ずつ暗くすること、**それ以外は暗くしないこと** —— 空気セル自身・法線 2 歩先・法線の裏・面内 4 対角・発光セル自身の接線近傍）、2 つの表が交わらないこと、6 方向が別の集合を見ること、クランプ（4 個でも 3 個でも `AO_MAX`）、範囲と単調性（プロパティ）、**遮蔽物は `!== AIR`**（水もガラスも数える。転記のみ）、チャンク境界（隣接なし = 参照実装と同じ 0、隣接あり = 遮蔽、向いている側だけ、接している列だけ、角の対角は空気、世界の天井と床は空気） |
 | `test/public-api.test.ts` | barrel の export、透過集合が native `Set`、レイヤ優先度、正準面順序と法線と role、`oppositeDirection` の対合性、lookup table の全域性、`occludes` の意味論 |
 | `test/lod.test.ts` | LOD 段の語彙（`LOD_LEVELS` / `LodLevelSchema`）、`packQuadKey` の単射性（3^9 全数）と 2^53 上界、LOD 0 の同一性、純粋性（入力を書き換えない・水とガラスは素通し）、snap の軸（水平のみ・Y は不変）、**素朴メッシュに対する**削減の厳密な数（上下面 ÷step²、側面 ÷step）、**マージ済みメッシュに対しては何も削減しないこと**（M-8 / M-9）、穴が開かないこと（包含）、出力列が入力列の部分列であること（並べ替えでないこと）、接線軸規約（`faceOf` / `tangentAxes`） |
+| `test/plant-mesh.test.ts` | 十字板の頂点（**2 枚が逆の対角**であること —— 参照実装から転記した頂点列と、XZ 射影の外積が 0 でないことの二重検査、水平だけ inset して Y は inset しないこと、AO を持たないこと、`lx → lz → y` の順序を**同点を含む** fixture で）、6 パスとの関係（**立方体の面を 1 枚も出さない**、**何も遮蔽しない** —— 6 方向すべて + 不透明隣接の対照）、両メッシャの一致（プロパティ）、注入される集合（省略時は植物なし、平坦化表の全域一致、範囲外 ID、形状と材質が両立すること） |
 | `test/check-dependency-whitelist.test.ts` | 16 リポジトリ roster の完全性、非循環、体験モジュール間エッジ 0、kit の devDependency 専用性、推移閉包の拒否、`Date.now()` 禁止、import 抽出 |
 
 ## 7. ベンチマーク（`pnpm bench`）
@@ -210,12 +219,18 @@ M-2 `getBlock` は境界チェックをインライン化し `Option` を割り�
 
 **quad 削減（正確な数え上げ。timing ではない）:**
 
-| fixture | 素朴 | マージ後 | 削減 | 被覆面積の一致 |
-| --- | ---: | ---: | ---: | :-: |
-| flat | 4608 | **10** | **-99.8%** | ✅ |
-| rolling | 5558 | **768** | **-86.2%** | ✅ |
-| checkerboard-worst | 12288 | **12288** | **0.0%** | ✅ |
-| layered-water-glass | 5376 | **17** | **-99.7%** | ✅ |
+| fixture | 素朴 | マージのみ | **マージ + AO（現行）** | 削減（現行） | 被覆面積の一致 |
+| --- | ---: | ---: | ---: | ---: | :-: |
+| flat | 4608 | 10 | **10** | **-99.8%** | ✅ |
+| rolling | 5558 | 768 | **960** | **-82.7%** | ✅ |
+| checkerboard-worst | 12288 | 12288 | **12288** | **0.0%** | ✅ |
+| layered-water-glass | 5376 | 17 | **35** | **-99.3%** | ✅ |
+
+3 列目は AO 着地後（`design-notes.md` M-10）である。AO はマージキーに入るので
+**陰影の違う面は 1 枚にならない**。動いたのは rolling（+192）と layered（+18）だけで、
+flat と checkerboard は 1 枚も動いていない —— 平らな板は自己遮蔽せず、
+checkerboard はそもそもマージが起きないからである。
+**被覆面積は 4 行とも素朴実装と一致したままである**（AO は面の**まとめ方**しか変えない）。
 
 checkerboard で 0% なのは欠陥ではなく**定義**である。`(lx+y+lz)%2` は同じ面が 2 つ隣り合う場所を
 1 つも作らないので、マージできる対が存在しない。これがグリーディメッシングの最悪ケースであり、
@@ -292,11 +307,19 @@ fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-
 
 | guard | 比 |
 | --- | --- |
-| `set-membership/hashset-vs-lookup-table` | **12.8x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
-| `set-membership/native-set-vs-lookup-table` | **6.6x**（native `Set.has` 対 `Uint8Array`） |
-| `set-membership/hashset-vs-native-set` | **1.9x**（Effect `HashSet.has` 対 native `Set.has`） |
-| `neighbour-read/option-vs-plain-number` | **2.1x**（`Option` 返し 対 素の `number` 返し） |
-| `neighbour-read/shipped-vs-frozen-inline-reference` | 0.91（ゲート。1.0 付近であるべき値） |
+| `set-membership/hashset-vs-lookup-table` | **12.2x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
+| `set-membership/native-set-vs-lookup-table` | **6.2x**（native `Set.has` 対 `Uint8Array`） |
+| `set-membership/hashset-vs-native-set` | **2.0x**（Effect `HashSet.has` 対 native `Set.has`） |
+| `neighbour-read/option-vs-plain-number` | **2.2x**（`Option` 返し 対 素の `number` 返し） |
+| `neighbour-read/shipped-vs-frozen-inline-reference` | 0.92（ゲート。1.0 付近であるべき値） |
+
+AO 着地時に取り直した値である。**guard は 5 本とも旧記録の 0.94-1.06 倍**で、
+どれも AO を通らないのでこれは予想どおりである。動いたのは workload の側で、
+`meshChunk/*` が 1.18-1.33 倍（checkerboard だけ **2.01 倍**）上がった。
+**checkerboard の旧値に対する 2.01 倍は workload tolerance の 2.0 をわずかに超えており、
+baseline を取り直さなければこのゲートは落ちていた。**
+負荷の中で「AO の分」と「機械の分」を分けた手順は `design-notes.md` M-10 にある
+（AO 前と AO 後を**交互に 5 対**走らせ、yardstick が両腕で 1.01 倍であることを確認した）。
 
 ### ゲートの ばらつき についての訂正 —— shipped-vs-frozen は**静かではない**
 

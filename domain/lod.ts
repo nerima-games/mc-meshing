@@ -253,5 +253,16 @@ export const simplifyMesh = (layers: MeshLayers, level: LodLevel): MeshLayers =>
     opaque.push(snapped)
   }
 
-  return { opaque, water: layers.water, transparentSolid: layers.transparentSolid }
+  return {
+    opaque,
+    water: layers.water,
+    transparentSolid: layers.transparentSolid,
+    // Passed through untouched, like the other two non-opaque lists and for a
+    // stronger version of the same reason. `snapQuad` snaps a quad's two tangent
+    // extents onto a coarser grid; a cross plate has no tangent axes and no
+    // integer extents to snap, so there is nothing here that simplification
+    // could even be applied to. Dropping it instead would silently delete every
+    // flower in the world at the first LOD boundary.
+    crossPlants: layers.crossPlants,
+  }
 }

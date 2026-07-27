@@ -19,6 +19,7 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
+import { AO_MAX } from '../domain/ambient-occlusion'
 import {
   AIR,
   BLOCKS_PER_CHUNK,
@@ -40,7 +41,7 @@ const WATER = 2
 const GLASS = 3
 
 /**
- * Every unit block-face a quad covers, as `direction:lx,y,lz:blockId` strings.
+ * Every unit block-face a quad covers, as `direction:lx,y,lz:blockId:ao` strings.
  *
  * THE TRANSLATION THE WHOLE FILE RESTS ON. A merged quad is a claim about a
  * rectangle of cells; expanding it back into the cells it claims is what lets a
@@ -48,6 +49,15 @@ const GLASS = 3
  * two axes `tangentAxes` names — the same convention `domain/faces.ts` fixes and
  * `domain/lod.ts` reads — so a merge that wrote a width where a height belongs
  * expands into the wrong cells and every property below notices.
+ *
+ * `ao` JOINED THE STRING WHEN AO LANDED, and that is a strengthening, not a
+ * change of subject. A merged quad carries ONE ambient-occlusion value for its
+ * whole rectangle, so writing it onto every unit face the quad covers is a claim
+ * that every one of those cells really has that value — and comparing the result
+ * against `meshChunkNaive`, which computes AO per cell with no merging at all,
+ * is what checks the claim. Without it the coverage property would pin the
+ * merge's geometry and say nothing about its shading, which is precisely the
+ * half of the merge that AO changed.
  */
 const unitFacesOf = (quad: Quad): ReadonlyArray<string> => {
   const [widthAxis, heightAxis] = tangentAxes(quad.direction)
@@ -60,7 +70,7 @@ const unitFacesOf = (quad: Quad): ReadonlyArray<string> => {
     for (let alongHeight = 0; alongHeight < quad.height; alongHeight += 1) {
       faces.push(
         `${quad.direction}:${at('x', alongWidth, alongHeight)},` +
-          `${at('y', alongWidth, alongHeight)},${at('z', alongWidth, alongHeight)}:${quad.blockId}`,
+          `${at('y', alongWidth, alongHeight)},${at('z', alongWidth, alongHeight)}:${quad.blockId}:${quad.ao}`,
       )
     }
   }
@@ -1006,6 +1016,101 @@ describe('the greedy merge against the naive oracle', () => {
       const glassTop = layers.transparentSolid.filter((quad) => quad.direction === 'yPos')
       expect(glassTop.length).toBe(1)
       expect([glassTop[0]?.width, glassTop[0]?.height]).toStrictEqual([4, 4])
+    }),
+  )
+
+  it.effect('REGRESSION: does not merge two faces whose ambient occlusion differs', () =>
+    Effect.sync(() => {
+      // meshing-merge-splits-on-ambient-occlusion. The half of AO that lives in
+      // this file rather than in test/ambient-occlusion.test.ts: not what the
+      // value is, but that the merge is keyed on it.
+      //
+      // A 1x2 run of stone along X at y=64, and an OVERHANG one block up and one
+      // block out in +Z. The +Z faces of (8,64,8) and (9,64,8) are coplanar,
+      // adjacent along X — the first tangent axis of a +Z face — the same block
+      // and the same direction: every condition the pre-AO merge needed. The
+      // overhang at (8,65,9) is a sampled neighbour of the first face's air cell
+      // and not of the second's, so it darkens one and not the other.
+      //
+      // The overhang is DIAGONAL to both blocks, which is the point of choosing
+      // it: it changes the shading without touching the culling, so the split
+      // below can only be AO. (The obvious fixture — an L, with the third block
+      // at (8,64,9) — does not work at all: it is face-adjacent, so it culls the
+      // very face the test wants to compare.)
+      const chunk = chunkWith([
+        [8, 64, 8, STONE],
+        [9, 64, 8, STONE],
+        [8, 65, 9, STONE],
+      ])
+      const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
+      const zPos = layers.opaque.filter((quad) => quad.direction === 'zPos')
+
+      // Both faces are still emitted, still 1x1, and they do NOT merge.
+      expect(zPos.filter((quad) => quad.lz === 8).map((quad) => [quad.lx, quad.width, quad.height, quad.ao]))
+        .toStrictEqual([
+          [8, 1, 1, 1],
+          [9, 1, 1, 0],
+        ])
+
+      // And the pair really would have merged without the shading difference.
+      // Stated by removing the overhang and showing the SAME two faces become
+      // one quad, so the split above is not a claim about some other
+      // obstruction — the fixtures differ in exactly one diagonal block.
+      const withoutTheCorner = meshChunk(
+        chunkWith([
+          [8, 64, 8, STONE],
+          [9, 64, 8, STONE],
+        ]),
+        {},
+        EMPTY_MESH_CONFIG,
+      )
+      const mergedPair = withoutTheCorner.opaque.filter((quad) => quad.direction === 'zPos')
+      expect(mergedPair.map((quad) => [quad.lx, quad.width, quad.height, quad.ao])).toStrictEqual([[8, 2, 1, 0]])
+
+      // THE POINT: splitting costs quads and must not cost SURFACE. Both meshes
+      // cover exactly what the naive mesher covers.
+      expect(totalQuadArea(layers)).toBe(totalQuadArea(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG)))
+    }),
+  )
+
+  it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, id 255 included', () =>
+    Effect.sync(() => {
+      // The mask packs `blockId | (ao << 8)` into one cell and merges on the
+      // whole cell, so this is also the round-trip test for that packing. Id 255
+      // is the largest a `Uint8Array` holds: were the shift 7 rather than 8, its
+      // top bit would land in the AO field and every quad of block 255 would
+      // report a shade it does not have — and no other id in this file would
+      // notice.
+      //
+      // A 4x4 plate of id 255 with a wall along one side, so the plate's top
+      // face carries two AO values and both are non-zero somewhere.
+      const cells: Array<readonly [number, number, number, number]> = []
+      for (let lx = 4; lx < 8; lx += 1) {
+        for (let lz = 4; lz < 8; lz += 1) {
+          cells.push([lx, 64, lz, 255])
+        }
+      }
+      for (let lz = 4; lz < 8; lz += 1) {
+        cells.push([3, 65, lz, 255])
+      }
+      const chunk = chunkWith(cells)
+      const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
+
+      expect(layers.opaque.every((quad) => quad.blockId === 255)).toBe(true)
+      expect(layers.opaque.every((quad) => quad.ao >= 0 && quad.ao <= AO_MAX)).toBe(true)
+      // The wall at lx=3, y=65 darkens the lx=4 column of the plate's top face
+      // and nothing further in, so the top splits into exactly two quads.
+      const tops = layers.opaque.filter((quad) => quad.direction === 'yPos' && quad.y === 64)
+      expect(tops.map((quad) => [quad.lx, quad.width, quad.height, quad.ao])).toStrictEqual([
+        [4, 1, 4, 1],
+        [5, 3, 4, 0],
+      ])
+
+      // Expanded back into unit faces, the merged mesh agrees with the oracle
+      // shade for shade — `unitFacesOf` now carries `ao`.
+      expect([...allUnitFaces(layers)].sort()).toStrictEqual(
+        [...allUnitFaces(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))].sort(),
+      )
     }),
   )
 

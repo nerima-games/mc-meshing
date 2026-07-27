@@ -13,7 +13,7 @@
 <!-- ------------------------------------------------------------------------- -->
 
 format: 1
-exported declarations: 41
+exported declarations: 51
 supporting declarations: 0
 
 ## Exported
@@ -22,6 +22,24 @@ supporting declarations: 0
 
 ```ts
 const AIR = 0;
+```
+
+### AO_LEVELS  `const`
+
+```ts
+const AO_LEVELS = 4;
+```
+
+### AO_MAX  `const`
+
+```ts
+const AO_MAX: number;
+```
+
+### AO_NONE  `const`
+
+```ts
+const AO_NONE = 0;
 ```
 
 ### BLOCKS_PER_CHUNK  `const`
@@ -58,6 +76,20 @@ type ChunkNeighbours = {
 ```ts
 type ChunkView = {
     readonly blocks: Readonly<Uint8Array>;
+};
+```
+
+### CrossPlantQuad  `type`
+
+```ts
+type CrossPlantQuad = {
+    readonly blockId: number;
+    readonly role: FaceRole;
+    readonly vertices: readonly [PlantVertex, PlantVertex, PlantVertex, PlantVertex];
+    readonly nx: number;
+    readonly ny: number;
+    readonly nz: number;
+    readonly ao: number;
 };
 ```
 
@@ -151,6 +183,7 @@ const MESH_LAYER_PRIORITY: ReadonlyArray<MeshLayer>;
 type MeshConfig = {
     readonly waterBlockIds: ReadonlySet<number>;
     readonly transparentSolidBlockIds: ReadonlySet<number>;
+    readonly crossPlantBlockIds?: ReadonlySet<number>;
 };
 ```
 
@@ -165,7 +198,21 @@ type MeshLayer = 'opaque' | 'water' | 'transparentSolid';
 ```ts
 type MeshLayers = {
     readonly [K in MeshLayer]: ReadonlyArray<Quad>;
+} & {
+    readonly crossPlants: ReadonlyArray<CrossPlantQuad>;
 };
+```
+
+### PLANT_INSET  `const`
+
+```ts
+const PLANT_INSET = 0.1;
+```
+
+### PlantVertex  `type`
+
+```ts
+type PlantVertex = readonly [number, number, number];
 ```
 
 ### Quad  `type`
@@ -180,6 +227,7 @@ type Quad = {
     readonly lz: number;
     readonly width: number;
     readonly height: number;
+    readonly ao: number;
 };
 ```
 
@@ -195,10 +243,22 @@ type QuadAxis = 'x' | 'y' | 'z';
 const VERTICES_PER_QUAD = 4;
 ```
 
+### ambientOcclusionAt  `const`
+
+```ts
+const ambientOcclusionAt: (chunk: ChunkView, neighbours: ChunkNeighbours, direction: FaceDirection, lx: number, y: number, lz: number) => number;
+```
+
 ### blockIndex  `const`
 
 ```ts
 const blockIndex: (lx: number, y: number, lz: number) => number;
+```
+
+### buildCrossPlantLookup  `const`
+
+```ts
+const buildCrossPlantLookup: (config: MeshConfig) => Uint8Array;
 ```
 
 ### buildLayerLookup  `const`
@@ -231,6 +291,12 @@ const getBlock: (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number
 const getBlockAcrossBoundary: (chunk: ChunkView, neighbours: ChunkNeighbours, lx: number, y: number, lz: number) => number;
 ```
 
+### isCrossPlant  `const`
+
+```ts
+const isCrossPlant: (lookup: Uint8Array, blockId: number) => boolean;
+```
+
 ### layerOfBlockId  `const`
 
 ```ts
@@ -247,6 +313,12 @@ const meshChunk: (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshCon
 
 ```ts
 const meshChunkNaive: (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig) => MeshLayers;
+```
+
+### meshCrossPlants  `const`
+
+```ts
+const meshCrossPlants: (chunk: ChunkView, plantLookup: Uint8Array, yLimit: number) => ReadonlyArray<CrossPlantQuad>;
 ```
 
 ### occludes  `const`

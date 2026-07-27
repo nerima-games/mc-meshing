@@ -1,30 +1,30 @@
 {
   "version": 1,
-  "recordedOn": "Apple M4 Max, macOS 26.5.2, Node 22.23.1 (the flake devShell's node — the version CI runs; recorded with `nix develop --command pnpm bench --update-baseline`). Each figure is the median of FIVE whole-benchmark runs, not one. RECORDED UNDER CONCURRENT LOAD: see the spread figures in the note, which are three to five times wider than the previous recording's and are the machine, not the code.",
-  "note": "guards are slow/fast A/B ratios measured in one process against one data set: the machine cancels, so these are the real gate (tolerance 1.30, except the shipped-vs-frozen gate at 1.15). workloads are workload/yardstick ratios and are only approximately machine-independent — indicative, not authoritative (tolerance 2.0). WHAT MOVED IN THIS RECORDING, AND WHY: greedy meshing landed (domain/mesh.ts). `meshChunk/*` fell to 0.37-0.45x of the previous figures because `meshChunk` is now the merging mesher and skips the air column above the terrain (`solidCeiling`); the previous figures were the naive full-height mesher, which is now `meshChunkNaive/*` and is recorded here for the first time. Comparing `meshChunk/*` against `meshChunkNaive/*` OVERSTATES the merge: measured with the Y-scan ceiling forced off, the merge alone is 1.16-1.47x SLOWER than naive on every shape, worst on checkerboard, and the whole wall-clock win is the ceiling. See docs/design-notes.md M-9. `simplifyMesh/*` fell by two to three orders of magnitude on flat and layered, and by 7.6x on rolling, for a different reason entirely: it is not faster, it is being handed a far smaller mesh (flat 4608 -> 10 quads). checkerboard-worst barely moved (23.08 -> 21.8) because nothing merges there. ON SPREAD: observed across the five recording runs, guards 5.9-9.1% except neighbour-read/shipped-vs-frozen-inline-reference at 23.2% and neighbour-read/option-vs-plain-number at 21.3%; workloads 34-66%. The previous recording saw 3-8% and 6-10%. The difference is concurrent load on the recording machine, not a change in the code, and it means the WORKLOAD figures here should be treated as weaker than usual — the 2.0 tolerance absorbs it, but a run that lands just inside the gate is not evidence of anything. The guard figures are unaffected in the way that matters: they are A/B ratios in one process, and all five are within 8% of the previous recording. ON NODE VERSIONS: the same benchmark on Node 24.13.0 puts the workload ratios well above these. The recorded environment is Node 22; comparing across major versions is not meaningful. Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.",
+  "recordedOn": "Apple M4 Max, macOS 26.5.2, Node 22.23.1 (the flake devShell's node — the version CI runs; recorded with `nix develop --command pnpm bench`). Each figure is the median of TEN whole-benchmark runs, not five and not one: the machine was under heavy concurrent load (load average 17-42) and a five-run sample put one workload's spread at 479%, which is not a median anyone should commit. Ten runs brings the interquartile spread to 6.5-63%. See the note for what that does and does not invalidate.",
+  "note": "guards are slow/fast A/B ratios measured in one process against one data set: the machine cancels, so these are the real gate (tolerance 1.30, except the shipped-vs-frozen gate at 1.15). workloads are workload/yardstick ratios and are only approximately machine-independent — indicative, not authoritative (tolerance 2.0). WHAT MOVED IN THIS RECORDING, AND WHY: two features landed. (1) AMBIENT OCCLUSION (domain/ambient-occlusion.ts, docs/design-notes.md M-10). AO is computed once per EXPOSED FACE and joins the greedy merge key, so it costs time in both meshers and costs quads in the merged one. (2) CROSS-PLATE PLANTS (domain/plant-mesh.ts, M-11), which add one byte-indexed table read to `isFaceExposed` — the ~400k calls/chunk path plan.md §3.3 measures. Against the previous recording `meshChunk/*` is 1.08-1.12x and `meshChunkNaive/*` is 1.13-1.17x, except meshChunk/checkerboard-worst at 0.92x. THE ATTRIBUTION WAS MEASURED, NOT ASSUMED, because under this much load the raw medians cannot carry it: interleaved paired runs (pre-feature and post-feature alternating on the same machine, yardstick 1.01-1.02x between the two arms) put AO at 1.26-1.36x of `meshChunk` (1.94-2.05x on checkerboard) and the plant lookup at a further 1.08-1.09x (0.98x on checkerboard, which short-circuits on AIR most often and so reaches the extra read least). The previous baseline had already absorbed AO; what this recording adds on top of it is the plant read. `simplifyMesh/*` came in at 0.90-0.97x, i.e. unmoved within the noise — nothing in either feature touches it, and its flat/layered rows are at the measurement floor (0.016-0.018 ms/chunk against a ~0.2 ms yardstick) where the ratio carries no information at all. GUARDS DID NOT MOVE and were not expected to: neither feature touches any of them, and all five land within 0.97-1.08x. ON SPREAD: across the ten recording runs the interquartile spread was 7.5-31.7% for guards and 6.5-63.0% for workloads. That is worse than any previous recording and it is the concurrent load, not the code. A workload run that lands just inside the 2.0 gate is not evidence of anything. ON NODE VERSIONS: the same benchmark on Node 24.13.0 puts the workload ratios well above these. The recorded environment is Node 22; comparing across major versions is not meaningful. Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.",
   "guards": {
-    "neighbour-read/shipped-vs-frozen-inline-reference": 0.9144,
-    "set-membership/hashset-vs-lookup-table": 12.75,
-    "set-membership/hashset-vs-native-set": 1.908,
-    "set-membership/native-set-vs-lookup-table": 6.627,
-    "neighbour-read/option-vs-plain-number": 2.102
+    "neighbour-read/shipped-vs-frozen-inline-reference": 0.936,
+    "set-membership/hashset-vs-lookup-table": 12.13,
+    "set-membership/hashset-vs-native-set": 1.903,
+    "set-membership/native-set-vs-lookup-table": 6.322,
+    "neighbour-read/option-vs-plain-number": 2.407
   },
   "workloads": {
-    "meshChunk/flat": 4.056,
-    "meshChunk/rolling": 4.821,
-    "meshChunk/checkerboard-worst": 2.931,
-    "meshChunk/layered-water-glass": 4.674,
-    "meshChunkNaive/flat": 9.309,
-    "meshChunkNaive/rolling": 9.228,
-    "meshChunkNaive/checkerboard-worst": 7.689,
-    "meshChunkNaive/layered-water-glass": 9.224,
-    "simplifyMesh/lod1/flat": 0.01633,
-    "simplifyMesh/lod2/flat": 0.01501,
-    "simplifyMesh/lod1/rolling": 1.167,
-    "simplifyMesh/lod2/rolling": 1.208,
-    "simplifyMesh/lod1/checkerboard-worst": 21.8,
-    "simplifyMesh/lod2/checkerboard-worst": 19.13,
-    "simplifyMesh/lod1/layered-water-glass": 0.00881,
-    "simplifyMesh/lod2/layered-water-glass": 0.008717
+    "meshChunk/flat": 5.845,
+    "meshChunk/rolling": 7.07,
+    "meshChunk/checkerboard-worst": 5.423,
+    "meshChunk/layered-water-glass": 6.186,
+    "meshChunkNaive/flat": 11.72,
+    "meshChunkNaive/rolling": 12.08,
+    "meshChunkNaive/checkerboard-worst": 12.07,
+    "meshChunkNaive/layered-water-glass": 11.66,
+    "simplifyMesh/lod1/flat": 0.018,
+    "simplifyMesh/lod2/flat": 0.016,
+    "simplifyMesh/lod1/rolling": 1.557,
+    "simplifyMesh/lod2/rolling": 1.545,
+    "simplifyMesh/lod1/checkerboard-worst": 22.93,
+    "simplifyMesh/lod2/checkerboard-worst": 19.76,
+    "simplifyMesh/lod1/layered-water-glass": 0.0185,
+    "simplifyMesh/lod2/layered-water-glass": 0.018
   }
 }
