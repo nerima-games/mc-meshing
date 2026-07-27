@@ -20,7 +20,14 @@ import { Effect, FastCheck, Schema } from 'effect'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, blockIndex, emptyChunk, type ChunkView } from '../domain/chunk-view'
 import { FACES, FACE_DIRECTIONS, faceOf, tangentAxes, type FaceDirection } from '../domain/faces'
 import { LOD_LEVELS, LodLevelSchema, packQuadKey, simplifyMesh, type LodLevel } from '../domain/lod'
-import { meshChunk, totalQuadCount, type MeshLayers, type Quad } from '../domain/mesh'
+import {
+  meshChunk,
+  meshChunkNaive,
+  totalQuadArea,
+  totalQuadCount,
+  type MeshLayers,
+  type Quad,
+} from '../domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../domain/opacity'
 
 const STONE = 1
@@ -351,7 +358,7 @@ describe('what snapping does to one quad', () => {
 })
 
 describe('what simplification does to a COUNT', () => {
-  it.effect('REGRESSION: reduces top faces by step squared and side faces by step', () =>
+  it.effect('REGRESSION: reduces top faces by step squared and side faces by step, on an UNMERGED mesh', () =>
     Effect.sync(() => {
       // lod-reduction-is-anisotropic. THE measurement this port exists to make
       // legible, stated as an exact count rather than as a timing.
@@ -363,7 +370,16 @@ describe('what simplification does to a COUNT', () => {
       //
       // 4x on the horizontal, 2x on the vertical. Any claim that "LOD 1 gives
       // ~25% of the geometry" is a claim about a mesh made of top faces.
-      const full = meshChunk(slab(4), {}, CONFIG)
+      //
+      // CHANGED WITH THE MERGE: the input is now `meshChunkNaive` where it used
+      // to be `meshChunk`. NOT A WEAKENING — the assertions are byte-for-byte
+      // the ones that were here before, at the same values, and this has always
+      // been a test of `simplifyMesh` rather than of the mesher. What changed is
+      // that `meshChunk` no longer produces the 1x1 input the claim is about, so
+      // naming the naive mesher is now the only way to say what was always
+      // meant. The behaviour of `simplifyMesh` on MERGED input is a different
+      // fact and gets its own test below — a much less flattering one.
+      const full = meshChunkNaive(slab(4), {}, CONFIG)
       expect(totalQuadCount(full)).toBe(16 + 16 + 4 * 4)
 
       const lod1 = simplifyMesh(full, 1)
@@ -380,6 +396,50 @@ describe('what simplification does to a COUNT', () => {
         expect(inDirection(lod2, direction).length).toBe(1)
       }
       expect(totalQuadCount(lod2)).toBe(1 + 1 + 4)
+    }),
+  )
+
+  it.effect('REGRESSION: removes NOTHING from an already-merged slab, at either level', () =>
+    Effect.sync(() => {
+      // lod-reduction-collapses-after-merging. THE FINDING, and it is a
+      // deliberately uncomfortable one to write down.
+      //
+      // docs/responsibility.md §3.5(c) predicted it in as many words before the
+      // merge existed: "上の -18.1% / -43.0% は上限であって、実装後の値ではない",
+      // and asked for the M-8 table to be retaken once greedy merging landed.
+      // This is that retake, at fixture scale.
+      //
+      // Simplification works by snapping quads onto a coarser grid and dropping
+      // the ones that then coincide. A merged mesh has already collapsed each
+      // flat run into a single quad, so there is no second quad left to coincide
+      // WITH: the 4x4 top of this slab is one quad whose box is already 4-grid
+      // aligned, and snapping it changes neither its origin nor its extent.
+      //
+      // Six quads in, six quads out, at LOD 1 and at LOD 2 alike. The mechanism
+      // has not broken — `lod-never-opens-a-hole` and the anisotropy test above
+      // still pass on unmerged input — it has been SUBSUMED. What LOD removed on
+      // this shape, merging now removes earlier and better, and it removes it
+      // without the up-to-11px silhouette error §3.5(a) prices.
+      //
+      // That is a real argument against the LOD 1 tier on this kind of terrain
+      // and it belongs to mc-render, not here. docs/design-notes.md M-8 carries
+      // the measured version across all four bench shapes.
+      const merged = meshChunk(slab(4), {}, CONFIG)
+      expect(totalQuadCount(merged)).toBe(6)
+
+      for (const level of [1, 2] as const) {
+        const simplified = simplifyMesh(merged, level)
+        expect(totalQuadCount(simplified)).toBe(6)
+        // Not merely the same count — the same quads. Nothing moved either.
+        expect(simplified.opaque.map((quad) => `${quad.direction}:${positionOf(quad)}:${quad.width}x${quad.height}`))
+          .toStrictEqual(
+            merged.opaque.map((quad) => `${quad.direction}:${positionOf(quad)}:${quad.width}x${quad.height}`),
+          )
+      }
+
+      // And the surface is identical to the naive mesher's, so the two paths
+      // genuinely describe the same slab and the comparison above is fair.
+      expect(totalQuadArea(merged)).toBe(totalQuadArea(meshChunkNaive(slab(4), {}, CONFIG)))
     }),
   )
 
@@ -465,20 +525,32 @@ describe('what simplification must not break', () => {
     Effect.sync(() => {
       // lod-preserves-emission-order. The output is the input filtered, so a
       // golden hash may be taken over a simplified mesh exactly as over a full
-      // one. Every coordinate below is even and every block is more than one
-      // grid cell from its neighbours, so nothing dedups and the ORDER is the
-      // only thing under test.
+      // one.
+      //
+      // CHANGED WITH THE MERGE, and rewritten to be INDEPENDENT of the mesher's
+      // order rather than to restate it. The old version hard-coded
+      // `lx -> lz -> y` for all six directions and compared against it; that
+      // sequence is now correct only for the two X directions (domain/mesh.ts
+      // explains why merging forces the slice axis outermost), so a literal
+      // update would have meant copying the mesher's new three-way table into a
+      // second place where it could drift.
+      //
+      // What this test is actually about is that `simplifyMesh` PRESERVES
+      // whatever order it was handed. Stated that way it does not need to know
+      // the order at all — and it is stronger for it, because it now holds for
+      // every input rather than for one fixture.
       const scattered: ReadonlyArray<readonly [number, number, number, number]> = [
         [6, 20, 10, STONE],
         [2, 10, 2, STONE],
         [14, 30, 14, STONE],
         [10, 4, 6, STONE],
       ]
-      const expected = [...scattered]
-        .sort((left, right) => left[0] - right[0] || left[2] - right[2] || left[1] - right[1])
-        .map(([lx, y, lz]) => `${lx},${y},${lz}`)
+      const full = meshChunk(chunkWith(scattered), {}, EMPTY_MESH_CONFIG)
+      const layers = simplifyMesh(full, 1)
 
-      const layers = simplifyMesh(meshChunk(chunkWith(scattered), {}, EMPTY_MESH_CONFIG), 1)
+      // Every block is more than one grid cell from its neighbours, so nothing
+      // merges and nothing dedups: same quads in, same quads out, same order.
+      expect(layers.opaque.map(positionOf)).toStrictEqual(full.opaque.map(positionOf))
 
       const groups: Array<FaceDirection> = []
       for (const quad of layers.opaque) {
@@ -487,9 +559,47 @@ describe('what simplification must not break', () => {
         }
       }
       expect(groups).toStrictEqual([...FACE_DIRECTIONS])
-      for (const direction of FACE_DIRECTIONS) {
-        expect(inDirection(layers, direction).map(positionOf)).toStrictEqual(expected)
-      }
+    }),
+  )
+
+  it.effect('REGRESSION: the simplified sequence is the meshed sequence with entries removed, never reordered', () =>
+    Effect.sync(() => {
+      // The general form of the test above, and what actually licenses a golden
+      // hash over a simplified mesh. `simplifyMesh` is a filter; if it ever
+      // became a sort, or grouped its survivors, every count assertion in this
+      // file would still pass and mc-render's hashes would stop matching for a
+      // reason nothing here would explain.
+      //
+      // A subsequence check catches exactly that and nothing else, which is why
+      // it is written out rather than approximated by comparing sorted arrays.
+      //
+      // The identity used is `direction:blockId:y`, and the choice is forced
+      // rather than convenient: those are precisely the fields snapping is
+      // documented to leave alone. `lx`, `lz`, `width` and `height` all move —
+      // that is what snapping IS — so a survivor cannot be recognised by them,
+      // and Y is never snapped on any face because the silhouette depends on it
+      // (`lod-preserves-silhouette`). Matching on anything snapping touches
+      // would make this test fail for the one reason that is correct behaviour.
+      const identity = (quad: Quad): string => `${quad.direction}:${quad.blockId}:${quad.y}`
+      FastCheck.assert(
+        FastCheck.property(arbitraryChunk, arbitraryLevel, (chunk, level) => {
+          const meshed = meshChunk(chunk, {}, CONFIG)
+          const full = meshed.opaque.map(identity)
+          const simplified = simplifyMesh(meshed, level).opaque.map(identity)
+          let cursor = 0
+          for (const survivor of simplified) {
+            while (cursor < full.length && full[cursor] !== survivor) {
+              cursor += 1
+            }
+            if (cursor >= full.length) {
+              return false
+            }
+            cursor += 1
+          }
+          return true
+        }),
+        { numRuns: 60 },
+      )
     }),
   )
 

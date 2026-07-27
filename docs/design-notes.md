@@ -222,8 +222,26 @@ plan.md §3.3 は「面数上限」を性質テストとして要求している
 `test/mesh.test.ts`:
 
 - `emits faces grouped by direction, in the canonical +X -X +Y -Y +Z -Z order`
+- `emits, WITHIN one direction, in the order that direction's slice axis forces`
 - `is deterministic: meshing the same chunk twice produces identical quad sequences`
 - `face count never exceeds six per non-air cell, whatever the arrangement`（プロパティテスト）
+
+### 方向内の順序はグリーディマージで動いた（正準な方向順は動いていない）
+
+この項は当初「方向内では `lx` → `lz` → `y`」も固定していた。**マージはそれを保てない。**
+最大矩形は平面ごとに探すほかなく、面の法線軸が最外ループになるので、
++Y/-Y では `y` が —— 旧順序で最内だった軸が —— 最外に来る。現在の順序は方向ごとに:
+
+| 方向 | 順序 |
+| --- | --- |
+| `xPos` / `xNeg` | `lx` → `lz` → `y`（素朴実装と同一） |
+| `yPos` / `yNeg` | `y` → `lx` → `lz` |
+| `zPos` / `zNeg` | `lz` → `lx` → `y` |
+
+**`FACES` の 6 方向の順序は不変である。** この項の名前が指しているのはそちらであり、
+そちらは動いていない。本リポジトリにゴールデンハッシュのファイルは無いので
+再生成したものは無いが、mc-render がバッファ全体のハッシュを取っているならそれは動く。
+`testing.md` §4 に詳細。
 
 `test/public-api.test.ts`:
 
@@ -355,20 +373,37 @@ LOD 段をまたぐたびに山の高さが変わればプレイヤーは「距�
 矛盾ではない: あの数字は上下面が支配的なメッシュについての主張であり、
 上の表の側面の行がその条件が成り立たない理由である。
 
-### 数字の**上限性**（読むときの必須の注意）
+### 数字の**上限性** —— 上限だったことが実測で確定した
 
-本リポジトリのメッシャは**素朴**であり、quad はすべて 1x1 である。
+上の表は**素朴メッシュ**（quad はすべて 1x1）に対する値である。
 これは「最も細かく割れた」状態であり、**LOD が最も稼げる入力**である。
-グリーディマージが着地すると平坦面は 1 枚の大きな quad になり、
-snap しても衝突する相手がいなくなるので **LOD の取り分はここから減る**。
+旧記述は「グリーディマージが着地すると平坦面は 1 枚の大きな quad になり、
+snap しても衝突する相手がいなくなるので LOD の取り分はここから減る。
+**したがって上の表は削減率の上限である。** 実測すべき下限は、
+グリーディマージ着地後に同じ表を取り直したときの値である」と述べていた。
 
-参照実装のテストがまさにこれを言っている
+**取り直した。上限どころではなく、3 つの fixture で取り分はゼロになった。**
+
+| fixture | LOD 1（素朴） | LOD 1（マージ後） | LOD 2（素朴） | LOD 2（マージ後） |
+| --- | ---: | ---: | ---: | ---: |
+| flat | -52.8% | **-0.0%** | -77.1% | **-0.0%** |
+| rolling | -45.9% | **-2.9%** | -68.0% | **-9.5%** |
+| checkerboard-worst | -16.7% | -16.7% | -62.5% | -62.5% |
+| layered-water-glass | -53.4% | **-0.0%** | -77.5% | **-0.0%** |
+
+`pnpm bench` は**両方の表**を印字する。マージ済みのほうが mc-render が実際に受け取るもので、
+素朴のほうが上の元表の出どころである。両方無いと「LOD が効かなくなった」のか
+「LOD が壊れた」のかが区別できない。
+
+参照実装のテストがまさにこれを予告していた
 （`packages/rendering/test/lod-simplification.property.test.ts`）: 一様な光の下では
 グリーディが平面を 1 枚にまとめてしまうので LOD は何も回収できず、
 ライティングで面が割れて初めて「LOD が効く」ようになる、と。
+**本リポジトリにはまだライティングが無い**ので、いまは「一様な光の下」に相当する。
+光が入れば面はまた割れ、この表の数字は上がる。
 
-**したがって上の表は削減率の上限である。** 実測すべき下限は、
-グリーディマージ着地後に同じ表を取り直したときの値である。
+`responsibility.md` §3.5(c) がこの数字を mc-render 向けの結論に引き直している
+（`renderDistance = 4` で LOD 1 が買うのは quad の 1.2%、代金は約 11 px のずれ）。
 
 ### 簡約の**費用**（こちらは timing なので比で扱う）
 
@@ -405,19 +440,116 @@ mc-render にとって重要な帰結: **LOD の切り替えはフレームご�
 
 ### 回帰テスト
 
-`test/lod.test.ts`（23 本）:
+`test/lod.test.ts`（25 本）:
 
 - `lod-zero-is-identity` —— LOD 0 は入力オブジェクトそのものを返す（近傍リングの常態）
 - `lod-simplify-is-pure` —— `(layers, level)` だけの関数。入力を書き換えない
 - `lod-preserves-silhouette` —— 水平方向だけ snap し、Y は snap しない
 - `lod-never-opens-a-hole` —— 元の quad はすべて、同じ向きの生き残り quad に**包含される**
-- `lod-preserves-emission-order` —— 正準面順序と方向内の lx→lz→y 順が保たれる。
-  **簡約後のメッシュにもゴールデンハッシュがそのまま取れる**ということ
-- `lod-reduction-is-anisotropic` —— 4x4x1 の板で上下面 ÷4、側面 ÷2 を厳密な数として固定
+- `lod-preserves-emission-order` —— メッシャが渡した順序をそのまま保つ。
+  **簡約後のメッシュにもゴールデンハッシュがそのまま取れる**ということ。
+  マージ着地時に「方向内は lx→lz→y」という書き方をやめ、
+  **メッシャの順序を知らない形**（出力列が入力列の部分列であること）に書き換えた ——
+  そうしないとメッシャの 3 通りの順序表をテスト側にも複製することになる
+- `lod-reduction-is-anisotropic` —— **素朴メッシュ**の 4x4x1 の板で上下面 ÷4、側面 ÷2 を
+  厳密な数として固定。入力を `meshChunkNaive` に変えたが、主張も値も変えていない ——
+  これは元から `simplifyMesh` のテストであってメッシャのテストではない
+- `lod-reduction-collapses-after-merging` —— **マージ済み**の同じ板からは
+  LOD 1 でも LOD 2 でも 1 枚も落ちない（6 枚 → 6 枚、位置も範囲も不変）
 
 `packQuadKey` は 3^9 = 19,683 通りの**全数**（各成分の両端と 0 の次）で単射性を検査する。
 基数の off-by-one は繰り上がりでしか衝突しない（`p2z = 16` 対 `p2y = 1`）ので、
 1.5e11 の空間からの無作為抽出では実質的に当たらない。
+
+---
+
+## M-9 `meshing-merge-covers-the-same-surface`
+
+### 根拠
+
+plan.md §3.3 の責務そのもの ——「チャンクデータ→ジオメトリバッファの純粋変換
+（**グリーディメッシング**）」。参照実装の `runGreedyExpansion`
+（`greedy-meshing-passes.ts:64-97`）を、AO と光のパッキングを外して移植した。
+
+### マージのキーは `blockId` だけであり、それで足りる
+
+同一方向・同一スライス・同一 `blockId` の面がまとまる。要求されている 3 つの禁止事項は
+すべてこれで満たされる:
+
+| 禁止事項 | なぜ起きえないか |
+| --- | --- |
+| レイヤをまたぐ | レイヤは `blockId` の関数（`layerOfBlockId`）。ID が等しければレイヤも等しい |
+| ブロック種別をまたぐ | ID そのものがキーである |
+| 遮蔽の違う面をまたぐ | 遮蔽はマスクを書く**前に**判定する。隠れている面はマスクに入らず、マスクの零値は `AIR` で、展開は `AIR` を突き抜けない |
+
+`role` は `direction` の関数で、方向ごとに別パスなのでキーに要らない。
+参照実装が AO と 4 隅の光を ID と一緒にパックしている（`greedy-meshing-passes.ts:24-45`）のは
+**光った quad をマージするから**である。**ライティングが入ったらキーを広げること。**
+広げないと、光の違う板が 1 枚にまとまってライティングが目に見えて平坦になる。
+
+### 何を測ったか —— quad 削減は**数え上げ**であって timing ではない
+
+| fixture | 素朴 | マージ後 | 削減 | 被覆面積（両実装で一致） |
+| --- | ---: | ---: | ---: | ---: |
+| flat | 4,608 | **10** | **-99.8%** | 4,608 |
+| rolling | 5,558 | **768** | **-86.2%** | 5,558 |
+| checkerboard-worst | 12,288 | **12,288** | **0.0%** | 12,288 |
+| layered-water-glass | 5,376 | **17** | **-99.7%** | 5,376 |
+
+checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの面が 2 つ隣り合う場所を
+1 つも作らないので、まとめられる対が存在しない。**これがグリーディメッシングの最悪ケースの定義である。**
+
+「被覆面積」列は結果ではなく**検算**であり、`pnpm bench` が毎回両実装で計算して突き合わせる。
+
+### wall-clock —— マージは**遅くする**。速くしたのは `solidCeiling` である
+
+ここを混ぜると嘘になるので分けて書く。`meshChunk` は 4 shape すべてで `meshChunkNaive` の
+0.4-0.5 倍の時間で終わるが、**マージと同時に `solidCeiling`（参照実装の `yLimit`。
+最高の非 air ブロックより上を走査しない）を入れたためである。**
+
+`solidCeiling` を強制的に無効化して（`= CHUNK_HEIGHT` に固定して）測り直すと:
+
+| fixture | 素朴（256 走査） | マージ（256 走査） | マージ単体の比 |
+| --- | ---: | ---: | ---: |
+| flat | 1.378 ms | 1.604 ms | **1.16x 遅い** |
+| rolling | 1.403 ms | 1.678 ms | **1.20x 遅い** |
+| checkerboard-worst | 1.148 ms | 1.686 ms | **1.47x 遅い** |
+| layered-water-glass | 1.420 ms | 1.861 ms | **1.31x 遅い** |
+
+**マージ単体は 4 shape すべてで遅く、checkerboard で最も遅い。**
+グリーディメッシングは**時間を払って三角形を買う**取引であり、
+checkerboard ではその見返りがゼロなのでマスク構築と掃引が丸ごと純損失になる。
+これは想定どおりであって回帰ではない。
+
+再現手順: `domain/mesh.ts` の `const yLimit = solidCeiling(chunk.blocks)` を
+`const yLimit = solidCeiling(chunk.blocks) === 0 ? 0 : CHUNK_HEIGHT` に置き換えて
+`nix develop --command pnpm bench` を走らせ、`meshChunk/*` の ms を読む。
+
+### 回帰テスト
+
+`test/mesh.test.ts`:
+
+- `meshing-merge-covers-the-same-surface` —— `merged output covers exactly the same
+  block-faces as unmerged output`。各 quad を単位面へ展開し `meshChunkNaive` と
+  **多重集合として**一致することを、任意のチャンク（箱塗り生成）と任意の隣接構成で検査する。
+  **集合ではなく多重集合**であることが要点で、1 行ぶん重なるバグは集合を変えず多重集合を変える
+- `REGRESSION: no two merged quads claim the same block-face` —— 重複被覆（＝ z-fighting）単独
+- `meshing-merge-never-crosses-a-block-boundary` —— `never merges two different block ids,
+  however they are arranged`。面数も面積も変わらないので、数える種類のテストでは見えない
+- `REGRESSION: never merges across the three layers, so one quad is never half water`
+- `never emits more quads than the naive mesher, and usually far fewer` ——
+  後半（実際に減っていること）が無いと、**マージを一切しない実装でも被覆の性質は通る**
+- `the Y scan ceiling` の 3 本 —— `solidCeiling` の off-by-one は世界の最上段を黙って消す。
+  他のテストはすべて y=64 以下を使うので、これが無いと全部 green のまま通る
+
+### オラクルを `domain/` に置いた理由
+
+`meshChunkNaive` は `test/` ではなく `domain/mesh.ts` にあり、export されている。
+`test/` にコピーを置けば、オラクルの側が黙って drift できてしまう。
+両者は `isFaceExposed` を**共有している**が、これは意図的である ——
+この性質が捕まえるべきなのは**マージのバグ**（セルの取りこぼし、二重被覆、
+width と height の取り違え）であって、どの面が見えるかは別の問いであり、
+そちらは M-3 / M-6 / M-7 が既に固定している。
 
 ---
 

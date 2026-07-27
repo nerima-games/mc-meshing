@@ -6,15 +6,23 @@
  * repository and wall-clock there is a shared resource. See docs/testing.md §7.
  *
  * ---------------------------------------------------------------------------
- * Why this file exists before greedy meshing does
+ * This file existed before greedy meshing did, and that was the point
  * ---------------------------------------------------------------------------
  *
- * `domain/mesh.ts` carries the naive face extraction and says so: correct, not
- * yet fast. The greedy merge is the substance of this repository and its ENTIRE
- * justification is speed. Landing it without a benchmark would mean shipping an
- * optimisation nobody can show is one, and — worse — losing the ability to tell
- * later whether it still is. So the measurement comes first, and the naive
- * numbers below are what greedy meshing has to beat.
+ * The greedy merge is the substance of this repository and its ENTIRE
+ * justification is speed. Landing it without a benchmark would have meant
+ * shipping an optimisation nobody could show was one, and — worse — losing the
+ * ability to tell later whether it still was. So the measurement came first.
+ *
+ * It has now paid for itself twice, and the second time is the interesting one.
+ * The quad counts came out overwhelmingly in the merge's favour (flat 4,608 ->
+ * 10). The TIMINGS did not: measured against the naive mesher with the Y-scan
+ * ceiling held off, merging is 1.16-1.47x SLOWER on every fixture. The whole
+ * wall-clock improvement belongs to `solidCeiling`, which landed in the same
+ * change and is a different optimisation entirely. Without this file that would
+ * have been reported as "greedy meshing made meshing twice as fast", which is
+ * false, and nobody would have had any way to notice. See docs/design-notes.md
+ * M-9 for the decomposition and how to reproduce it.
  *
  * plan.md §5.2 lists five performance exceptions "established by measurement —
  * do not 'fix' these into idiomatic Effect style". Two of them live here, and
@@ -45,7 +53,9 @@ import {
   LOD_LEVELS,
   MESH_LAYERS,
   meshChunk,
+  meshChunkNaive,
   simplifyMesh,
+  totalQuadArea,
   totalQuadCount,
   type LodLevel,
   type MeshLayers,
@@ -286,6 +296,56 @@ const optionWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
 }
 
 // ---------------------------------------------------------------------------
+// Greedy merge quad reduction — a COUNT, and the headline number of this file
+// ---------------------------------------------------------------------------
+
+/**
+ * What the merge removes, per fixture. EXACT, not measured.
+ *
+ * Same standing as the LOD table below and for the same reason: `meshChunk` and
+ * `meshChunkNaive` are deterministic functions of deterministic fixtures, so
+ * these counts are byte-identical on every machine and are not compared against
+ * the baseline or given a tolerance. They are the reason the timings underneath
+ * them are worth paying, and the reason greedy meshing was written at all.
+ *
+ * The `area` column is the check, not the result: it is the number of block
+ * faces covered, and it must be IDENTICAL between the two meshers on every row.
+ * A merge that lost a face would show a smaller quad count and a smaller area,
+ * and without this column the first would read as a triumph.
+ */
+const printMergeTable = (): void => {
+  console.log('greedy merge quad reduction — an exact COUNT over deterministic fixtures, not a timing:\n')
+  console.log(
+    `  ${'fixture'.padEnd(22)}${'naive'.padStart(9)}${'merged'.padStart(9)}${'removed'.padStart(9)}` +
+      `${'area'.padStart(9)}${'area ok'.padStart(9)}   layers (merged)`,
+  )
+  for (const { name, chunk } of BENCH_FIXTURES) {
+    const naive = meshChunkNaive(chunk, {}, CONFIG)
+    const merged = meshChunk(chunk, {}, CONFIG)
+    const naiveCount = totalQuadCount(naive)
+    const mergedCount = totalQuadCount(merged)
+    const areaOk = totalQuadArea(naive) === totalQuadArea(merged)
+    console.log(
+      `  ${name.padEnd(22)}${String(naiveCount).padStart(9)}${String(mergedCount).padStart(9)}` +
+        `${percent(mergedCount, naiveCount).padStart(9)}${String(totalQuadArea(merged)).padStart(9)}` +
+        `${(areaOk ? 'yes' : 'NO').padStart(9)}   ` +
+        `${String(merged.opaque.length)} opaque + ${String(merged.water.length)} water + ` +
+        `${String(merged.transparentSolid.length)} glass`,
+    )
+    if (!areaOk) {
+      // Not a tolerance and not a warning. If this ever prints, the merge has
+      // lost or duplicated surface and the quad reduction on the same line is
+      // meaningless.
+      console.error(
+        `  ${''.padEnd(22)}AREA MISMATCH: naive ${String(totalQuadArea(naive))} vs merged ` +
+          `${String(totalQuadArea(merged))} — the merge is not covering the same surface.`,
+      )
+    }
+  }
+  console.log('')
+}
+
+// ---------------------------------------------------------------------------
 // LOD quad reduction — a COUNT, and therefore not a benchmark
 // ---------------------------------------------------------------------------
 
@@ -325,9 +385,10 @@ const percent = (after: number, before: number): string =>
  * faces up. See docs/design-notes.md M-8.
  */
 const printReductionTable = (
+  label: string,
   meshed: ReadonlyArray<{ readonly name: string; readonly layers: MeshLayers }>,
 ): void => {
-  console.log('LOD quad reduction — an exact COUNT over deterministic fixtures, not a timing:\n')
+  console.log(`LOD quad reduction, ${label} — an exact COUNT over deterministic fixtures, not a timing:\n`)
   console.log(
     `  ${'fixture'.padEnd(22)}${'level'.padStart(5)}${'opaque'.padStart(9)}` +
       `${'removed'.padStart(9)}${'caps'.padStart(8)}${'sides'.padStart(8)}   other layers`,
@@ -452,6 +513,30 @@ const main = async (): Promise<number> => {
     }
   })
 
+  /**
+   * The naive mesher, timed on the same fixtures.
+   *
+   * Here so that the TIME side of the greedy merge's trade is on the record next
+   * to the quad side, and gated the same way. Greedy meshing buys triangles with
+   * work: it builds a mask, then sweeps it, where the naive pass just emits. On
+   * terrain with long flat runs the mask pays for itself many times over; on
+   * checkerboard there is nothing to merge and the sweep is pure overhead, so
+   * `meshChunk` is expected to be SLOWER than `meshChunkNaive` there. That is not
+   * a regression and the baseline records both numbers so that it cannot be
+   * mistaken for one later.
+   */
+  const naiveWorkloads: ReadonlyArray<Workload> = BENCH_FIXTURES.map(({ name, chunk }) => {
+    const msPerUnit = measure(() => {
+      sink += meshChunkNaive(chunk, {}, CONFIG).opaque.length
+    }, options(60))
+    return {
+      name: `meshChunkNaive/${name}`,
+      msPerUnit,
+      unit: 'chunk',
+      detail: `${String(totalQuadCount(meshChunkNaive(chunk, {}, CONFIG)))} quads (the oracle, not shipped)`,
+    }
+  })
+
   // Meshed once, outside the timed loop: this measures simplification, not
   // meshing, and the two differ by more than an order of magnitude.
   const meshedFixtures = BENCH_FIXTURES.map(({ name, chunk }) => ({
@@ -474,7 +559,7 @@ const main = async (): Promise<number> => {
     }),
   )
 
-  const workloads: ReadonlyArray<Workload> = [...meshWorkloads, ...simplifyWorkloads]
+  const workloads: ReadonlyArray<Workload> = [...meshWorkloads, ...naiveWorkloads, ...simplifyWorkloads]
 
   console.log('end-to-end workloads — absolute figures are indicative only (see harness header):\n')
   console.log(`  ${'yardstick/six-linear-byte-passes'.padEnd(44)} ${yardstickMs.toFixed(4)} ms/pass`)
@@ -483,7 +568,19 @@ const main = async (): Promise<number> => {
   }
   console.log('')
 
-  printReductionTable(meshedFixtures)
+  printMergeTable()
+
+  // Both tables, and the pair is the finding. The first is what mc-render
+  // actually gets — LOD applied to the merged mesh it will be handed — and the
+  // second is what docs/design-notes.md M-8 measured before the merge existed.
+  // docs/responsibility.md §3.5(c) asked for exactly this comparison, on the
+  // grounds that if LOD 1 stops buying anything once merging lands then the
+  // 4-chunk threshold is paying an ~11px silhouette error for nothing.
+  printReductionTable('on the MERGED mesh (what mc-render is handed)', meshedFixtures)
+  printReductionTable(
+    'on the NAIVE mesh (what M-8 originally measured)',
+    BENCH_FIXTURES.map(({ name, chunk }) => ({ name, layers: meshChunkNaive(chunk, {}, CONFIG) })),
+  )
 
   if (wantsBaselineUpdate(process.argv)) {
     const recorded: Baseline = {

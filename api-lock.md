@@ -13,7 +13,7 @@
 <!-- ------------------------------------------------------------------------- -->
 
 format: 1
-exported declarations: 39
+exported declarations: 41
 supporting declarations: 0
 
 ## Exported
@@ -243,6 +243,12 @@ const layerOfBlockId: (config: MeshConfig, blockId: number) => MeshLayer;
 const meshChunk: (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig) => MeshLayers;
 ```
 
+### meshChunkNaive  `const`
+
+```ts
+const meshChunkNaive: (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig) => MeshLayers;
+```
+
 ### occludes  `const`
 
 ```ts
@@ -271,6 +277,12 @@ const simplifyMesh: (layers: MeshLayers, level: LodLevel) => MeshLayers;
 
 ```ts
 const tangentAxes: (direction: FaceDirection) => readonly [QuadAxis, QuadAxis];
+```
+
+### totalQuadArea  `const`
+
+```ts
+const totalQuadArea: (layers: MeshLayers) => number;
 ```
 
 ### totalQuadCount  `const`

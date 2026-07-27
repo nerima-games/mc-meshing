@@ -49,6 +49,14 @@ describe('public API surface', () => {
         // mesh
         'meshChunk',
         'totalQuadCount',
+        // Added with the greedy merge. `totalQuadArea` is the quantity merging
+        // must NOT change, and mc-render wants it for the same reason this
+        // repository's tests do — a quad count stopped being a face count the
+        // day quads stopped being 1x1. `meshChunkNaive` is the oracle the merge
+        // is checked against; see domain/mesh.ts on why it is public rather
+        // than copied into test/.
+        'totalQuadArea',
+        'meshChunkNaive',
       ]
       const actual = new Set(Object.keys(meshing))
       for (const name of expected) {
