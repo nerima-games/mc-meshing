@@ -852,6 +852,31 @@ const arbitraryNeighbours: FastCheck.Arbitrary<ChunkNeighbours> = FastCheck.tupl
 }))
 
 describe('the greedy merge against the naive oracle', () => {
+  /**
+   * These three properties get 40 s rather than the file's 10 s default, and the
+   * number is measured rather than guessed.
+   *
+   * Each run meshes a whole chunk TWICE -- once merged, once through the naive
+   * oracle -- and 120 runs of that is genuinely several seconds of work. Timed
+   * on this file:
+   *
+   *     pnpm vitest run test/mesh.test.ts               4.19 s
+   *     pnpm vitest run --coverage test/mesh.test.ts   14.48 s
+   *
+   * so v8's instrumentation is a 3.5x multiplier, and CI runs the coverage
+   * variant on a slower machine than the one those numbers came from. The three
+   * properties passed locally and timed out at 10 s on CI, which is the worst
+   * shape of flake: green for the author, red for everyone else.
+   *
+   * `numRuns` is deliberately NOT reduced. These properties are what makes it
+   * legitimate to have regenerated the golden hashes when merging changed the
+   * emission order -- the argument is "the merged output tiles exactly the same
+   * surface", and that argument is only as strong as the number of chunks it was
+   * checked against. Trading it for four seconds would quietly weaken the one
+   * thing holding up the goldens.
+   */
+  const MERGE_PROPERTY_TIMEOUT_MS = 40_000
+
   it.effect('REGRESSION: merged output covers exactly the same block-faces as unmerged output', () =>
     Effect.sync(() => {
       // meshing-merge-covers-the-same-surface. THE property this whole exercise
@@ -873,6 +898,7 @@ describe('the greedy merge against the naive oracle', () => {
         { numRuns: 120 },
       )
     }),
+    MERGE_PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('REGRESSION: no two merged quads claim the same block-face', () =>
@@ -889,6 +915,7 @@ describe('the greedy merge against the naive oracle', () => {
         { numRuns: 120 },
       )
     }),
+    MERGE_PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('never emits more quads than the naive mesher, and usually far fewer', () =>
@@ -912,6 +939,7 @@ describe('the greedy merge against the naive oracle', () => {
       )
       expect(sawRealReduction).toBe(true)
     }),
+    MERGE_PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('REGRESSION: never merges two different block ids, however they are arranged', () =>
