@@ -82,13 +82,23 @@
 | `rendering/.../greedy-meshing-ao.ts:6-9`（`getBlock`） | `domain/chunk-view.ts` の `getBlock` | 3 つの性能例外そのまま（`design-notes.md` M-2） |
 | `rendering/.../greedy-meshing-ao.ts:8`（ストレージレイアウト） | `domain/chunk-view.ts` の `blockIndex` | **同一**。参照実装の fixture 互換のため |
 | `rendering/.../greedy-meshing-types.ts:40`（`AIR = 0`） | `domain/chunk-view.ts` の `AIR` | 同一 |
+| `rendering/.../greedy-meshing-fluid-state.ts:37-43`（水面高） | `domain/fluid-mesh.ts` の `SOURCE_SURFACE_HEIGHT` / `heightForLevel` | `maxLevel` は注入（`design-notes.md` M-12） |
+| `rendering/.../greedy-meshing-fluid-state.ts:74-127`（4 隅の平均） | `domain/fluid-mesh.ts` の `cornerHeight` | **これが「流れ方向」である。** 流れベクトルは参照実装にも無い |
+| `rendering/.../greedy-meshing-fluid-state.ts:133-134`（`isFluidFaceOccluder`） | `domain/fluid-mesh.ts` の `hidesFluidFace` | `occludes()` で表現。植物も遮蔽しない（M-11 との整合） |
+| `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光とワールドオフセットを外した。側面 4 本は 1 つの関数に畳んだ |
+| `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植していない** | 符号化は所有者のもの。§3.2 |
 
-## 3. `ChunkView` について
+## 3. `ChunkView` と `FluidView` について —— 2 つの差し替え予定
+
+### 3.1 `ChunkView`
 
 `domain/chunk-view.ts` の `ChunkView` は**ローカルな構造型**である:
 
 ```typescript
-export type ChunkView = { readonly blocks: Readonly<Uint8Array> }
+export type ChunkView = {
+  readonly blocks: Readonly<Uint8Array>
+  readonly fluid?: FluidView
+}
 ```
 
 本来 `Chunk` を所有するのは mc-kernel（plan.md §3.1: 「`Chunk` データ構造とコーデック」）だが、
@@ -96,6 +106,40 @@ export type ChunkView = { readonly blocks: Readonly<Uint8Array> }
 
 mc-kernel が publish されたら、この型を kernel の `Chunk` に差し替える。
 構造型なので、kernel の `Chunk` が `blocks: Uint8Array` を持つ限り互換である。
+
+### 3.2 `FluidView` —— **バイトではなく復号済みの状態**を受け取る
+
+```typescript
+export type FluidView = {
+  readonly levels: Readonly<Uint8Array>
+  readonly sources: Readonly<Uint8Array>
+}
+```
+
+同じく差し替え予定の placeholder だが、**`ChunkView` とは差し替わり方が違う**ので分けて書く。
+
+`ChunkView` は参照実装と**同じ形**（`blocks: Uint8Array`）を宣言している。
+`FluidView` は**わざと違う形**を宣言している —— 参照実装が渡すのは 1 本の
+`fluid: Uint8Array` であり、それを 5 つのマスク（`packages/block/domain/fluid.ts:7-11`）で
+復号する。**そのマスクを所有しているのは流体シミュレーション側であって、ここではない**ので、
+ここで宣言すればロスターに 2 つ目の綴りが増える（責務表 §3.3 / §3.4 / M-11 が
+座標・LOD 距離・レールの形状についてそれぞれ拒否したのと同じ形）。
+
+したがって:
+
+| | `ChunkView.blocks` | `FluidView` |
+| --- | --- | --- |
+| 参照実装の形 | 同一 | **意図的に別** |
+| 差し替え時に起きること | kernel の `Chunk` に置換して終わり | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
+| その層の置き場所 | — | mc-render（両方に依存する側）。責務表 §3.6 (c) |
+
+**mc-meshing 側は差し替え時も変わらない。** ここが要求しているのは
+「セルごとの level と source」であって「どう詰められていたか」ではないので、
+所有者が publish したときに書かれるのは `Uint8Array` → `FluidView` の変換 1 つであり、
+それは `decodeFluidByte` を**所有者から import して**書かれるべきものである。
+
+`maxLevel`（水 7 / 溶岩 3、`fluid-model.ts:15-16`）も同じ理由でここには無く、
+`MeshConfig.fluidMaxLevels` として注入される。差し替え時にはその値も所有者から来る。
 
 ## 4. plan.md の数値の訂正（実測で検証）
 

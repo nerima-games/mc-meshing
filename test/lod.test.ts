@@ -309,14 +309,14 @@ describe('what snapping does to one quad', () => {
 
       // An x-facing side spans (y, z): `width` runs along Y and is left alone,
       // `height` runs along Z and is snapped from [3, 8] out to [2, 8].
-      const side = simplifyMesh({ opaque: [oblong({})], water: [], transparentSolid: [], crossPlants: [] }, 1).opaque[0]
+      const side = simplifyMesh({ opaque: [oblong({})], water: [], transparentSolid: [], crossPlants: [], fluids: [] }, 1).opaque[0]
       expect([side?.lx, side?.y, side?.lz]).toStrictEqual([5, 7, 2])
       expect([side?.width, side?.height]).toStrictEqual([3, 6])
 
       // A top face spans (x, z): both are snapped. [3, 6] -> [2, 6] and
       // [5, 10] -> [4, 10].
       const top = simplifyMesh(
-        { opaque: [oblong({ direction: 'yPos', role: 'top', lx: 3, y: 64, lz: 5, width: 3, height: 5 })], water: [], transparentSolid: [], crossPlants: [] },
+        { opaque: [oblong({ direction: 'yPos', role: 'top', lx: 3, y: 64, lz: 5, width: 3, height: 5 })], water: [], transparentSolid: [], crossPlants: [], fluids: [] },
         1,
       ).opaque[0]
       expect([top?.lx, top?.y, top?.lz]).toStrictEqual([2, 64, 4])

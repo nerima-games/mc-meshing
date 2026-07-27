@@ -27,9 +27,75 @@ export const AIR = 0
 export const blockIndex = (lx: number, y: number, lz: number): number =>
   y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
 
+/**
+ * The fluid simulation's per-cell state, as meshing needs to see it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS TWO PLAIN ARRAYS AND NOT THE REFERENCE'S PACKED BYTE
+ * ---------------------------------------------------------------------------
+ *
+ * The reference passes meshing a single `fluid: Uint8Array` and decodes each
+ * byte with five masks — present `0x80`, kind `0x10`, source `0x08`, level
+ * `0x07` (`packages/block/domain/fluid.ts:9-12`). Those masks belong to the
+ * fluid SIMULATION. Restating them here would put a second copy of another
+ * repository's encoding in this one, which is the mistake docs/responsibility.md
+ * §3.3 refused for coordinates, §3.4 for LOD distances and M-11 for rail shapes:
+ * two spellings of one fact, and only one of them is the one anybody updates.
+ *
+ * So the seam is drawn at the DECODED state instead. The two facts meshing
+ * actually needs are how full a cell is and whether it is a source, and they
+ * arrive as arrays of numbers with no layout to agree on. Whoever owns the byte
+ * decodes it; nothing here has an opinion about how it was stored.
+ *
+ * The other three fields of that byte are not here, and each is absent for a
+ * reason rather than by omission:
+ *
+ *  - PRESENT is redundant. A cell holds fluid exactly when its block id is one
+ *    the caller declared in `MeshConfig.fluidMaxLevels`, so `blocks` already
+ *    answers it and a second answer could only ever disagree with the first.
+ *    The reference carries both and has to reconcile them
+ *    (`greedy-meshing-fluid-state.ts:63`, which discards the cell when the byte
+ *    and the block id name different fluids).
+ *  - KIND is redundant for the same reason: the block id is the kind.
+ *  - MAX LEVEL is not per cell. It is per fluid — 7 for water, 3 for lava
+ *    (`fluid-model.ts:15-16`) — and it describes how far the fluid SPREADS,
+ *    which is propagation vocabulary. It is injected through `MeshConfig`.
+ *
+ * BOTH ARRAYS ARE OPTIONAL IN EFFECT: `domain/fluid-mesh.ts` reads a missing
+ * `FluidView` as all zeroes, which is a full, non-source cell. A caller that has
+ * block ids but no simulation state yet therefore gets flat full-height fluid
+ * rather than invisible fluid.
+ *
+ * LIKE `ChunkView` ITSELF, THIS IS A PLACEHOLDER. docs/responsibility.md §3.6
+ * left the fluid input undecided between "wait for the owner to publish" and
+ * "declare the minimum structural type here, as `ChunkView` already does for
+ * `Chunk`". This is the second, and it is recorded in docs/porting.md as a
+ * pending replacement exactly as `ChunkView` is.
+ */
+export type FluidView = {
+  /**
+   * Fill level per cell, laid out per `blockIndex`. `0` is fullest; the maximum
+   * meaningful value is the fluid's injected `maxLevel`.
+   */
+  readonly levels: Readonly<Uint8Array>
+  /** Non-zero where the cell is a fluid SOURCE rather than flow. Same layout. */
+  readonly sources: Readonly<Uint8Array>
+}
+
 export type ChunkView = {
   /** `CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
   readonly blocks: Readonly<Uint8Array>
+  /**
+   * Per-cell fluid state, when the caller has any.
+   *
+   * OPTIONAL, so that every `ChunkView` written before fluids existed still
+   * typechecks and behaves exactly as it did. It sits on `ChunkView` rather than
+   * beside it as a separate parameter so that `ChunkNeighbours` carries it for
+   * free — a lake spanning a chunk seam needs the neighbour's levels to compute
+   * the corner heights along that seam, and a fluid passed separately would have
+   * reached the four neighbours only through a second, parallel structure.
+   */
+  readonly fluid?: FluidView
 }
 
 export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE

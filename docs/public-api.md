@@ -275,17 +275,21 @@ export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config:
 2 枚のガラスの間にも無い。これが無いと湖の内部が quad の壁になり、
 見た目が間違っているうえに破滅的に高価になる。
 
-## 6. 参照実装にあって本リポジトリにまだ無いもの
+## 6. 参照実装の各部が本リポジトリでどうなったか
+
+**この表は長らく古かった。** グリーディマージ・AO・十字板・`yLimit` は着地しているのに
+「保留」「次の作業」「未実装」のまま残っていたので、流体の行を書き換えるついでに
+**実際のコードに突き合わせて直した**（`design-notes.md` M-9 / M-10 / M-11 / M-12）。
 
 | 項目 | 参照実装 | LOC | 扱い |
 | --- | --- | --- | --- |
-| グリーディマージ本体 | `greedy-meshing-algorithms.ts` + `-accumulator.ts` + `-passes.ts` | 616 | **次の作業**。このリポジトリの本体 |
-| アンビエントオクルージョン | `greedy-meshing-ao.ts` | 149 | 保留。基本を固めてから |
-| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | 保留 |
-| 植生メッシュ | `plant-mesh.ts` | 258 | 保留 |
+| グリーディマージ本体 | `greedy-meshing-algorithms.ts` + `-accumulator.ts` + `-passes.ts` | 616 | **移植済み**: `domain/mesh.ts`（M-9） |
+| アンビエントオクルージョン | `greedy-meshing-ao.ts` | 149 | **移植済み**: `domain/ambient-occlusion.ts`（M-10）。光サンプリング半分は未移植（ライトグリッドは mc-worldgen） |
+| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | **移植済み**: `domain/fluid-mesh.ts`（M-12）。バイト符号化と光は未移植 —— 継ぎ目は `FluidView`（復号済み） |
+| 植生メッシュ | `plant-mesh.ts` | 258 | **十字板のみ移植済み**: `domain/plant-mesh.ts`（M-11）。サボテン・レール・スイレンは未移植 |
 | LOD 段の選択（`lodForDistance` + 距離定数） | `lod-simplification.ts` | 約 48 | **mc-render の責務**（`responsibility.md` §3.4）。簡約本体（約 240）は `domain/lod.ts` に移植済み |
 | subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | 382 | 保留。1 ブロック変更で全チャンクを再メッシュしない最適化 |
 | アキュムレータプール | `greedy-meshing-accumulator.ts` | 178 | ベンチマークを用意してから |
 | worker プール / プロトコル | `packages/worker/.../meshing-worker*.ts` | 795 | **mc-render の責務**（plan.md §3.9） |
 | マテリアル | `chunk-mesh-materials.ts` | 238 | **mc-render の責務** |
-| `yLimit`（最高の非 air ブロックまでで打ち切る） | `greedy-meshing.ts:94-101` | — | 素朴実装にも入れるべき。未実装 |
+| `yLimit`（最高の非 air ブロックまでで打ち切る） | `greedy-meshing.ts:94-101` | — | **移植済み**: `domain/mesh.ts` の `solidCeiling`。素朴実装には**意図的に入れていない** —— オラクルが `CHUNK_HEIGHT` を走ることが `solidCeiling` の off-by-one を捕まえる仕掛けである（M-9） |

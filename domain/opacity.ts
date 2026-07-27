@@ -115,12 +115,41 @@ export type MeshConfig = {
    * which is what every such config meant.
    */
   readonly crossPlantBlockIds?: ReadonlySet<number>
+  /**
+   * Blocks drawn as a variable-height fluid volume rather than a cube, mapped to
+   * the highest LEVEL that fluid's propagation can reach. See
+   * `domain/fluid-mesh.ts`.
+   *
+   * A FOURTH ENTRY, and a MAP where the other three are sets, because a fluid id
+   * on its own is not enough to place a surface. The height of a cell is
+   * `1 - level / (maxLevel + 1)` (`greedy-meshing-fluid-state.ts:39-43`), and
+   * `maxLevel` differs per fluid: the reference has 7 for water and 3 for lava
+   * (`fluid-model.ts:15-16`). Naming those two numbers here would be a second
+   * spelling of how far a fluid SPREADS, which is mx-gameplay's rule and not
+   * this repository's — §3.2's argument for injecting `waterBlockIds`, applied
+   * to the one propagation constant the geometry cannot avoid needing.
+   *
+   * Its KEYS are also the set of fluid ids, so one injected table answers both
+   * "is this a fluid" and "how tall are its steps" in one lookup.
+   *
+   * LIKE `crossPlantBlockIds`, THIS ANSWERS A QUESTION ABOUT SHAPE, not about
+   * material. `waterBlockIds` decides which buffer a face goes in; this decides
+   * whether the block is a cube at all. Water is normally in both, and lava is
+   * normally in this one only — it is a fluid, but it is not blended.
+   *
+   * Optional for the same compatibility reason as `crossPlantBlockIds`, and here
+   * the stakes are higher: declaring an id a fluid removes its cube faces, so an
+   * absent map is what keeps every existing quad count and recorded baseline in
+   * this repository unchanged.
+   */
+  readonly fluidMaxLevels?: ReadonlyMap<number, number>
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
   waterBlockIds: new Set<number>(),
   transparentSolidBlockIds: new Set<number>(),
   crossPlantBlockIds: new Set<number>(),
+  fluidMaxLevels: new Map<number, number>(),
 }
 
 /** Largest block id representable in the chunk's `Uint8Array` storage. */

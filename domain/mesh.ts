@@ -123,6 +123,12 @@ import {
   type ChunkView,
 } from './chunk-view'
 import { FACES, type Face, type FaceDirection, type FaceRole } from './faces'
+import {
+  buildFluidLookup,
+  isFluidBlock,
+  meshFluidSurfaces,
+  type FluidQuad,
+} from './fluid-mesh'
 import { buildLayerLookup, MAX_BLOCK_ID, MESH_LAYERS, type MeshConfig, type MeshLayer } from './opacity'
 import {
   buildCrossPlantLookup,
@@ -182,6 +188,25 @@ export type MeshLayers = {
    * it would make the merge's central invariant read as violated by a flower.
    */
   readonly crossPlants: ReadonlyArray<CrossPlantQuad>
+  /**
+   * Fluid surfaces: lake tops and the skirts that close the steps between them.
+   * NOT block faces either.
+   *
+   * A FIFTH LIST, on the same terms and for the same reason as `crossPlants`. A
+   * fluid top has four independently fractional corner heights, so it is a
+   * bilinear patch rather than a rectangle and no `Quad` can describe it — and
+   * the slope between those corners is the whole feature, because that slope is
+   * what a viewer reads as flow direction. `domain/fluid-mesh.ts` argues it.
+   *
+   * EMPTY UNLESS `MeshConfig.fluidMaxLevels` DECLARES SOMETHING. Absent means no
+   * id is a fluid, which is what every config written before this list existed
+   * meant, and is what keeps their quad counts and baselines untouched.
+   *
+   * Like `crossPlants` it is outside `totalQuadArea` and `totalQuadCount`: a
+   * surface at height 0.875 covers no block face, so counting it would make the
+   * merge's conservation invariant read as violated by a puddle.
+   */
+  readonly fluids: ReadonlyArray<FluidQuad>
 }
 
 /**
@@ -438,6 +463,7 @@ const meshXPass = (
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
   plants: Uint8Array,
+  fluids: Uint8Array,
   face: Face,
   yLimit: number,
   mask: Uint16Array,
@@ -467,7 +493,12 @@ const meshXPass = (
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
         // without it a flower is drawn as a solid cube AND as a cross.
-        if (blockId === AIR || isCrossPlant(plants, blockId)) {
+        //
+        // A FLUID is skipped for the same reason and it is the stronger case:
+        // its surface sits at a fractional height, so without this guard a lake
+        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
+        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
+        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
@@ -497,6 +528,7 @@ const meshYPass = (
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
   plants: Uint8Array,
+  fluids: Uint8Array,
   face: Face,
   yLimit: number,
   mask: Uint16Array,
@@ -526,7 +558,12 @@ const meshYPass = (
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
         // without it a flower is drawn as a solid cube AND as a cross.
-        if (blockId === AIR || isCrossPlant(plants, blockId)) {
+        //
+        // A FLUID is skipped for the same reason and it is the stronger case:
+        // its surface sits at a fractional height, so without this guard a lake
+        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
+        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
+        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
@@ -552,6 +589,7 @@ const meshZPass = (
   neighbours: ChunkNeighbours,
   lookup: Uint8Array,
   plants: Uint8Array,
+  fluids: Uint8Array,
   face: Face,
   yLimit: number,
   mask: Uint16Array,
@@ -581,7 +619,12 @@ const meshZPass = (
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
         // without it a flower is drawn as a solid cube AND as a cross.
-        if (blockId === AIR || isCrossPlant(plants, blockId)) {
+        //
+        // A FLUID is skipped for the same reason and it is the stronger case:
+        // its surface sits at a fractional height, so without this guard a lake
+        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
+        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
+        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
@@ -600,6 +643,7 @@ const meshZPass = (
 const makeSink = (
   lookup: Uint8Array,
   crossPlants: ReadonlyArray<CrossPlantQuad>,
+  fluids: ReadonlyArray<FluidQuad>,
 ): {
   readonly layers: MeshLayers
   readonly push: (quad: Quad) => void
@@ -609,7 +653,7 @@ const makeSink = (
   const transparentSolid: Array<Quad> = []
   const buckets = [opaque, water, transparentSolid]
   return {
-    layers: { opaque, water, transparentSolid, crossPlants },
+    layers: { opaque, water, transparentSolid, crossPlants, fluids },
     // MESH_LAYERS is ['opaque', 'water', 'transparentSolid'] and the lookup
     // stores an index into it, so the routing is the index — no re-spelling of
     // the priority order, which lives in `opacity.ts` and is tested there.
@@ -638,11 +682,17 @@ export const meshChunk = (
 ): MeshLayers => {
   const lookup = buildLayerLookup(config)
   const plants = buildCrossPlantLookup(config)
+  const fluids = buildFluidLookup(config)
   const yLimit = solidCeiling(chunk.blocks)
-  // Plants are meshed BEFORE the sink is built, because the sink owns the
-  // result object and a cross plate is part of it. They are bounded by the same
-  // `yLimit`: a plant is a non-air block, so none can exist above the highest.
-  const { layers, push } = makeSink(lookup, meshCrossPlants(chunk, plants, yLimit))
+  // Plants and fluid surfaces are meshed BEFORE the sink is built, because the
+  // sink owns the result object and both are part of it. Both are bounded by the
+  // same `yLimit`: a plant and a fluid are non-air blocks, so neither can exist
+  // above the highest one.
+  const { layers, push } = makeSink(
+    lookup,
+    meshCrossPlants(chunk, plants, yLimit),
+    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, yLimit),
+  )
   if (yLimit === 0) {
     return layers
   }
@@ -655,11 +705,11 @@ export const meshChunk = (
 
   for (const face of FACES) {
     if (face.nx !== 0) {
-      meshXPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
+      meshXPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
     } else if (face.ny !== 0) {
-      meshYPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
+      meshYPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
     } else {
-      meshZPass(chunk, neighbours, lookup, plants, face, yLimit, mask, push)
+      meshZPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
     }
   }
 
@@ -698,17 +748,23 @@ export const meshChunkNaive = (
 ): MeshLayers => {
   const lookup = buildLayerLookup(config)
   const plants = buildCrossPlantLookup(config)
+  const fluids = buildFluidLookup(config)
   // CHUNK_HEIGHT, not `solidCeiling`: the oracle deliberately does no such
   // optimisation, so that `solidCeiling` itself is something the property tests
-  // can catch being wrong. The plates are identical either way.
-  const { layers, push } = makeSink(lookup, meshCrossPlants(chunk, plants, CHUNK_HEIGHT))
+  // can catch being wrong. The plates and the fluid surfaces are identical
+  // either way, which is exactly what makes that comparison worth making.
+  const { layers, push } = makeSink(
+    lookup,
+    meshCrossPlants(chunk, plants, CHUNK_HEIGHT),
+    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, CHUNK_HEIGHT),
+  )
 
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
           const blockId = getBlock(chunk.blocks, lx, y, lz)
-          if (blockId === AIR || isCrossPlant(plants, blockId)) {
+          if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
             continue
           }
           const neighbourId = getBlockAcrossBoundary(

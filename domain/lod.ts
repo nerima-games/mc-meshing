@@ -264,5 +264,11 @@ export const simplifyMesh = (layers: MeshLayers, level: LodLevel): MeshLayers =>
     // could even be applied to. Dropping it instead would silently delete every
     // flower in the world at the first LOD boundary.
     crossPlants: layers.crossPlants,
+    // Passed through for the same reason, one step more strongly again. A fluid
+    // surface has no integer extents either, AND its four corner heights are
+    // shared with its neighbours' corners — snapping one quad's corner without
+    // snapping the abutting one would tear a lake open along the seam between
+    // them, which is a hole in the world rather than a coarser world.
+    fluids: layers.fluids,
   }
 }

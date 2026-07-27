@@ -126,6 +126,65 @@ export const ROLLING: ChunkView = rollingChunk()
 export const CHECKERBOARD: ChunkView = checkerChunk()
 export const LAYERED: ChunkView = layeredChunk()
 
+/**
+ * A lake with a sloping bed, for the fluid surface pass.
+ *
+ * DELIBERATELY NOT ONE OF `BENCH_FIXTURES`, and that is the point. The four
+ * shapes above are configured by `CONFIG`, which declares no fluid, so every
+ * table and every recorded figure that iterates them is untouched by fluid
+ * meshing landing — including the `layered-water-glass` quad counts that
+ * docs/design-notes.md M-9 and M-10 record, whose water is still a cube.
+ *
+ * Fluid meshing is a different shape of cost from the six cube passes and wants
+ * its own measurement rather than a share of theirs: it samples up to four
+ * columns per corner and four corners per cell, so its price is set by how much
+ * fluid there is, not by how many faces are exposed. Hence one fixture that is
+ * mostly water and one workload timing it.
+ *
+ * The bed rises from y=40 to y=55 across the chunk so that the water above it
+ * has a genuinely varying depth, and the levels step with `lx` so that the
+ * corner averaging has something to average. A uniform lake would time the walk
+ * but never exercise the slope.
+ */
+const lakeChunk = (): ChunkView => {
+  const blocks = newBlocks()
+  const levels = newBlocks()
+  const sources = newBlocks()
+  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
+    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
+      const bed = 40 + Math.floor((lx + lz) / 2)
+      for (let y = 0; y <= bed; y += 1) {
+        set(blocks, lx, y, lz, STONE)
+      }
+      for (let y = bed + 1; y <= 56; y += 1) {
+        set(blocks, lx, y, lz, WATER)
+        // Level 0 below the surface and a stepped level at the top, so that the
+        // surface tilts and the submerged-cell rule is exercised underneath it.
+        const index = blockIndex(lx, y, lz)
+        levels[index] = y === 56 ? lx % 8 : 0
+        sources[index] = y === 56 ? 0 : 1
+      }
+    }
+  }
+  return { blocks, fluid: { levels, sources } }
+}
+
+export const LAKE: ChunkView = lakeChunk()
+
+/**
+ * `CONFIG` plus the fluid table, used only by the lake workload.
+ *
+ * The max levels are the reference's — 7 for water
+ * (`packages/block/domain/fluid-model.ts:15`). A benchmark may spell another
+ * repository's constants; `domain/` may not, which is the whole reason
+ * `fluidMaxLevels` is injected.
+ */
+export const FLUID_CONFIG: MeshConfig = {
+  waterBlockIds: new Set([WATER]),
+  transparentSolidBlockIds: new Set([GLASS]),
+  fluidMaxLevels: new Map([[WATER, 7]]),
+}
+
 export type BenchFixture = {
   /** The name both the benchmark and the reduction table print. */
   readonly name: string

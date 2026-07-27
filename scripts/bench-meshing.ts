@@ -60,7 +60,7 @@ import {
   type LodLevel,
   type MeshLayers,
 } from '../index'
-import { BENCH_FIXTURES, CONFIG, GLASS, ROLLING, WATER } from './bench-fixtures'
+import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, GLASS, LAKE, ROLLING, WATER } from './bench-fixtures'
 import {
   checkGuards,
   checkWorkloads,
@@ -559,7 +559,47 @@ const main = async (): Promise<number> => {
     }),
   )
 
-  const workloads: ReadonlyArray<Workload> = [...meshWorkloads, ...naiveWorkloads, ...simplifyWorkloads]
+  /**
+   * The fluid surface pass, on its own fixture and its own config.
+   *
+   * ONE workload rather than a fifth column in every table above, because fluid
+   * meshing is priced by how much FLUID there is and the other four shapes have
+   * none. Folding a lake into `BENCH_FIXTURES` would have moved every recorded
+   * figure in docs/design-notes.md M-8, M-9 and M-10 for no measurement anyone
+   * asked for.
+   *
+   * `LAKE` is meshed under `FLUID_CONFIG`, so its water is variable-height
+   * geometry rather than cubes — the comparison worth having is against the same
+   * chunk under `CONFIG`, where the identical bytes mesh as cubes, and both are
+   * printed so the difference is on the record rather than inferred.
+   */
+  const fluidWorkloads: ReadonlyArray<Workload> = [
+    {
+      name: 'meshChunk/lake-fluid',
+      msPerUnit: measure(() => {
+        sink += meshChunk(LAKE, {}, FLUID_CONFIG).fluids.length
+      }, options(60)),
+      unit: 'chunk',
+      detail:
+        `${String(meshChunk(LAKE, {}, FLUID_CONFIG).fluids.length)} fluid faces + ` +
+        `${String(totalQuadCount(meshChunk(LAKE, {}, FLUID_CONFIG)))} quads`,
+    },
+    {
+      name: 'meshChunk/lake-as-cubes',
+      msPerUnit: measure(() => {
+        sink += meshChunk(LAKE, {}, CONFIG).water.length
+      }, options(60)),
+      unit: 'chunk',
+      detail: `${String(totalQuadCount(meshChunk(LAKE, {}, CONFIG)))} quads (same chunk, fluid table absent)`,
+    },
+  ]
+
+  const workloads: ReadonlyArray<Workload> = [
+    ...meshWorkloads,
+    ...naiveWorkloads,
+    ...simplifyWorkloads,
+    ...fluidWorkloads,
+  ]
 
   console.log('end-to-end workloads — absolute figures are indicative only (see harness header):\n')
   console.log(`  ${'yardstick/six-linear-byte-passes'.padEnd(44)} ${yardstickMs.toFixed(4)} ms/pass`)

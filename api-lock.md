@@ -13,7 +13,7 @@
 <!-- ------------------------------------------------------------------------- -->
 
 format: 1
-exported declarations: 51
+exported declarations: 58
 supporting declarations: 0
 
 ## Exported
@@ -76,6 +76,7 @@ type ChunkNeighbours = {
 ```ts
 type ChunkView = {
     readonly blocks: Readonly<Uint8Array>;
+    readonly fluid?: FluidView;
 };
 ```
 
@@ -135,6 +136,32 @@ type FaceDirection = 'xPos' | 'xNeg' | 'yPos' | 'yNeg' | 'zPos' | 'zNeg';
 type FaceRole = 'top' | 'bottom' | 'side';
 ```
 
+### FluidQuad  `type`
+
+```ts
+type FluidQuad = {
+    readonly blockId: number;
+    readonly direction: FaceDirection;
+    readonly vertices: readonly [FluidVertex, FluidVertex, FluidVertex, FluidVertex];
+    readonly ao: number;
+};
+```
+
+### FluidVertex  `type`
+
+```ts
+type FluidVertex = readonly [number, number, number];
+```
+
+### FluidView  `type`
+
+```ts
+type FluidView = {
+    readonly levels: Readonly<Uint8Array>;
+    readonly sources: Readonly<Uint8Array>;
+};
+```
+
 ### INDICES_PER_QUAD  `const`
 
 ```ts
@@ -184,6 +211,7 @@ type MeshConfig = {
     readonly waterBlockIds: ReadonlySet<number>;
     readonly transparentSolidBlockIds: ReadonlySet<number>;
     readonly crossPlantBlockIds?: ReadonlySet<number>;
+    readonly fluidMaxLevels?: ReadonlyMap<number, number>;
 };
 ```
 
@@ -200,6 +228,7 @@ type MeshLayers = {
     readonly [K in MeshLayer]: ReadonlyArray<Quad>;
 } & {
     readonly crossPlants: ReadonlyArray<CrossPlantQuad>;
+    readonly fluids: ReadonlyArray<FluidQuad>;
 };
 ```
 
@@ -237,6 +266,12 @@ type Quad = {
 type QuadAxis = 'x' | 'y' | 'z';
 ```
 
+### SOURCE_SURFACE_HEIGHT  `const`
+
+```ts
+const SOURCE_SURFACE_HEIGHT: number;
+```
+
 ### VERTICES_PER_QUAD  `const`
 
 ```ts
@@ -259,6 +294,12 @@ const blockIndex: (lx: number, y: number, lz: number) => number;
 
 ```ts
 const buildCrossPlantLookup: (config: MeshConfig) => Uint8Array;
+```
+
+### buildFluidLookup  `const`
+
+```ts
+const buildFluidLookup: (config: MeshConfig) => Uint8Array;
 ```
 
 ### buildLayerLookup  `const`
@@ -297,6 +338,12 @@ const getBlockAcrossBoundary: (chunk: ChunkView, neighbours: ChunkNeighbours, lx
 const isCrossPlant: (lookup: Uint8Array, blockId: number) => boolean;
 ```
 
+### isFluidBlock  `const`
+
+```ts
+const isFluidBlock: (lookup: Uint8Array, blockId: number) => boolean;
+```
+
 ### layerOfBlockId  `const`
 
 ```ts
@@ -319,6 +366,12 @@ const meshChunkNaive: (chunk: ChunkView, neighbours: ChunkNeighbours, config: Me
 
 ```ts
 const meshCrossPlants: (chunk: ChunkView, plantLookup: Uint8Array, yLimit: number) => ReadonlyArray<CrossPlantQuad>;
+```
+
+### meshFluidSurfaces  `const`
+
+```ts
+const meshFluidSurfaces: (chunk: ChunkView, neighbours: ChunkNeighbours, fluids: Uint8Array, layers: Uint8Array, plants: Uint8Array, yLimit: number) => ReadonlyArray<FluidQuad>;
 ```
 
 ### occludes  `const`

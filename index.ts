@@ -19,6 +19,7 @@
 export * from './domain/ambient-occlusion'
 export * from './domain/chunk-view'
 export * from './domain/faces'
+export * from './domain/fluid-mesh'
 export * from './domain/lod'
 export * from './domain/mesh'
 export * from './domain/opacity'
