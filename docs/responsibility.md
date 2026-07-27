@@ -37,7 +37,9 @@
 | **座標の語彙**（`ChunkCoord` / チャンク座標系） | mc-kernel（型）+ mc-worldgen（キーとしての運用） | §3.3 |
 | ワーカープールの実装 | mc-render | plan.md §3.9。mc-meshing は worker の中で**呼ばれる**側 |
 | ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は読むだけ（現時点では未対応） |
-| LOD 簡約 | 未定 | 参照実装の `lod-simplification.ts`（288 LOC）。距離の概念が要るので mc-render 寄りかもしれない |
+| **LOD 簡約**（`simplifyMesh` / `packQuadKey` / `LodLevel`） | **mc-meshing**（決着。§3.4） | 参照実装の `lod-simplification.ts` のうち約 240 LOC。`MeshedChunk → MeshedChunk` で、距離を 1 つも取らない |
+| **LOD 段の選択**（`lodForDistance` / `LOD*_DISTANCE_CHUNKS`） | **mc-render**（決着。§3.4） | 同ファイルの残り。プレイヤーのチャンクと対象チャンクの距離が要る = §3.3 が禁じているもの |
+| **`three` のジオメトリ / マテリアル生成**（`block-mesh.ts` 91 LOC） | **mc-render**（決着。§3.4） | `import * as THREE` が 8 箇所。本リポジトリは `three` に依存しない |
 | アンビエントオクルージョン | 保留 | 参照実装の `greedy-meshing-ao.ts`（149 LOC）。メッシュに焼き込む以上ここだが、まず基本を固める |
 | 植生メッシュ（十字板） | 保留 | 参照実装の `plant-mesh.ts`（258 LOC） |
 | 流体の高さ / 流れ方向 | 保留 | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）。流体伝播ルール自体は mx-gameplay |
@@ -91,6 +93,42 @@ mc-meshing はその分離を**1 段下で**維持する。理由は 2 つ:
 - 将来リソースパックでブロックの透過性を差し替えても mc-meshing は変わらない
 
 参照実装も同じ設計である（`greedy-meshing.ts:64, 67` で引数として受け取る）。
+
+### 3.4 決着: LOD の 379 LOC はどこへ行くか
+
+`mc-render/docs/porting.md` が「移植時に確定させ」と保留していた 379 LOC
+（`lod-simplification.ts` 288 + `block-mesh.ts` 91）の行き先を確定させる。
+
+**`lod-simplification.ts` は 1 ファイルだが関心が 2 つ入っており、それが「未定」の正体だった。**
+この表の旧記述は「距離の概念が要るので mc-render 寄りかもしれない」と書いていたが、
+それは**半分だけ正しい**。実際に距離を取る関数は 1 つしかない。
+
+| 記号 | 引数 → 戻り値 | 距離を取るか | 行き先 |
+| --- | --- | :-: | --- |
+| `simplifyMesh` | `(MeshedChunk, LodLevel) → MeshedChunk` | **取らない** | mc-meshing |
+| `packQuadKey` / `LodLevel` / `LOD_LEVELS` / `LodLevelSchema` | 語彙 | 取らない | mc-meshing |
+| `lodForDistance` | `(distanceChunks: number) → LodLevel` | **取る** | mc-render |
+| `LOD1_DISTANCE_CHUNKS` / `LOD2_DISTANCE_CHUNKS` | 定数（4 / 8 チャンク） | 距離そのもの | mc-render |
+
+**決め手は §3.3 である。** 「本リポジトリは座標を持たない」は既に決着済みのルールであり、
+`lodForDistance` の `distanceChunks` は「プレイヤーのチャンクと対象チャンクの
+L1 / L∞ ノルム」——参照実装の doc comment がそう書いている——つまり座標の派生物である。
+これを入れれば §3.3 が禁じた「どのチャンクか」という第 2 の変更理由がそのまま入ってくる。
+逆に `simplifyMesh` は `MeshedChunk` と段番号しか見ない。**`mesh()` と同じ形の純粋関数である。**
+
+`block-mesh.ts` は迷う余地が無い。`import * as THREE` があり THREE の参照が 8 箇所、
+`MaterialCacheKey` を持つ `Effect.Service` である。本リポジトリが `three` に依存した瞬間、
+`package.json` の 「Pure chunk-data -> geometry-buffer conversion」 という説明が嘘になる。
+
+**この分割が有効なのは、`LodLevel` の語彙を mc-meshing が所有するからである。**
+mc-render は「どの段か」を決め、mc-meshing は「その段が何を意味するか」を決める。
+`ChunkStore.neighbours` と `ChunkNeighbours` が §3.3 で分かれているのと同じ形であり、
+本リポジトリが座標を持たないまま距離依存の機能を提供できる理由でもある。
+
+なお参照実装のファイル名ヒューリスティック（`mesh|greedy` にマッチ）は
+`lod-simplification.ts` を**取りこぼす**。`mc-render/docs/porting.md` §1.3 がその
+2,807 / 2,993 / 3,095 の食い違いを記録している。ファイル名で責務を推測すると
+288 LOC が静かに落ちるという実例である。
 
 ## 4. 親と子
 
