@@ -13,7 +13,7 @@
 <!-- ------------------------------------------------------------------------- -->
 
 format: 1
-exported declarations: 31
+exported declarations: 39
 supporting declarations: 0
 
 ## Exported
@@ -109,6 +109,24 @@ type FaceRole = 'top' | 'bottom' | 'side';
 const INDICES_PER_QUAD = 6;
 ```
 
+### LOD_LEVELS  `const`
+
+```ts
+const LOD_LEVELS: readonly [0, 1, 2];
+```
+
+### LodLevel  `type`
+
+```ts
+type LodLevel = (typeof LOD_LEVELS)[number];
+```
+
+### LodLevelSchema  `const`
+
+```ts
+const LodLevelSchema: Schema.Literal<[0, 1, 2]>;
+```
+
 ### MAX_BLOCK_ID  `const`
 
 ```ts
@@ -165,6 +183,12 @@ type Quad = {
 };
 ```
 
+### QuadAxis  `type`
+
+```ts
+type QuadAxis = 'x' | 'y' | 'z';
+```
+
 ### VERTICES_PER_QUAD  `const`
 
 ```ts
@@ -187,6 +211,12 @@ const buildLayerLookup: (config: MeshConfig) => Uint8Array;
 
 ```ts
 const emptyChunk: () => ChunkView;
+```
+
+### faceOf  `const`
+
+```ts
+const faceOf: (direction: FaceDirection) => Face;
 ```
 
 ### getBlock  `const`
@@ -223,6 +253,24 @@ const occludes: (lookup: Uint8Array, blockId: number) => boolean;
 
 ```ts
 const oppositeDirection: (direction: FaceDirection) => FaceDirection;
+```
+
+### packQuadKey  `const`
+
+```ts
+const packQuadKey: (nx: number, ny: number, nz: number, p0x: number, p0y: number, p0z: number, p2x: number, p2y: number, p2z: number) => number;
+```
+
+### simplifyMesh  `const`
+
+```ts
+const simplifyMesh: (layers: MeshLayers, level: LodLevel) => MeshLayers;
+```
+
+### tangentAxes  `const`
+
+```ts
+const tangentAxes: (direction: FaceDirection) => readonly [QuadAxis, QuadAxis];
 ```
 
 ### totalQuadCount  `const`

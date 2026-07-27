@@ -1,18 +1,26 @@
 {
   "version": 1,
-  "recordedOn": "Apple M4 Max, macOS 26.5.2, Node 22.23.1 (the flake devShell's node — the version CI runs). Each figure is the median of FIVE whole-benchmark runs, not one.",
-  "note": "guards are slow/fast A/B ratios measured in one process against one data set: the machine cancels, so these are the real gate (tolerance 1.5). workloads are workload/yardstick ratios and are only approximately machine-independent — indicative, not authoritative (tolerance 2.0). Observed spread across the five recording runs: guards 6-11%, workloads 18-22%, both comfortably inside their tolerance. Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.",
+  "recordedOn": "Apple M4 Max, macOS 26.5.2, Node 22.23.1 (the flake devShell's node — the version CI runs; recorded with `nix develop --command pnpm bench --update-baseline`). Each figure is the median of FIVE whole-benchmark runs, not one.",
+  "note": "guards are slow/fast A/B ratios measured in one process against one data set: the machine cancels, so these are the real gate (tolerance 1.30, except the shipped-vs-frozen gate at 1.15). workloads are workload/yardstick ratios and are only approximately machine-independent — indicative, not authoritative (tolerance 2.0). Observed spread across the five recording runs: guards 3-8% EXCEPT neighbour-read/shipped-vs-frozen-inline-reference at 25% (0.879 to 1.124), which is the one guard carrying the TIGHT 1.15 tolerance — its lowest observed run sits only 3% above its own failure threshold, so it is the first thing to suspect in a red run and the harness header's claim of 5-6% spread for it does not reproduce. workloads 6-10%. ON NODE VERSIONS: the same benchmark on Node 24.13.0 puts the workload ratios 22-32% above these and the HashSet guards 16-18% above them. The recorded environment is Node 22; comparing across major versions is not meaningful. Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.",
   "guards": {
-    "neighbour-read/shipped-vs-frozen-inline-reference": 0.944,
-    "set-membership/hashset-vs-lookup-table": 12.249,
-    "set-membership/hashset-vs-native-set": 1.876,
-    "set-membership/native-set-vs-lookup-table": 6.51,
-    "neighbour-read/option-vs-plain-number": 2.237
+    "neighbour-read/shipped-vs-frozen-inline-reference": 0.9833,
+    "set-membership/hashset-vs-lookup-table": 12.34,
+    "set-membership/hashset-vs-native-set": 1.89,
+    "set-membership/native-set-vs-lookup-table": 6.503,
+    "neighbour-read/option-vs-plain-number": 2.245
   },
   "workloads": {
-    "meshChunk/flat": 9.986,
-    "meshChunk/rolling": 10.135,
-    "meshChunk/checkerboard-worst": 7.835,
-    "meshChunk/layered-water-glass": 11.007
+    "meshChunk/flat": 10.77,
+    "meshChunk/rolling": 10.66,
+    "meshChunk/checkerboard-worst": 7.97,
+    "meshChunk/layered-water-glass": 11.39,
+    "simplifyMesh/lod1/flat": 7.259,
+    "simplifyMesh/lod2/flat": 6.862,
+    "simplifyMesh/lod1/rolling": 8.845,
+    "simplifyMesh/lod2/rolling": 8.449,
+    "simplifyMesh/lod1/checkerboard-worst": 23.08,
+    "simplifyMesh/lod2/checkerboard-worst": 19.87,
+    "simplifyMesh/lod1/layered-water-glass": 5.796,
+    "simplifyMesh/lod2/layered-water-glass": 5.598
   }
 }

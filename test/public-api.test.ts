@@ -30,6 +30,14 @@ describe('public API surface', () => {
         'VERTICES_PER_QUAD',
         'INDICES_PER_QUAD',
         'oppositeDirection',
+        'faceOf',
+        'tangentAxes',
+        // lod — mc-render decides WHICH level a chunk is at and imports the
+        // vocabulary for it from here; see docs/responsibility.md §3.4.
+        'LOD_LEVELS',
+        'LodLevelSchema',
+        'packQuadKey',
+        'simplifyMesh',
         // opacity
         'MESH_LAYERS',
         'MESH_LAYER_PRIORITY',

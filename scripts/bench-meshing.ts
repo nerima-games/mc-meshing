@@ -27,30 +27,30 @@
  * Provenance of the fixtures
  * ---------------------------------------------------------------------------
  *
- * flat / rolling / checkerboard are ported from the reference implementation's
- * `scripts/bench-meshing.ts` — same shapes, same `sin(x*0.7)*cos(z*0.5)`
- * rolling surface, same `(x+y+z)%2` checkerboard, same x81 chunk framing
- * (renderDistance=4). They are fully deterministic: no PRNG, no clock, no
- * input. Block ids are local constants because mc-meshing deliberately has no
- * block registry — ids are opaque numbers injected through `MeshConfig` — where
- * the reference reached its via `blockTypeToIndex('STONE')`.
+ * The four chunk shapes live in `bench-fixtures.ts` — three of them ported from
+ * the reference's own benchmark, one added here for the three-valued layer
+ * routing. They moved out of this file so that a test can state a quad count on
+ * the same terrain this file times; see that file's header. The x81 chunk
+ * framing (renderDistance=4) stays here, where the timings are.
  */
 import { HashSet, Option } from 'effect'
 import {
   AIR,
   BLOCKS_PER_CHUNK,
-  blockIndex,
   buildLayerLookup,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
   FACES,
   getBlock,
+  LOD_LEVELS,
   MESH_LAYERS,
   meshChunk,
+  simplifyMesh,
   totalQuadCount,
-  type ChunkView,
-  type MeshConfig,
+  type LodLevel,
+  type MeshLayers,
 } from '../index'
+import { BENCH_FIXTURES, CONFIG, GLASS, ROLLING, WATER } from './bench-fixtures'
 import {
   checkGuards,
   checkWorkloads,
@@ -72,17 +72,6 @@ import {
 
 const BASELINE_PATH = new URL('./bench-baseline.json', import.meta.url).pathname
 
-/** Opaque ids. mc-meshing has no registry; `MeshConfig` is the only source of truth. */
-const STONE = 1
-const GRASS = 2
-const WATER = 3
-const GLASS = 4
-
-const CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
-  transparentSolidBlockIds: new Set([GLASS]),
-}
-
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
 
 /** The reference's count for this workload. Odd, so the median is an observation. */
@@ -98,79 +87,6 @@ const RUNS = 7
  * per-chunk cost and not a scaled-up microbenchmark.
  */
 const MASK_CELLS = FACES.length * CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT
-
-const newBlocks = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
-
-const set = (blocks: Uint8Array, lx: number, y: number, lz: number, value: number): void => {
-  blocks[blockIndex(lx, y, lz)] = value
-}
-
-/** Solid stone to y=62, grass at 63, air above. Few faces — best case. */
-const flatChunk = (): ChunkView => {
-  const blocks = newBlocks()
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-      for (let y = 0; y <= 62; y += 1) {
-        set(blocks, lx, y, lz, STONE)
-      }
-      set(blocks, lx, 63, lz, GRASS)
-    }
-  }
-  return { blocks }
-}
-
-/** Per-column height varying 56..72. A realistic surface — moderate faces. */
-const rollingChunk = (): ChunkView => {
-  const blocks = newBlocks()
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-      const height = 56 + Math.floor(8 * (1 + Math.sin(lx * 0.7) * Math.cos(lz * 0.5)))
-      for (let y = 0; y < height; y += 1) {
-        set(blocks, lx, y, lz, STONE)
-      }
-      set(blocks, lx, height, lz, GRASS)
-    }
-  }
-  return { blocks }
-}
-
-/** Every cell in a 16^3 volume alternates solid/air. Worst case — maximum faces. */
-const checkerChunk = (): ChunkView => {
-  const blocks = newBlocks()
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-      for (let y = 0; y < CHUNK_SIZE; y += 1) {
-        if ((lx + y + lz) % 2 === 0) {
-          set(blocks, lx, y, lz, STONE)
-        }
-      }
-    }
-  }
-  return { blocks }
-}
-
-/**
- * A lake under a glass roof: exercises all three layers and the same-layer cull.
- *
- * Not in the reference's fixture set. It is here because mc-meshing's routing is
- * three-valued where the reference's benchmark only ever fed it opaque blocks,
- * so a layer-routing regression would otherwise be invisible to this file.
- */
-const layeredChunk = (): ChunkView => {
-  const blocks = newBlocks()
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-      for (let y = 0; y <= 50; y += 1) {
-        set(blocks, lx, y, lz, STONE)
-      }
-      for (let y = 51; y <= 62; y += 1) {
-        set(blocks, lx, y, lz, WATER)
-      }
-      set(blocks, lx, 63, lz, GLASS)
-    }
-  }
-  return { blocks }
-}
 
 /**
  * Anything a measured loop computes has to be observed somewhere, or a
@@ -370,6 +286,76 @@ const optionWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
 }
 
 // ---------------------------------------------------------------------------
+// LOD quad reduction — a COUNT, and therefore not a benchmark
+// ---------------------------------------------------------------------------
+
+/** Every level that actually simplifies. LOD 0 is the identity by construction. */
+const SIMPLIFIED_LEVELS: ReadonlyArray<LodLevel> = LOD_LEVELS.filter((level) => level !== 0)
+
+/** Faces whose normal is +Y or -Y. The ones snapped on BOTH of their axes. */
+const isVerticalNormal = (direction: string): boolean => direction === 'yPos' || direction === 'yNeg'
+
+const splitByNormal = (layers: MeshLayers): { readonly caps: number; readonly sides: number } => {
+  let caps = 0
+  for (const quad of layers.opaque) {
+    if (isVerticalNormal(quad.direction)) {
+      caps += 1
+    }
+  }
+  return { caps, sides: layers.opaque.length - caps }
+}
+
+const percent = (after: number, before: number): string =>
+  before === 0 ? '     -' : `${(100 * (1 - after / before)).toFixed(1).padStart(5)}%`
+
+/**
+ * What simplification removes, per fixture and per level.
+ *
+ * THIS IS NOT A BENCHMARK AND IT IS NOT COMPARED AGAINST THE BASELINE. It is a
+ * count of quads produced by a deterministic function over a deterministic
+ * fixture: it has no clock in it, it is byte-identical on every machine, and it
+ * is therefore exact rather than tolerated. It is printed here, next to the
+ * timings, because it is the number that says whether the timings are worth
+ * paying — and printing it anywhere else would let the two drift apart.
+ *
+ * The caps/sides split is the point of the table rather than a detail of it.
+ * Top and bottom faces are snapped on both axes and collapse by step^2; side
+ * faces are snapped on one, because the other is Y and Y is never snapped, and
+ * collapse by step. A mesh is therefore reduced in proportion to how much of it
+ * faces up. See docs/design-notes.md M-8.
+ */
+const printReductionTable = (
+  meshed: ReadonlyArray<{ readonly name: string; readonly layers: MeshLayers }>,
+): void => {
+  console.log('LOD quad reduction — an exact COUNT over deterministic fixtures, not a timing:\n')
+  console.log(
+    `  ${'fixture'.padEnd(22)}${'level'.padStart(5)}${'opaque'.padStart(9)}` +
+      `${'removed'.padStart(9)}${'caps'.padStart(8)}${'sides'.padStart(8)}   other layers`,
+  )
+  for (const { name, layers } of meshed) {
+    const full = splitByNormal(layers)
+    const untouched = `${String(layers.water.length)} water + ${String(layers.transparentSolid.length)} glass`
+    const row = (level: number, current: MeshLayers): string => {
+      const split = splitByNormal(current)
+      return (
+        `  ${name.padEnd(22)}${String(level).padStart(5)}${String(current.opaque.length).padStart(9)}` +
+        `${level === 0 ? '        -' : percent(current.opaque.length, layers.opaque.length).padStart(9)}` +
+        `${String(split.caps).padStart(8)}${String(split.sides).padStart(8)}   ${untouched}`
+      )
+    }
+    console.log(row(0, layers))
+    for (const level of SIMPLIFIED_LEVELS) {
+      console.log(row(level, simplifyMesh(layers, level)))
+    }
+    console.log(
+      `  ${''.padEnd(22)}${'caps'.padStart(5)} ${String(full.caps).padStart(8)}` +
+        `  sides ${String(full.sides).padStart(7)}   (LOD 0 split, for the ratios above)`,
+    )
+  }
+  console.log('')
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -381,7 +367,7 @@ const options = (iterations: number, warmupIterations = iterations): MeasureOpti
 
 const main = async (): Promise<number> => {
   const tolerances = tolerancesFrom(process.argv)
-  const rolling = rollingChunk()
+  const rolling = ROLLING
 
   console.log('mc-meshing benchmark — median of 7 timed runs after warmup, per the reference implementation\n')
   console.log(`  mask cells per chunk: ${String(MASK_CELLS)}  (6 faces x 16 x 16 x 256)`)
@@ -454,24 +440,41 @@ const main = async (): Promise<number> => {
   // every workload figure, so its noise is every workload's noise.
   const yardstickMs = measure(yardstickOver(rolling.blocks), options(200, 400))
 
-  const fixtures: ReadonlyArray<readonly [string, ChunkView, number]> = [
-    ['meshChunk/flat', flatChunk(), 60],
-    ['meshChunk/rolling', rolling, 60],
-    ['meshChunk/checkerboard-worst', checkerChunk(), 60],
-    ['meshChunk/layered-water-glass', layeredChunk(), 60],
-  ]
-
-  const workloads: ReadonlyArray<Workload> = fixtures.map(([name, chunk, iterations]) => {
+  const meshWorkloads: ReadonlyArray<Workload> = BENCH_FIXTURES.map(({ name, chunk }) => {
     const msPerUnit = measure(() => {
       sink += meshChunk(chunk, {}, CONFIG).opaque.length
-    }, options(iterations))
+    }, options(60))
     return {
-      name,
+      name: `meshChunk/${name}`,
       msPerUnit,
       unit: 'chunk',
       detail: `${String(totalQuadCount(meshChunk(chunk, {}, CONFIG)))} quads`,
     }
   })
+
+  // Meshed once, outside the timed loop: this measures simplification, not
+  // meshing, and the two differ by more than an order of magnitude.
+  const meshedFixtures = BENCH_FIXTURES.map(({ name, chunk }) => ({
+    name,
+    layers: meshChunk(chunk, {}, CONFIG),
+  }))
+
+  const simplifyWorkloads: ReadonlyArray<Workload> = meshedFixtures.flatMap(({ name, layers }) =>
+    SIMPLIFIED_LEVELS.map((level) => {
+      const msPerUnit = measure(() => {
+        sink += simplifyMesh(layers, level).opaque.length
+      }, options(200, 400))
+      const after = simplifyMesh(layers, level)
+      return {
+        name: `simplifyMesh/lod${String(level)}/${name}`,
+        msPerUnit,
+        unit: 'chunk',
+        detail: `${String(layers.opaque.length)} -> ${String(after.opaque.length)} opaque quads`,
+      }
+    }),
+  )
+
+  const workloads: ReadonlyArray<Workload> = [...meshWorkloads, ...simplifyWorkloads]
 
   console.log('end-to-end workloads — absolute figures are indicative only (see harness header):\n')
   console.log(`  ${'yardstick/six-linear-byte-passes'.padEnd(44)} ${yardstickMs.toFixed(4)} ms/pass`)
@@ -479,6 +482,8 @@ const main = async (): Promise<number> => {
     console.log(formatWorkload(workload))
   }
   console.log('')
+
+  printReductionTable(meshedFixtures)
 
   if (wantsBaselineUpdate(process.argv)) {
     const recorded: Baseline = {

@@ -109,12 +109,19 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
   stub ではない —— **正しいが速くないだけ**である。
   マージが変えてはならない部分（レイヤ振り分け・正準面順序・遮蔽規則・境界挙動）は
   すべて確定してテストしてあり、現在の実装はマージ実装のオラクルとして機能する。
+- **LOD 簡約は移植済み**（`domain/lod.ts`）。`simplifyMesh(layers, level)` は座標を 1 つも取らない
+  純粋関数で、opaque レイヤだけを粗い grid に丸めて重なった quad を落とす。段の**選択**
+  （`lodForDistance` と 4 / 8 という距離定数）は mc-render の責務である（`responsibility.md` §3.4）。
+  削減量は上下面で `step²`、側面で `step` —— Y を決して丸めない（シルエットを保つ）ことの代償であり、
+  実測は `design-notes.md` M-8。**この数字は素朴メッシャ上の上限であって、
+  グリーディマージ着地後の値ではない。**
+  4 / 8 を正当化するために mc-render が測るべきことは `responsibility.md` §3.5 に書いた。
 - **`ChunkView` はローカルな構造型。** 本来 `Chunk` を所有するのは mc-kernel だが、
   まだ publish されていないので必要最小限の形だけ宣言してある。
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
 - **未実装のもの**: アンビエントオクルージョン、流体の高さ / 流れ、植生メッシュ（十字板）、
-  LOD 簡約、subregion 差分メッシュ、アキュムレータプール、`yLimit` による打ち切り。
+  subregion 差分メッシュ、アキュムレータプール、`yLimit` による打ち切り。
   それぞれの参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる

@@ -106,6 +106,10 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 - グリーディマージの実装（**面数は減るが被覆は変わらない**ので、
   レイヤ / 順序 / 被覆のテストは全部 green のままでなければならない）
 - 新しい `MeshConfig` フィールドの追加（省略時の既定値が現在の挙動と一致すること）
+- LOD 簡約の追加（`simplifyMesh` / `packQuadKey` / `LodLevel` / `LOD_LEVELS` / `LodLevelSchema`）と、
+  `Quad` の接線軸規約の明文化（`faceOf` / `tangentAxes` / `QuadAxis`）。
+  既存のどの宣言も変えていないので純粋な追加である。**ただし plan.md §6 Step 3 の
+  「4 週間 API ロック無変更」の窓はこの追加でリセットされる**
 - 隣接チャンク処理の拡張
 
 ### PATCH
@@ -117,7 +121,7 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 
 plan.md §6 Step 0-3 は「初回コミットに ... APIロックファイル（公開APIのレポートを diff レビュー）」を求める。
 
-**実装済みである。** リポジトリ直下の `api-lock.md`（公開宣言 31 件）が公開面の正本で、
+**実装済みである。** リポジトリ直下の `api-lock.md`（公開宣言 39 件）が公開面の正本で、
 生成器は `scripts/api-lock.ts`。16 リポジトリに byte-identical で vendor する方式は
 `scripts/check-dependency-whitelist.ts` と同じで、編集してよいのは `REPOSITORY_POLICY` だけである。
 

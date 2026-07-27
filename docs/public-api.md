@@ -283,7 +283,7 @@ export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config:
 | アンビエントオクルージョン | `greedy-meshing-ao.ts` | 149 | 保留。基本を固めてから |
 | 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | 保留 |
 | 植生メッシュ | `plant-mesh.ts` | 258 | 保留 |
-| LOD 簡約 | `lod-simplification.ts` | 288 | 帰属未定（`responsibility.md` §3） |
+| LOD 段の選択（`lodForDistance` + 距離定数） | `lod-simplification.ts` | 約 48 | **mc-render の責務**（`responsibility.md` §3.4）。簡約本体（約 240）は `domain/lod.ts` に移植済み |
 | subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | 382 | 保留。1 ブロック変更で全チャンクを再メッシュしない最適化 |
 | アキュムレータプール | `greedy-meshing-accumulator.ts` | 178 | ベンチマークを用意してから |
 | worker プール / プロトコル | `packages/worker/.../meshing-worker*.ts` | 795 | **mc-render の責務**（plan.md §3.9） |

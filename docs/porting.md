@@ -68,7 +68,7 @@
 | `chunk-mesh-materials.ts` | 238 | mc-render（マテリアルは描画） |
 | `chunk-mesh.ts` | 196 | mc-render（`Mesh` オブジェクトの管理） |
 | `worker/**`（config 以外） | 795 | mc-render（ワーカープールは plan.md §3.9） |
-| `lod-simplification.ts` | 288 | 帰属未定（`responsibility.md` §3） |
+| `lod-simplification.ts` のうち `lodForDistance` + 距離定数 | 約 48 | mc-render（`responsibility.md` §3.4）。残りの約 240 は移植済み |
 
 ## 2. 移植したファイルの対応
 

@@ -135,6 +135,7 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
 | --- | --- |
 | `test/mesh.test.ts` | 面数（孤立 1 ブロック = 6、隣接 2 ブロック = 10、N×N 平板 = `2N²+4N`、上限 6/セル）、面順序（正準順・決定論）、レイヤ振り分け（water / transparentSolid / 優先度・同レイヤ cull）、チャンク境界（隣接なし = 開放、隣接あり = 遮蔽）、`getBlock` の範囲外 = AIR |
 | `test/public-api.test.ts` | barrel の export、透過集合が native `Set`、レイヤ優先度、正準面順序と法線と role、`oppositeDirection` の対合性、lookup table の全域性、`occludes` の意味論 |
+| `test/lod.test.ts` | LOD 段の語彙（`LOD_LEVELS` / `LodLevelSchema`）、`packQuadKey` の単射性（3^9 全数）と 2^53 上界、LOD 0 の同一性、純粋性（入力を書き換えない・水とガラスは素通し）、snap の軸（水平のみ・Y は不変）、削減の厳密な数（上下面 ÷step²、側面 ÷step）、穴が開かないこと（包含）、正準面順序の保存、接線軸規約（`faceOf` / `tangentAxes`） |
 | `test/check-dependency-whitelist.test.ts` | 16 リポジトリ roster の完全性、非循環、体験モジュール間エッジ 0、kit の devDependency 専用性、推移閉包の拒否、`Date.now()` 禁止、import 抽出 |
 
 ## 7. ベンチマーク（`pnpm bench`）
@@ -161,6 +162,18 @@ M-2 `getBlock` は境界チェックをインライン化し `Option` を割り�
 本リポジトリ固有の 3 値レイヤ振り分けが計測から漏れるため）。
 
 fixture は完全に決定論的である。PRNG も時計も入力も無い。
+fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-meshing.ts` は
+末尾で `process.exit` するので、テストから import して同じ地形の quad 数を数えられない）。
+
+**LOD 簡約について 2 種類の数字を出す。**
+
+- **費用**: `simplifyMesh/lod{1,2}/{fixture}` の 8 本を workload 比として baseline に載せた。
+  簡約はメッシングと同じ桁の費用で、checkerboard では **2.9 倍**高い（`design-notes.md` M-8）。
+- **削減量**: quad の**数え上げ**であって timing ではない。決定論的な関数と決定論的な fixture の
+  積なので時計が 1 つも入らず、機械非依存で厳密である。**baseline とは突き合わせない** ——
+  tolerance の要る量ではないからである。timing の隣に印字するのは、
+  「その費用を払う値打ちがあるか」を答えるのがこの数字だからで、
+  離して置けば両者は必ずずれる。表と読み方は `design-notes.md` M-8。
 
 ### 絶対値ではなく**比**を検査する
 
@@ -190,11 +203,28 @@ fixture は完全に決定論的である。PRNG も時計も入力も無い。
 
 | guard | 比 |
 | --- | --- |
-| `set-membership/hashset-vs-lookup-table` | **12.2x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
+| `set-membership/hashset-vs-lookup-table` | **12.3x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
 | `set-membership/native-set-vs-lookup-table` | **6.5x**（native `Set.has` 対 `Uint8Array`） |
 | `set-membership/hashset-vs-native-set` | **1.9x**（Effect `HashSet.has` 対 native `Set.has`） |
 | `neighbour-read/option-vs-plain-number` | **2.2x**（`Option` 返し 対 素の `number` 返し） |
-| `neighbour-read/shipped-vs-frozen-inline-reference` | 0.94（ゲート。1.0 付近であるべき値） |
+| `neighbour-read/shipped-vs-frozen-inline-reference` | 0.98（ゲート。1.0 付近であるべき値） |
+
+### ゲートの ばらつき についての訂正 —— shipped-vs-frozen は**静かではない**
+
+`bench-harness.ts` のヘッダは shipped-vs-frozen ゲートの ばらつき を 5-6% とし、
+それを根拠に他より**厳しい** 1.15 の tolerance を与えている。
+**再録時の実測は 25%** である（5 回で 0.879 / 0.893 / 0.983 / 1.026 / 1.124、中央値 0.983）。
+1.15 の下では失敗閾値が 0.855 なので、最低の run は閾値のわずか 3% 上にある。
+**赤くなったとき最初に疑うべきはこのゲートである。** 他の guard は 3-8% で、
+ヘッダの主張どおりに静かである。tolerance を動かすかどうかは人間の判断であり、
+ここでは baseline を手順どおり中央値で記録し、事実だけを残す。
+
+### Node のメジャー版をまたいで比べてはならない
+
+同じベンチマークを Node 24.13.0 で走らせると workload 比が 22-32% 上、
+HashSet 系の guard が 16-18% 上に出る。baseline の記録環境は
+**flake の devShell の Node 22.23.1**（CI と同じ）であり、記録も検査も
+`nix develop --command pnpm bench` で行うこと。
 
 いずれも 1 チャンク分の 393,216 回（6 面 × 16×16×256）のルックアップ上での測定である。
 
@@ -202,7 +232,7 @@ fixture は完全に決定論的である。PRNG も時計も入力も無い。
 「桁違いに遅い」と書いているが、**実測は 1.9 倍**であって桁違いではない。
 結論は変わらない——ただし理由が変わる。効いているのは `HashSet` 対 `Set` ではなく
 **`Set` 対 `Uint8Array` ルックアップテーブル**（6.5x）のほうであり、
-両方を合わせた 12.2x が「内側ループを配列インデックスにする」ことの本当の値打ちである。
+両方を合わせた 12.3x が「内側ループを配列インデックスにする」ことの本当の値打ちである。
 design-notes M-1 が「native Set でも内側ループには遅すぎる」と書いているのは正しく、
 数字はそちらを支持している。
 
@@ -212,7 +242,7 @@ design-notes M-1 が「native Set でも内側ループには遅すぎる」と�
 という**もっともらしいリファクタ**に一時的に書き換えて実行したところ:
 
 ```
-REGRESSED  neighbour-read/shipped-vs-frozen-inline-reference  observed 0.392  baseline 0.944  (0.41x)
+REGRESSED  neighbour-read/shipped-vs-frozen-inline-reference  observed 0.392  baseline 0.944  (0.41x)   # baseline は当時の値
 REGRESSED  neighbour-read/option-vs-plain-number              observed 0.932  baseline 2.237  (0.42x)
 REGRESSED  meshChunk/flat                                     observed 30.594 baseline 9.986  (3.06x)
 REGRESSED  meshChunk/rolling                                  observed 31.734 baseline 10.135 (3.13x)
