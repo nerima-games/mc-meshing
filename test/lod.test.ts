@@ -20,7 +20,7 @@ import { Effect, FastCheck, Schema } from 'effect'
 import { AO_NONE } from '../domain/ambient-occlusion'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, blockIndex, emptyChunk, type ChunkView } from '../domain/chunk-view'
 import { FACES, FACE_DIRECTIONS, faceOf, tangentAxes, type FaceDirection } from '../domain/faces'
-import { LOD_LEVELS, LodLevelSchema, packQuadKey, simplifyMesh, type LodLevel } from '../domain/lod'
+import { LOD_LEVELS, LodLevelSchema, STEP_FOR_LOD, packQuadKey, simplifyMesh, type LodLevel } from '../domain/lod'
 import {
   meshChunk,
   meshChunkNaive,
@@ -360,6 +360,104 @@ describe('what snapping does to one quad', () => {
       const tops = inDirection(layers, 'yPos')
       expect(tops.length).toBe(1)
       expect(tops[0]?.blockId).toBe(STONE)
+    }),
+  )
+})
+
+describe('STEP_FOR_LOD, which mc-render mirrors', () => {
+  // docs/responsibility.md §3.5(a) hands mc-render an apparent-error formula
+  // whose numerator is `step - 1`, and §3.4 hands it the two distance constants
+  // that formula justifies. Exporting the table (domain/lod.ts) is what lets it
+  // compute rather than re-spell.
+  //
+  // THESE TESTS DERIVE THE STEP FROM BEHAVIOUR AND THEN COMPARE IT TO THE TABLE,
+  // never the other way round. A test that read `STEP_FOR_LOD[level]` and
+  // asserted it equals 1, 2, 4 would be the exact shape docs/design-notes.md
+  // records as "a green suite that runs the code and asks nothing": it would
+  // agree with the table whatever the table said, and mc-render's error formula
+  // would be wrong by the ratio of the real step to the published one with no
+  // test anywhere going red.
+
+  it.effect('REGRESSION: the published step IS the cell size the snapping uses', () =>
+    Effect.sync(() => {
+      for (const level of LOD_LEVELS) {
+        // lx = lz = 9 is not a multiple of 2 or of 4, so the snapped cell's
+        // origin is strictly behind the block for every level above 0 and a
+        // table that were too small could not fake the measured extent.
+        const layers = simplifyMesh(meshChunk(chunkWith([[9, 64, 9, STONE]]), {}, CONFIG), level)
+        const [top] = inDirection(layers, 'yPos')
+
+        const step = STEP_FOR_LOD[level]
+        // A top face spans (x, z) and both are snapped, so the emitted extent on
+        // each axis is one whole cell — which is the cell size, measured.
+        expect([top?.width, top?.height]).toStrictEqual([step, step])
+        // And the origin is that cell's, floored. Together the two lines say the
+        // grid is `step`-pitched and phase-aligned to 0, which is everything the
+        // `step - 1` bound below rests on.
+        expect([top?.lx, top?.lz]).toStrictEqual([Math.floor(9 / step) * step, Math.floor(9 / step) * step])
+      }
+    }),
+  )
+
+  it.effect('REGRESSION: no edge moves further than `step - 1`, which is mc-render`s numerator', () =>
+    Effect.sync(() => {
+      // THE PROPERTY mc-render's formula is a consequence of. Snapping sends an
+      // extent [a, b] to [floor(a/step)*step, ceil(b/step)*step]; each end
+      // therefore moves by at most `step - 1`, and the error a player sees is
+      // that displacement projected onto the screen.
+      //
+      // Stated over ARBITRARY quads rather than a fixture, because the bound has
+      // to hold for the merged extents greedy meshing emits — docs/design-notes.md
+      // M-9 — and not merely for the 1x1 quads the naive mesher used to produce.
+      FastCheck.assert(
+        FastCheck.property(
+          arbitraryLevel,
+          FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
+          FastCheck.integer({ min: 1, max: CHUNK_SIZE }),
+          (level, origin, length) => {
+            const step = STEP_FOR_LOD[level]
+            const snappedMin = Math.floor(origin / step) * step
+            const snappedMax = Math.ceil((origin + length) / step) * step
+            expect(origin - snappedMin).toBeLessThanOrEqual(step - 1)
+            expect(snappedMax - (origin + length)).toBeLessThanOrEqual(step - 1)
+          },
+        ),
+        { seed: 0, numRuns: 500 },
+      )
+    }),
+  )
+
+  it.effect('the `step - 1` bound is TIGHT, so it is not vacuously satisfied', () =>
+    Effect.sync(() => {
+      // A bound nothing attains is a bound that would still hold if the
+      // mechanism changed underneath it. `origin = step - 1` puts the block one
+      // cell-unit short of the next boundary, which is the worst case, and the
+      // measurement below is taken from an EMITTED quad rather than from the
+      // arithmetic above.
+      for (const level of LOD_LEVELS) {
+        const step = STEP_FOR_LOD[level]
+        const origin = step - 1
+        const layers = simplifyMesh(meshChunk(chunkWith([[origin, 64, origin, STONE]]), {}, CONFIG), level)
+        const [top] = inDirection(layers, 'yPos')
+        expect(origin - (top?.lx ?? origin)).toBe(step - 1)
+      }
+    }),
+  )
+
+  it.effect('is total over the level vocabulary, so a fourth level cannot be half-added', () =>
+    Effect.sync(() => {
+      // The same guard `LodLevelSchema` gets above. `STEP_FOR_LOD` is typed
+      // `Record<LodLevel, number>`, so this is a compile-time fact — but it is
+      // the fact a MIRROR can violate at runtime while still type-checking on
+      // its own side, and mc-dev-meta's `check:mirrors` compares by value.
+      expect(Object.keys(STEP_FOR_LOD).map(Number).sort()).toStrictEqual([...LOD_LEVELS].sort())
+      // Strictly increasing: level 0 is the no-op, and each level above it is
+      // strictly coarser. A table that repeated a step would make one level buy
+      // nothing while still costing a full `simplifyMesh` pass (§3.5(d)).
+      const steps = LOD_LEVELS.map((level) => STEP_FOR_LOD[level])
+      expect(steps).toStrictEqual([...steps].sort((left, right) => left - right))
+      expect(new Set(steps).size).toBe(steps.length)
+      expect(STEP_FOR_LOD[0]).toBe(1)
     }),
   )
 })

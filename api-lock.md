@@ -13,7 +13,7 @@
 <!-- ------------------------------------------------------------------------- -->
 
 format: 1
-exported declarations: 58
+exported declarations: 59
 supporting declarations: 0
 
 ## Exported
@@ -270,6 +270,12 @@ type QuadAxis = 'x' | 'y' | 'z';
 
 ```ts
 const SOURCE_SURFACE_HEIGHT: number;
+```
+
+### STEP_FOR_LOD  `const`
+
+```ts
+const STEP_FOR_LOD: Readonly<Record<LodLevel, number>>;
 ```
 
 ### VERTICES_PER_QUAD  `const`

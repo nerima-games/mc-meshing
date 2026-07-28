@@ -80,8 +80,50 @@ export const LodLevelSchema = Schema.Literal(...LOD_LEVELS)
  * Level 0's step of 1 is what makes `simplifyMesh` a no-op there, so the "LOD 0
  * returns the input untouched" behaviour is a consequence of this table rather
  * than a separate `if` that could disagree with it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS EXPORTED, HAVING BEEN PRIVATE
+ * ---------------------------------------------------------------------------
+ *
+ * It is the input to a measurement this repository cannot make. docs/responsibility.md
+ * §3.5(a) states the apparent-error formula mc-render needs in order to justify
+ * `LOD1_DISTANCE_CHUNKS` and `LOD2_DISTANCE_CHUNKS` — the two constants §3.4
+ * assigns to that repository — and its numerator is `step - 1`:
+ *
+ *   error[px] = (step - 1) / (16 * d) * H / (2 * tan(fov_v / 2))
+ *
+ * `step - 1` is the furthest a single edge can move when `simplifyMesh` snaps a
+ * quad's extents outward onto the coarser grid, which is a fact about THIS
+ * FILE's mechanism and about nothing else. Keeping the table private would have
+ * left mc-render two options, and both are defects this project has a recorded
+ * instance of:
+ *
+ *   RE-SPELL `{ 0: 1, 1: 2, 2: 4 }` over there — docs/design-notes.md and the
+ *   organisation's own retrospective list "two or more hand-written lists
+ *   stating the same thing" with six instances, all of which eventually
+ *   disagreed. This one would disagree silently and in the worst place: a
+ *   stale copy makes the error formula report a number that is wrong by the
+ *   ratio of the two steps, and the reader has no way to tell, because the
+ *   formula's output is a plausible pixel count either way.
+ *
+ *   HARD-CODE THE ERRORS instead of computing them — which is the shape of all
+ *   eight "constant backed by a wrong measurement" defects: the conclusion is
+ *   right and the evidence is not, so a reader who checks the evidence starts
+ *   doubting the conclusion too.
+ *
+ * Exported, mc-render MIRRORS it (`mc-render/domain/lod-vocabulary.ts`) and
+ * mc-dev-meta's `check:mirrors` compares the two tables by value on every run.
+ * The duplication still exists — the mirror規律 is that every mirror is a copy —
+ * but it is now a copy a gate reads, which is the difference between a
+ * duplication and a divergence.
+ *
+ * NOTE the type: `Readonly<Record<LodLevel, number>>` and not a wider
+ * `Record<number, number>`. A caller cannot index it with an unvalidated number
+ * and get `undefined` back at runtime while the type says otherwise; it has to
+ * hold a `LodLevel` first, which `LodLevelSchema` above is how you obtain from
+ * data that came off a `postMessage`.
  */
-const STEP_FOR_LOD: Readonly<Record<LodLevel, number>> = { 0: 1, 1: 2, 2: 4 }
+export const STEP_FOR_LOD: Readonly<Record<LodLevel, number>> = { 0: 1, 1: 2, 2: 4 }
 
 /**
  * Pack a quad's identity — its normal and its snapped box — into one number.
