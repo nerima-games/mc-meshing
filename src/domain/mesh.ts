@@ -209,6 +209,25 @@ export type MeshLayers = {
   readonly fluids: ReadonlyArray<FluidQuad>
 }
 
+/** Chunk-local, half-open integer bounds: min is inclusive and max is exclusive. */
+export type MeshRegion = {
+  readonly min: readonly [lx: number, y: number, lz: number]
+  readonly max: readonly [lx: number, y: number, lz: number]
+}
+
+/**
+ * Independently owned geometry for one replaceable chunk subregion.
+ *
+ * Consumers must replace the complete buffer previously stored for
+ * `ownedRegion`; this is deliberately not a patch over a greedy full-chunk
+ * mesh, whose quads may cross region boundaries.
+ */
+export type RegionMesh = {
+  readonly dirtyRegion: MeshRegion
+  readonly ownedRegion: MeshRegion
+  readonly layers: MeshLayers
+}
+
 /**
  * Total quads across all layers. What greedy merging REDUCES, and therefore the
  * one number in this file that is not an invariant.
@@ -794,4 +813,94 @@ export const meshChunkNaive = (
   }
 
   return layers
+}
+
+const clampInteger = (value: number, lower: number, upper: number): number =>
+  Math.min(upper, Math.max(lower, Math.trunc(Number.isFinite(value) ? value : lower)))
+
+const normalizeRegion = (region: MeshRegion): MeshRegion => {
+  const minX = clampInteger(region.min[0], 0, CHUNK_SIZE)
+  const minY = clampInteger(region.min[1], 0, CHUNK_HEIGHT)
+  const minZ = clampInteger(region.min[2], 0, CHUNK_SIZE)
+  return {
+    min: [minX, minY, minZ],
+    max: [
+      clampInteger(region.max[0], minX, CHUNK_SIZE),
+      clampInteger(region.max[1], minY, CHUNK_HEIGHT),
+      clampInteger(region.max[2], minZ, CHUNK_SIZE),
+    ],
+  }
+}
+
+/**
+ * Remesh the cells whose geometry can be affected by a dirty chunk-local AABB.
+ *
+ * Face exposure, AO and fluid corners read at most one neighbouring cell, so
+ * `ownedRegion` is the normalized dirty region plus a one-cell halo, clamped to
+ * this chunk. Output uses unit faces rather than greedy quads so every geometry
+ * item has exactly one owning cell and region buffers can be replaced safely.
+ */
+export const meshChunkRegion = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  config: MeshConfig,
+  dirtyRegion: MeshRegion,
+): RegionMesh => {
+  const dirty = normalizeRegion(dirtyRegion)
+  const empty = dirty.min.some((value, axis) => value >= (dirty.max[axis] ?? value))
+  const owned: MeshRegion = empty
+    ? dirty
+    : {
+        min: [Math.max(0, dirty.min[0] - 1), Math.max(0, dirty.min[1] - 1), Math.max(0, dirty.min[2] - 1)],
+        max: [
+          Math.min(CHUNK_SIZE, dirty.max[0] + 1),
+          Math.min(CHUNK_HEIGHT, dirty.max[1] + 1),
+          Math.min(CHUNK_SIZE, dirty.max[2] + 1),
+        ],
+      }
+  const lookup = buildLayerLookup(config)
+  const plants = buildCrossPlantLookup(config)
+  const fluids = buildFluidLookup(config)
+  const { layers, push } = makeSink(
+    lookup,
+    empty ? [] : meshCrossPlants(chunk, plants, CHUNK_HEIGHT, owned),
+    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, CHUNK_HEIGHT, owned),
+  )
+
+  if (!empty) {
+    for (const face of FACES) {
+      for (let lx = owned.min[0]; lx < owned.max[0]; lx += 1) {
+        for (let lz = owned.min[2]; lz < owned.max[2]; lz += 1) {
+          for (let y = owned.min[1]; y < owned.max[1]; y += 1) {
+            const blockId = getBlock(chunk.blocks, lx, y, lz)
+            if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) continue
+            const neighbourId = getBlockAcrossBoundary(
+              chunk,
+              neighbours,
+              lx + face.nx,
+              y + face.ny,
+              lz + face.nz,
+            )
+            if (!isFaceExposed(lookup, plants, blockId, neighbourId)) continue
+            push({
+              blockId,
+              direction: face.direction,
+              role: face.role,
+              lx,
+              y,
+              lz,
+              width: 1,
+              height: 1,
+              ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+            })
+          }
+        }
+      }
+    }
+  }
+  return {
+    dirtyRegion: dirty,
+    ownedRegion: owned,
+    layers,
+  }
 }

@@ -465,6 +465,10 @@ export const meshFluidSurfaces = (
   layers: Uint8Array,
   plants: Uint8Array,
   yLimit: number,
+  bounds: {
+    readonly min: readonly [number, number, number]
+    readonly max: readonly [number, number, number]
+  } = { min: [0, 0, 0], max: [CHUNK_SIZE, yLimit, CHUNK_SIZE] },
 ): ReadonlyArray<FluidQuad> => {
   // A 256-BYTE SCAN TO SKIP A 16 x yLimit x 16 WALK. Without it a config that
   // declares no fluid still pays for a whole extra traversal of the chunk that
@@ -491,9 +495,9 @@ export const meshFluidSurfaces = (
   const quads: Array<FluidQuad> = []
   const context: FluidContext = { fluids, layers, plants }
 
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let y = 0; y < yLimit; y += 1) {
-      for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
+  for (let lx = bounds.min[0]; lx < bounds.max[0]; lx += 1) {
+    for (let y = bounds.min[1]; y < Math.min(yLimit, bounds.max[1]); y += 1) {
+      for (let lz = bounds.min[2]; lz < bounds.max[2]; lz += 1) {
         const blockId = getBlock(chunk.blocks, lx, y, lz)
         if (!isFluidBlock(fluids, blockId)) {
           continue

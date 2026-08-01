@@ -134,13 +134,18 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
 - **未実装のもの**: アンビエントオクルージョン、流体の高さ / 流れ、植生メッシュ（十字板）、
-  subregion 差分メッシュ、アキュムレータプール。（`yLimit` による打ち切りは
+  アキュムレータプール。（`yLimit` による打ち切りは
   `solidCeiling` として実装済み。）
   それぞれの参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
   （参照実装自身がコメントで警告している）。プール版はベンチマークを用意してから
   明示的な opt-in として追加する。
+- **局所更新は `meshChunkRegion`。** chunk-local の半開 `dirtyRegion` を渡すと、face culling、AO、
+  fluid corner が読む範囲を含む 1-cell halo（chunk 境界で clamp）を `ownedRegion` として返す。
+  cube は安全な単位 face、plant / fluid もセル単位の独立所有バッファであり、呼び出し側は同じ
+  `ownedRegion` の以前のバッファを丸ごと交換する。greedy な full-chunk mesh の quad を途中で splice
+  してはならない。空領域は空の所有バッファを返し、従来の `meshChunk` API と出力は不変である。
 - **ビルド／publish はまだない。** `exports` は TypeScript ソースを直接指している。
   `version` は mc-render が実際に消費して契約を確認するまで `0.x` に留める。
 - **カバレッジ閾値は 4 指標 99% で有効化済み(TEST_STANDARD.md §3)。** 現状の実測は

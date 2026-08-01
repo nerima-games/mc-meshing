@@ -57,6 +57,7 @@ describe('public API surface', () => {
         // than copied into test/.
         'totalQuadArea',
         'meshChunkNaive',
+        'meshChunkRegion',
       ]
       const actual = new Set(Object.keys(meshing))
       for (const name of expected) {
