@@ -7,10 +7,10 @@
 | コマンド | 内容 |
 | --- | --- |
 | `pnpm typecheck` | `tsconfig.build.json`（出荷ソース）と `tsconfig.test.json`（テスト・ツール）の両方 |
-| `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`oxlint.json` は 5 カテゴリすべてと個別 67 ルールが `warn`、`error` は 4 つだけ。このフラグが無かった頃は実質その 4 つしかゲートになっていなかった） |
+| `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
 | `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。§3 参照) |
-| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**CI と同じ内容**(DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `oxlint.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6) |
+| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**CI と同じ内容**(DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6) |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
@@ -188,7 +188,7 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 7. カバレッジレポートを artifact に upload（7 日保持）
 
 依存グラフの逸脱(Tier を越えた `@nerima-games/*` import)は、専用スクリプトではなく
-`pnpm lint` が読む `oxlint.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
+`pnpm lint` が読む `.oxlintrc.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
 公開 API の破壊的変更は自動スナップショットツールではなく人間のレビューで検出する
 (API_STANDARD.md §4、[versioning.md](./versioning.md) §6)。
 

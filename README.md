@@ -14,7 +14,7 @@
 （bottom-up に publish してから pin する方式）。
 意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
 （org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
-`oxlint.json` の `no-restricted-imports`（Tier1: `@nerima-games/*` への依存を一切禁止）である。
+`.oxlintrc.json` の `no-restricted-imports`（Tier1: `@nerima-games/*` への依存を一切禁止）である。
 
 **Three.js には依存しない。永久に。**
 参照実装は `packages/world` の Three.js import をゼロに保っており（再検証済み）、
@@ -67,7 +67,7 @@ Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
 | コマンド | 内容 |
 | --- | --- |
 | `pnpm typecheck` | `tsconfig.build.json` と `tsconfig.test.json` の両方を型検査 |
-| `pnpm lint` | oxlint（このリポジトリ唯一の lint / format 設定）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`oxlint.json` は 5 カテゴリすべてと個別 67 ルールが `warn`、`error` は 4 つだけ。このフラグが無かった頃は実質その 4 つしかゲートになっていなかった） |
+| `pnpm lint` | oxlint（このリポジトリ唯一の lint / format 設定）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm lint:fix` | oxlint の自動修正 |
 | `pnpm test` | vitest（`@effect/vitest` の `it.effect` が主 API） |
 | `pnpm test:watch` | vitest watch |

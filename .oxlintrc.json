@@ -74,38 +74,25 @@
     "no-sync": "warn",
 
     // Style
-    "array-bracket-spacing": "warn",
-    "block-spacing": "warn",
-    "brace-style": ["warn", "1tbs", { "allowSingleLine": true }],
-    "camelcase": "warn",
-    "comma-dangle": ["warn", "always-multiline"],
-    "comma-spacing": "warn",
-    "comma-style": "warn",
-    "computed-property-spacing": "warn",
-    "eol-last": "warn",
-    "func-call-spacing": "warn",
-    "indent": "off",
-    "key-spacing": "warn",
-    "keyword-spacing": "warn",
-    "linebreak-style": ["warn", "unix"],
-    "lines-between-class-members": "warn",
+    // NOTE (discovered while fixing the `.oxlintrc.json` filename/discovery bug that this file's
+    // rename addresses -- see PR description): as of oxlint 1.76.0 the pure ESLint-core
+    // whitespace/formatting rules that used to be declared here (array-bracket-spacing,
+    // block-spacing, brace-style, camelcase, comma-dangle, comma-spacing, comma-style,
+    // computed-property-spacing, eol-last, func-call-spacing, indent, key-spacing,
+    // keyword-spacing, linebreak-style, lines-between-class-members, no-mixed-spaces-and-tabs,
+    // no-new-object, no-tabs, no-trailing-spaces, no-whitespace-before-property,
+    // object-curly-spacing, one-var, operator-linebreak, padded-blocks, quote-props,
+    // semi-spacing, space-before-blocks, space-infix-ops, space-unary-ops, spaced-comment) no
+    // longer exist under any plugin: `oxlint --print-config` hard-fails with "Rule '<name>' not
+    // found in plugin 'eslint'" for every one of them, regardless of severity (even the ones set
+    // to "off"). This was invisible before because this whole file was silently never loaded
+    // (the bug this PR fixes); it only surfaced once the file was renamed to `.oxlintrc.json` and
+    // actually discovered by oxlint. Removed rather than papered over. No replacement is
+    // configured here (org standard leaves pure formatting enforcement to each repository's
+    // discretion until/unless oxlint reintroduces these rules; this repo deliberately runs no
+    // prettier/biome/.editorconfig per the file header above).
     "no-array-method-this-argument": "warn",
     "no-bitwise": "warn",
-    "no-mixed-spaces-and-tabs": "error",
-    "no-new-object": "warn",
-    "no-tabs": "error",
-    "no-trailing-spaces": "warn",
-    "no-whitespace-before-property": "warn",
-    "object-curly-spacing": ["warn", "always"],
-    "one-var": ["warn", "never"],
-    "operator-linebreak": "warn",
-    "padded-blocks": ["warn", "never"],
-    "quote-props": ["warn", "as-needed"],
-    "semi-spacing": "warn",
-    "space-before-blocks": "warn",
-    "space-infix-ops": "warn",
-    "space-unary-ops": "warn",
-    "spaced-comment": "warn",
 
     // Restriction
     "default-case": "warn",
@@ -119,16 +106,27 @@
     // repository's discretion until oxlint implements the underlying rule).
     "no-restricted-globals": ["warn", "name", "open", "close", "event"],
     "no-restricted-imports": [
-      "warn",
+      "error",
       {
-        "name": "effect",
-        "message": "Please use named imports from 'effect' package",
-        "importNames": ["default"]
-      },
-      {
+        "paths": [
+          {
+            "name": "effect",
+            "message": "Please use named imports from 'effect' package",
+            "importNames": ["default"]
+          }
+        ],
         "patterns": [
           {
-            "regex": "^@nerima-games/(?!mc-kernel\\b).+",
+            // NOTE: the negative-lookahead form `^@nerima-games/(?!mc-kernel\b).+` shown in
+            // DEPENDENCY_POLICY.md's Tier1 example does not work: oxlint's regex engine (Rust's
+            // `regex` crate) does not support lookaround assertions. Verified empirically --
+            // with the lookahead form, `oxlint --print-config` parses without error and `pnpm
+            // lint` exits 0 on files that clearly should be flagged (e.g. an
+            // `@nerima-games/mx-gameplay` import), i.e. the rule silently never fires at all.
+            // This explicit alternation (mirroring the Tier2/Tier3/Tier4 examples in
+            // DEPENDENCY_POLICY.md §5, which already avoid lookahead) is the working equivalent:
+            // every `@nerima-games/*` package except the universally-exempt `mc-kernel`.
+            "regex": "^@nerima-games/(mc-noise|mc-physics|mc-save|mc-audio|mc-worldgen|mc-sim|mc-render|mc-playground-kit|mx-gameplay|mx-redstone|mx-ui|mx-multiplayer|mc-compose|mc-dev-meta)(/.*)?$",
             "message": "mc-meshing is a Tier1 library (DEPENDENCY_POLICY.md) and must not depend on any other @nerima-games/* package. mc-kernel is universally importable and exempt, but mc-meshing does not currently declare it as a dependency either (zero internal deps, per package.json#dependencies)."
           }
         ]

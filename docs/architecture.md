@@ -110,7 +110,7 @@ org 標準の依存グラフの正典である `DEPENDENCY_POLICY.md` の roster
 mc-sim の `InventoryService` を経由して実現する。
 
 このルールは `DEPENDENCY_POLICY.md` の roster に記録されており、
-各リポジトリの `oxlint.json` の `no-restricted-imports`(`pnpm lint` が検出する)が実効機構である。
+各リポジトリの `.oxlintrc.json` の `no-restricted-imports`(`pnpm lint` が検出する)が実効機構である。
 
 安定ライブラリ層は名詞でも動詞でもなく**関数**である。状態を持たず、サービスを提供せず、
 `Layer` を公開しない。この層に `Ref` が現れたら設計を疑うこと。
@@ -170,9 +170,9 @@ mc-meshing は stage を登録しない。メッシュ生成は毎フレーム�
 
 ## 6. 依存グラフの実効機構（DEPENDENCY_POLICY.md §5）
 
-org 標準では、リポジトリ間依存の許可グラフの実効機構は各リポジトリの `oxlint.json` の
+org 標準では、リポジトリ間依存の許可グラフの実効機構は各リポジトリの `.oxlintrc.json` の
 `no-restricted-imports` であり、`pnpm lint`(ひいては `pnpm verify`)がそのままハードゲートになる。
-`mc-meshing` は Tier1(安定ライブラリ、org 内依存ゼロ)なので、`oxlint.json` は
+`mc-meshing` は Tier1(安定ライブラリ、org 内依存ゼロ)なので、`.oxlintrc.json` は
 `mc-kernel` を除くあらゆる `@nerima-games/*` import を禁止するパターンを持つ。
 
 | ルール | 内容 |
