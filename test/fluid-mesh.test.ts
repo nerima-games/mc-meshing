@@ -22,17 +22,17 @@ import {
   blockIndex,
   type ChunkNeighbours,
   type ChunkView,
-} from '../domain/chunk-view'
-import { tangentAxes, type QuadAxis } from '../domain/faces'
+} from '../src/domain/chunk-view'
+import { tangentAxes, type QuadAxis } from '../src/domain/faces'
 import {
   SOURCE_SURFACE_HEIGHT,
   buildFluidLookup,
   isFluidBlock,
   type FluidQuad,
-} from '../domain/fluid-mesh'
-import { simplifyMesh } from '../domain/lod'
-import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../domain/mesh'
-import { MESH_LAYERS, type MeshConfig } from '../domain/opacity'
+} from '../src/domain/fluid-mesh'
+import { simplifyMesh } from '../src/domain/lod'
+import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../src/domain/mesh'
+import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1

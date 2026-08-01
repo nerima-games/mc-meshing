@@ -68,7 +68,8 @@
 `mc-worldgen` の `ChunkStore.neighbours(coord)` がその 4 回を行い、
 `{ xPos?, xNeg?, zPos?, zNeg? }` を返す。その戻り値は本リポジトリの
 `ChunkNeighbours` に**構造的に**適合する（mc-worldgen は mc-meshing を import できない —
-そのエッジは plan.md §2.1 のグラフに無く `pnpm check:deps` が落とす — ので名前的な適合ではない）。
+そのエッジは plan.md §2.1 のグラフに無く、mc-worldgen 側の `oxlint.json` の
+`no-restricted-imports` が落とす — ので名前的な適合ではない）。
 両方に依存する mc-render がそのまま渡す。
 
 理由は 2 つ。

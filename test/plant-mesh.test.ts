@@ -19,10 +19,10 @@ import {
   blockIndex,
   emptyChunk,
   type ChunkView,
-} from '../domain/chunk-view'
-import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../domain/mesh'
-import { EMPTY_MESH_CONFIG, type MeshConfig } from '../domain/opacity'
-import { PLANT_INSET, buildCrossPlantLookup, isCrossPlant, type CrossPlantQuad } from '../domain/plant-mesh'
+} from '../src/domain/chunk-view'
+import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
+import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
+import { PLANT_INSET, buildCrossPlantLookup, isCrossPlant, type CrossPlantQuad } from '../src/domain/plant-mesh'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1

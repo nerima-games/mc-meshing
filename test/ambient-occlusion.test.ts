@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
-import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../domain/ambient-occlusion'
+import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../src/domain/ambient-occlusion'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -20,8 +20,8 @@ import {
   blockIndex,
   emptyChunk,
   type ChunkView,
-} from '../domain/chunk-view'
-import { FACE_DIRECTIONS, type FaceDirection } from '../domain/faces'
+} from '../src/domain/chunk-view'
+import { FACE_DIRECTIONS, type FaceDirection } from '../src/domain/faces'
 
 const STONE = 1
 const WATER = 2

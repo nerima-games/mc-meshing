@@ -18,7 +18,10 @@
 
 ## 2. なぜ今は publish しないのか（plan.md §6 Step 0-2）
 
-> **npm公開・バージョンbump運用は界面安定（4週間APIロック無変更）まで開始しない**
+> **npm公開・バージョンbump運用は、上位階層が実際にこのリポジトリを消費し動作確認するまで開始しない。**
+> 「4週間 API 無変更で凍結」という日数計測ベースの自動ゲートは org 標準として廃止された
+> (RELEASE_STANDARD.md §4)。1.0.0 への昇格は maintainer(take)による裁量判断のみで行い、
+> 代替の自動ゲートは設けない。
 
 16 リポジトリが互いを pin したバージョンで参照し合っている状態で界面が動くと、
 1 つの変更が bump の連鎖を引き起こす。初期は全界面が高 churn なので、これは常時起きる。
@@ -30,7 +33,7 @@
 したがって現在の `package.json` は:
 
 - `dependencies` に `effect` だけを宣言する。`@nerima-games/*` は 1 つも入っていない。
-- `exports` は **TypeScript ソースを直接指す**（`./index.ts`）。ビルド成果物ではない。
+- `exports` は **TypeScript ソースを直接指す**（`./src/index.ts`）。ビルド成果物ではない。
 - ビルド / publish パイプラインは存在しない。
 
 ## 3. ビルドと publish は完成条件到達時に追加する
@@ -43,8 +46,10 @@
 1. `tsconfig.build.json` の `noEmit` を外し、`dist/` に `.js` + `.d.ts` + source map を出す
 2. `package.json` の `exports` を `dist/` に向ける（`files` も同様）
 3. `prepublishOnly` で `pnpm verify` を強制
-4. CI に publish job を追加（`.github/workflows/ci.yaml` は現在 typecheck / lint / check:deps / api:check / test / coverage のみ）
-5. changesets 運用に切り替え（plan.md §6 Step 3）
+4. CI に publish job を追加（`.github/workflows/ci.yaml` は現在 typecheck / lint / test / coverage のみ。
+   RELEASE_STANDARD.md §3 が publish job の設計を定める）
+5. changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x → 1.0.0 の昇格判断
+   （§2, §5 参照）も同じ changeset ワークフローに乗せる
 
 ## 4. 公開先: GitHub Packages
 
@@ -108,8 +113,7 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 - 新しい `MeshConfig` フィールドの追加（省略時の既定値が現在の挙動と一致すること）
 - LOD 簡約の追加（`simplifyMesh` / `packQuadKey` / `LodLevel` / `LOD_LEVELS` / `LodLevelSchema`）と、
   `Quad` の接線軸規約の明文化（`faceOf` / `tangentAxes` / `QuadAxis`）。
-  既存のどの宣言も変えていないので純粋な追加である。**ただし plan.md §6 Step 3 の
-  「4 週間 API ロック無変更」の窓はこの追加でリセットされる**
+  既存のどの宣言も変えていないので純粋な追加である。
 - 隣接チャンク処理の拡張
 
 ### PATCH
@@ -117,39 +121,26 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 - ドキュメント、コメント、テスト
 - 観測可能な出力を変えない内部リファクタ
 
-## 6. API ロックファイル
+## 6. API 変更の検証は自動スナップショットツールではなく人間のレビュー
 
-plan.md §6 Step 0-3 は「初回コミットに ... APIロックファイル（公開APIのレポートを diff レビュー）」を求める。
+**本リポジトリに自動生成された公開 API のスナップショット・diff ツールは存在しない。**
+かつて、生成ファイルとその生成スクリプト、および検査/更新用の2つの pnpm スクリプトからなる
+自前の公開 API スナップショット機構があったが、org 標準の策定に伴い撤去された
+（API_STANDARD.md §4「自動 APIロック／スナップショットツールは使わない」。同節に歴史的経緯の詳細がある）。
 
-**実装済みである。** リポジトリ直下の `api-lock.md`（公開宣言 39 件）が公開面の正本で、
-生成器は `scripts/api-lock.ts`。16 リポジトリに byte-identical で vendor する方式は
-`scripts/check-dependency-whitelist.ts` と同じで、編集してよいのは `REPOSITORY_POLICY` だけである。
-
-| 項目 | 内容 |
-| --- | --- |
-| 検査 | `pnpm api:check` — `api-lock.md` が実際の公開 API と食い違えば非ゼロ終了 |
-| 更新 | `pnpm api:update` |
-| 配線 | `pnpm verify` の `check:deps` と `test` の間、および CI の独立ステップ |
-| 追加依存 | **なし**（`typescript` は既に devDependency） |
-
-plan.md §9 の未決事項「API ロックファイルのツール選定（api-extractor 相当の Effect-TS 互換手段）」は
-これで決着した。`@microsoft/api-extractor` は mc-kernel の実コードで試したうえで却下してある
-（決め手は `Context.Tag` のサービスクラスが写らないこと）。理由と実測は
-mc-kernel の `docs/versioning.md` §7 が正本なので、ここでは繰り返さない。
-
-**mc-meshing で写るもの／写らないものを、上の §5 の MAJOR 一覧に突き合わせておく。**
-`MeshLayers` の形（3 レイヤ）と `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）であることは
-型として `api-lock.md` に記録されるので、崩せば diff になる。`Quad` の 8 フィールド、
-`FaceDirection` の 6 リテラル、`FaceRole` の 3 リテラルも同様である。
-一方 `FACES` と `MESH_LAYER_PRIORITY` は `ReadonlyArray<Face>` / `ReadonlyArray<MeshLayer>` としか写らない。
-**並びは型に出ない以上ロックには映らない。** §5 が MAJOR としている「`FACES` の順序または法線の変更」
-「`MESH_LAYER_PRIORITY` の変更」を守るのは、引き続きゴールデンハッシュのテストの仕事である。
-ロックは形を、テストは値と挙動を見る。
+「公開 API」とは `src/index.ts` が re-export するものそのものであり（API_STANDARD.md §1）、
+破壊的変更の検出は上の §5 の MAJOR/MINOR/PATCH 基準に基づく人間のレビューで行う。
+新しくスナップショット/diff ツール（`@microsoft/api-extractor` を含む）を追加する提案は
+org 標準に反する。`@microsoft/api-extractor` は mc-kernel の実コードで試したうえで
+既に却下されている（決め手は `Context.Tag` のサービスクラスが写らないこと。詳細は
+API_STANDARD.md §4 および mc-kernel の `docs/versioning.md`）。
 
 `test/public-api.test.ts` は残っているし、消す理由もない。あれは barrel の export 名を
-明示的に列挙してピン留めし、**名前の消失**を実行時に落とすテストである。
-シグネチャの変更を捕まえるのは `api-lock.md` の側で、両者は補完関係にある。
-mc-render がこのリポジトリを pin する以上、この二重の網が要る。
+明示的に列挙してピン留めし、**名前の消失**を実行時に落とすテストである。シグネチャの変更
+そのものを捕まえるのは `pnpm typecheck` と個々の domain テスト（ゴールデンハッシュ等）であり、
+`test/public-api.test.ts` は「barrel が何を re-export しているか」という名前の面だけを見る。
 
-なお interface / 型リテラルのメンバ順はソース順のまま保たれるので、
-`Quad` のフィールドを並べ替えると API 変更でなくても diff になる。承認は 1 行で済む。
+なお `MeshLayers` の形（3 レイヤ）や `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
+であることのような、上の §5 で MAJOR に分類した型レベルの契約は、`pnpm typecheck` が
+`tsconfig.build.json` を通して検証する。`FACES` の順序や `MESH_LAYER_PRIORITY` の値のような
+「型には出ないが意味を持つ」契約は、引き続きゴールデンハッシュのテストの仕事である。

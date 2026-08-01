@@ -17,10 +17,10 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck, Schema } from 'effect'
-import { AO_NONE } from '../domain/ambient-occlusion'
-import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, blockIndex, emptyChunk, type ChunkView } from '../domain/chunk-view'
-import { FACES, FACE_DIRECTIONS, faceOf, tangentAxes, type FaceDirection } from '../domain/faces'
-import { LOD_LEVELS, LodLevelSchema, STEP_FOR_LOD, packQuadKey, simplifyMesh, type LodLevel } from '../domain/lod'
+import { AO_NONE } from '../src/domain/ambient-occlusion'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, blockIndex, emptyChunk, type ChunkView } from '../src/domain/chunk-view'
+import { FACES, FACE_DIRECTIONS, faceOf, tangentAxes, type FaceDirection } from '../src/domain/faces'
+import { LOD_LEVELS, LodLevelSchema, STEP_FOR_LOD, packQuadKey, simplifyMesh, type LodLevel } from '../src/domain/lod'
 import {
   meshChunk,
   meshChunkNaive,
@@ -28,8 +28,8 @@ import {
   totalQuadCount,
   type MeshLayers,
   type Quad,
-} from '../domain/mesh'
-import { EMPTY_MESH_CONFIG, type MeshConfig } from '../domain/opacity'
+} from '../src/domain/mesh'
+import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 
 const STONE = 1
 const GRASS = 2

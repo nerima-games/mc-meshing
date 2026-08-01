@@ -28,25 +28,19 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       enabled: false,
-      include: ['index.ts', 'domain/**/*.ts'],
+      include: ['src/index.ts', 'src/domain/**/*.ts'],
       exclude: ['**/*.d.ts', '**/*.config.ts', '**/*.test.ts', '**/*.spec.ts'],
       all: true,
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
-      // NO THRESHOLD YET — deliberate.
-      //
-      // The reference repository (takeokunn/ts-minecraft) enforces 99% on
-      // branches/functions/lines/statements. A threshold on a skeleton would be
-      // meaningless: it would be trivially satisfied by a first-cut module and
-      // would say nothing about the real implementation.
-      //
-      // See docs/testing.md for the completion criteria this gate is tied to.
-      //
-      // Coverage is collected and reported (`pnpm test:coverage`) so the number
-      // is always visible. The 99% gate is turned on — here and in the CI
-      // workflow — when this repository reaches its completion criteria.
-      //
-      //   thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
+      // TEST_STANDARD.md §3: 4-metric 99% gate, enabled org-wide with no
+      // staged rollout. As of the org-standard migration, real measured
+      // coverage here is statements 100% / branches 95.89% / functions 100% /
+      // lines 100% (see coverage/coverage-final.json), so this gate makes CI
+      // red on `branches` until that gap is closed. That is the expected,
+      // accepted result of turning the gate on (TEST_STANDARD.md §3), not a
+      // reason to defer or lower the threshold.
+      thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
     },
   },
   esbuild: {
