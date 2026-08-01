@@ -32,7 +32,15 @@ import {
   type ChunkNeighbours,
   type ChunkView,
 } from '../src/domain/chunk-view'
-import { FACES, FACE_DIRECTIONS, tangentAxes, type FaceDirection, type QuadAxis } from '../src/domain/faces'
+import {
+  FACES,
+  FACE_DIRECTIONS,
+  INDICES_PER_QUAD,
+  VERTICES_PER_QUAD,
+  tangentAxes,
+  type FaceDirection,
+  type QuadAxis,
+} from '../src/domain/faces'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
@@ -226,7 +234,16 @@ describe('face count', () => {
             }
           }
           const layers = meshChunk(chunkWith(cells), {}, EMPTY_MESH_CONFIG)
-          return totalQuadArea(layers) === 2 * side * side + 4 * side && totalQuadCount(layers) === 6
+          const naive = meshChunkNaive(chunkWith(cells), {}, EMPTY_MESH_CONFIG)
+          const mergedQuadCount = totalQuadCount(layers)
+          const naiveQuadCount = totalQuadCount(naive)
+          return (
+            totalQuadArea(layers) === 2 * side * side + 4 * side &&
+            mergedQuadCount === 6 &&
+            (side === 1 ||
+              (mergedQuadCount * VERTICES_PER_QUAD < naiveQuadCount * VERTICES_PER_QUAD &&
+                mergedQuadCount * INDICES_PER_QUAD < naiveQuadCount * INDICES_PER_QUAD))
+          )
         }),
         { numRuns: 16 },
       )
@@ -538,12 +555,10 @@ describe('layer routing', () => {
     Effect.sync(() => {
       // Without the same-layer cull the interior of a lake is a wall of quads.
       //
-      // CHANGED WITH THE MERGE, same reasoning as the stone pair in `face
-      // count`: ten is the covered AREA and always was, and the count is now
-      // pinned separately at six. Asserting area keeps the cull under test —
-      // twelve would mean no cull, eleven a one-sided one — while the count
-      // records that water merges exactly as stone does. It is the same claim,
-      // at the same number, in the unit the claim is about.
+      // Ten is the covered AREA and always was. Water stays deliberately
+      // unmerged, so the count is ten too: twelve would mean no interior cull,
+      // while any non-unit extent would mean transparent geometry entered the
+      // opaque-only greedy mask.
       const layers = meshChunk(
         chunkWith([
           [8, 64, 8, WATER],
@@ -553,7 +568,8 @@ describe('layer routing', () => {
         CONFIG,
       )
       expect(totalQuadArea(layers)).toBe(10)
-      expect(layers.water.length).toBe(6)
+      expect(layers.water.length).toBe(10)
+      expect(layers.water.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
       expect(layers.opaque.length).toBe(0)
     }),
   )
@@ -991,7 +1007,7 @@ describe('the greedy merge against the naive oracle', () => {
     }),
   )
 
-  it.effect('REGRESSION: never merges across the three layers, so one quad is never half water', () =>
+  it.effect('REGRESSION: greedily merges opaque faces but keeps transparent faces as unit quads', () =>
     Effect.sync(() => {
       // The layer is a function of the block id, so this follows from the test
       // above — but it follows only as long as that stays true, and the priority
@@ -1011,11 +1027,18 @@ describe('the greedy merge against the naive oracle', () => {
       expect(layers.opaque.length).toBe(0)
       expect(layers.water.every((quad) => quad.blockId === WATER)).toBe(true)
       expect(layers.transparentSolid.every((quad) => quad.blockId === GLASS)).toBe(true)
-      // And the merge still did its job within each layer: the glass top is one
-      // 4x4 quad rather than sixteen.
+      // Transparent geometry is intentionally conservative: alpha sorting and
+      // future per-cell material state must not be hidden inside a merged quad.
       const glassTop = layers.transparentSolid.filter((quad) => quad.direction === 'yPos')
-      expect(glassTop.length).toBe(1)
-      expect([glassTop[0]?.width, glassTop[0]?.height]).toStrictEqual([4, 4])
+      expect(glassTop.length).toBe(16)
+      expect(glassTop.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
+
+      const opaqueSheet = chunkWith(
+        Array.from({ length: 16 }, (_, index) => [index % 4, 64, Math.floor(index / 4), STONE] as const),
+      )
+      const opaqueTop = meshChunk(opaqueSheet, {}, CONFIG).opaque.filter((quad) => quad.direction === 'yPos')
+      expect(opaqueTop).toHaveLength(1)
+      expect([opaqueTop[0]?.width, opaqueTop[0]?.height]).toStrictEqual([4, 4])
     }),
   )
 

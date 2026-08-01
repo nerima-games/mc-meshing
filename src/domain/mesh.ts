@@ -7,7 +7,8 @@
  * ---------------------------------------------------------------------------
  *
  * `meshChunk` emits one quad per MAXIMAL RECTANGLE of coplanar, like-for-like
- * faces. `meshChunkNaive` emits one quad per exposed block face, as this file
+ * opaque faces. Transparent cube faces stay unit-sized so sorting and future
+ * per-cell attributes remain conservative. `meshChunkNaive` emits one quad per exposed block face, as this file
  * did before the merge landed, and it is retained and exported because it is the
  * ORACLE: `meshChunk` is correct exactly when it covers the same surface as
  * `meshChunkNaive` with fewer quads, and that is a property a test can state
@@ -24,10 +25,10 @@
  * would only mean the property fails for reasons that are not about merging.
  *
  * ---------------------------------------------------------------------------
- * What may be merged: `blockId` AND ambient occlusion
+ * What may be merged: opaque `blockId` AND ambient occlusion
  * ---------------------------------------------------------------------------
  *
- * Two faces merge when they are in the same direction, on the same depth slice,
+ * Two opaque faces merge when they are in the same direction, on the same depth slice,
  * and carry the same `blockId` AND the same `ao`. The invariants say merging
  * must never join across layers, across block types, or across faces with
  * different occlusion, so each of the three is worth saying explicitly:
@@ -521,10 +522,12 @@ const meshXPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
-          mask[rowBase + y] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + y] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -586,10 +589,12 @@ const meshYPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
-          mask[rowBase + lz] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + lz] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -647,10 +652,12 @@ const meshZPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
-          mask[rowBase + y] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + y] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -684,7 +691,7 @@ const makeSink = (
 }
 
 /**
- * Mesh one chunk, merging coplanar like-for-like faces into maximal rectangles.
+ * Mesh one chunk, merging coplanar like-for-like opaque faces into maximal rectangles.
  *
  * Faces are emitted in the canonical direction order (`FACES`); within a
  * direction, see the emission-order table in this file's header. A face is

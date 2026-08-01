@@ -103,14 +103,16 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
 
 **このリポジトリはまだ第一版（叩き台）である。**
 
-- **グリーディマージは実装済み。これがこのリポジトリの本体である。**
-  同一スライス・同一方向・同一 `blockId` の面を最大矩形にまとめる（`domain/mesh.ts`）。
-  quad 削減は flat で **-99.8%**（4,608 → 10）、rolling で **-86.2%**（5,558 → 768）、
+- **opaque 限定のグリーディマージは実装済み。これがこのリポジトリの本体である。**
+  同一スライス・同一方向・同一 `blockId`・同一 AO の opaque 面だけを最大矩形にまとめる
+  （`domain/mesh.ts`）。transparentSolid、water、専用 fluid、plant は描画順やセル固有属性を
+  安全に保つため統合せず、1x1 primitive のまま出力する。
+  quad 削減は flat で **-99.8%**（4,608 → 10）、rolling で **-82.7%**（5,558 → 960）、
   checkerboard で **0.0%** —— 最後のは欠陥ではなく、`(lx+y+lz)%2` には
   まとめられる面の対が 1 つも無いという**定義**である。被覆面積は 4 shape すべてで素朴実装と一致する。
   素朴な面抽出は `meshChunkNaive` として残してあり、**オラクル**である
   （`meshChunk` の各 quad を単位面へ展開して多重集合で突き合わせる性質テストがある）。
-  `Quad.width` / `height` はもう常に 1 ではない。
+  opaque の `Quad.width` / `height` はもう常に 1 ではない。
 - **wall-clock ではマージは損である。** 4 shape すべてで素朴実装より 1.16-1.47 倍**遅い**
   （checkerboard が最悪）。時計が速くなって見えるのは同時に入れた `solidCeiling`
   （参照実装の `yLimit`）のおかげであり、マージのおかげではない。

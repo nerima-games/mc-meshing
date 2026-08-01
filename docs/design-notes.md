@@ -495,21 +495,20 @@ plan.md §3.3 の責務そのもの ——「チャンクデータ→ジオメ�
 （**グリーディメッシング**）」。参照実装の `runGreedyExpansion`
 （`greedy-meshing-passes.ts:64-97`）を、AO と光のパッキングを外して移植した。
 
-### マージのキーは `blockId` だけであり、それで足りる
+### マージ対象は opaque、キーは `blockId` と AO
 
-同一方向・同一スライス・同一 `blockId` の面がまとまる。要求されている 3 つの禁止事項は
-すべてこれで満たされる:
+transparentSolid / water は描画順や将来のセル固有属性を矩形内部へ隠さないため、マスクへ入れず
+単位 quad のまま出力する。専用 fluid と plant もそれぞれの生成器で単位 primitive を維持する。
+opaque のうち同一方向・同一スライス・同一 `blockId`・同一 AO の面だけがまとまる。
 
 | 禁止事項 | なぜ起きえないか |
 | --- | --- |
-| レイヤをまたぐ | レイヤは `blockId` の関数（`layerOfBlockId`）。ID が等しければレイヤも等しい |
+| レイヤをまたぐ | opaque だけをマスクへ入れる。transparentSolid / water は単位 quad として直接出力する |
 | ブロック種別をまたぐ | ID そのものがキーである |
+| AO をまたぐ | AO は mask cell の bit 8-9 に入り、値が異なるセルでは矩形が止まる |
 | 遮蔽の違う面をまたぐ | 遮蔽はマスクを書く**前に**判定する。隠れている面はマスクに入らず、マスクの零値は `AIR` で、展開は `AIR` を突き抜けない |
 
-`role` は `direction` の関数で、方向ごとに別パスなのでキーに要らない。
-参照実装が AO と 4 隅の光を ID と一緒にパックしている（`greedy-meshing-passes.ts:24-45`）のは
-**光った quad をマージするから**である。**ライティングが入ったらキーを広げること。**
-広げないと、光の違う板が 1 枚にまとまってライティングが目に見えて平坦になる。
+`role` は `direction` の関数で、方向ごと・slice ごとに別パスなので mask cell に重ねて持たない。
 
 ### 何を測ったか —— quad 削減は**数え上げ**であって timing ではない
 
@@ -518,7 +517,7 @@ plan.md §3.3 の責務そのもの ——「チャンクデータ→ジオメ�
 | flat | 4,608 | **10** | **-99.8%** | 4,608 |
 | rolling | 5,558 | **768** | **-86.2%** | 5,558 |
 | checkerboard-worst | 12,288 | **12,288** | **0.0%** | 12,288 |
-| layered-water-glass | 5,376 | **17** | **-99.7%** | 5,376 |
+| layered-water-glass | 5,376 | **1,612** | **-70.0%** | 5,376 |
 
 checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの面が 2 つ隣り合う場所を
 1 つも作らないので、まとめられる対が存在しない。**これがグリーディメッシングの最悪ケースの定義である。**
@@ -560,7 +559,7 @@ checkerboard ではその見返りがゼロなのでマスク構築と掃引が�
 - `REGRESSION: no two merged quads claim the same block-face` —— 重複被覆（＝ z-fighting）単独
 - `meshing-merge-never-crosses-a-block-boundary` —— `never merges two different block ids,
   however they are arranged`。面数も面積も変わらないので、数える種類のテストでは見えない
-- `REGRESSION: never merges across the three layers, so one quad is never half water`
+- `REGRESSION: greedily merges opaque faces but keeps transparent faces as unit quads`
 - `never emits more quads than the naive mesher, and usually far fewer` ——
   後半（実際に減っていること）が無いと、**マージを一切しない実装でも被覆の性質は通る**
 - `the Y scan ceiling` の 3 本 —— `solidCeiling` の off-by-one は世界の最上段を黙って消す。
@@ -655,14 +654,16 @@ AO が値を持つのは凹んだ形（内側の角、庇、段差）だけで�
 
 ### 何が動いたか —— quad 削減（**数え上げ**。timing ではない）
 
-| fixture | 素朴 | マージ（AO 前） | マージ（AO 後） | 削減（AO 後） | 被覆面積 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| flat | 4,608 | 10 | **10** | **-99.8%**（不変） | 4,608 |
-| rolling | 5,558 | 768 | **960** | **-82.7%**（-86.2% から） | 5,558 |
-| checkerboard-worst | 12,288 | 12,288 | **12,288** | **0.0%**（不変） | 12,288 |
-| layered-water-glass | 5,376 | 17 | **35** | **-99.3%**（-99.7% から） | 5,376 |
+| fixture | 素朴 | マージ（AO 前） | マージ（AO 導入時） | **現行（opaque 限定）** | 現行削減 | 被覆面積 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| flat | 4,608 | 10 | 10 | **10** | **-99.8%** | 4,608 |
+| rolling | 5,558 | 768 | 960 | **960** | **-82.7%** | 5,558 |
+| checkerboard-worst | 12,288 | 12,288 | 12,288 | **12,288** | **0.0%** | 12,288 |
+| layered-water-glass | 5,376 | 17 | 35 | **1,612** | **-70.0%** | 5,376 |
 
-**AO の代金は quad 全体で +192（rolling）と +18（layered）であり、flat と checkerboard では 0 である。**
+**AO の代金は quad 全体で +192（rolling）であり、flat と checkerboard では 0 である。**
+layered の 35 → 1,612 は AO の代金ではない。opaque 限定後は opaque 12枚だけを統合し、
+water 1,024枚とglass 576枚を単位面で保つため1,612枚になる。
 4 行それぞれ理由が違い、どれも機構的である:
 
 - **flat が 0 なのは、平らな板が自己遮蔽しないからである。** 上面の全セルで AO=0、
@@ -672,7 +673,7 @@ AO が値を持つのは凹んだ形（内側の角、庇、段差）だけで�
   ただし**仕事は増えている** —— 露出面 12,288 枚それぞれで 4 回の近傍読み出しが走る。
 - **rolling が +25% なのは、これが唯一の凹んだ地形だからである。** 列ごとに高さが違うので
   段差の内側に AO の段差ができ、側面の走りがそこで割れる。
-- **layered が 17 → 35 なのは、水とガラスが空気ではないからである。**
+- **AO 導入時に layered が 17 → 35 となったのは、水とガラスが空気ではないからである。**
   ガラス板（y=63）の下面は水（y=62）に面しており、水は `!== AIR` なので遮蔽物として数えられる。
   16x16 の面のうち内部と辺は AO=3、**四隅だけが AO=2** になる（隅では 4 サンプルのうち
   2 つがチャンク外＝空気）。よって 1 枚だった面が 7 枚（16x14 の本体 + 14x1 の 2 本 + 隅 4 枚）に割れる。
