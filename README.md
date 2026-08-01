@@ -12,8 +12,9 @@
 将来的には `mc-kernel` に依存する（`Chunk` 型・能力フラグ）。
 現時点で宣言していないのは、まだ何も publish されていないためである
 （bottom-up に publish してから pin する方式）。
-意図されたグラフは `scripts/check-dependency-whitelist.ts` の roster と
-[`docs/architecture.md`](./docs/architecture.md) に記録してある。
+意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
+（org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
+`oxlint.json` の `no-restricted-imports`（Tier1: `@nerima-games/*` への依存を一切禁止）である。
 
 **Three.js には依存しない。永久に。**
 参照実装は `packages/world` の Three.js import をゼロに保っており（再検証済み）、
@@ -70,11 +71,9 @@ Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
 | `pnpm lint:fix` | oxlint の自動修正 |
 | `pnpm test` | vitest（`@effect/vitest` の `it.effect` が主 API） |
 | `pnpm test:watch` | vitest watch |
-| `pnpm test:coverage` | カバレッジ計測（閾値は未設定。後述） |
-| `pnpm check:deps` | 依存ホワイトリスト + 循環検査 + `Date.now()` 禁止の検査 |
-| `pnpm api:check` | `api-lock.md` が実際の公開 API と食い違えば非ゼロ終了（[`docs/versioning.md`](./docs/versioning.md) §6） |
-| `pnpm api:update` | `api-lock.md` を書き直す。公開面を変える PR は結果を同じ PR に含める |
-| `pnpm verify` | `typecheck && lint && check:deps && api:check && test`。CI と同じ内容 |
+| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。TEST_STANDARD.md §3) |
+| `pnpm bench` | `scripts/bench-harness.ts` による自作ベンチマーク(`pnpm verify` / CI には含まれない。PERFORMANCE_STANDARD.md) |
+| `pnpm verify` | `typecheck && lint && test`。CI と同じ内容 |
 
 ## 使い方
 
@@ -144,8 +143,10 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
   明示的な opt-in として追加する。
 - **ビルド／publish はまだない。** `exports` は TypeScript ソースを直接指している。
   `version` は mc-render が実際に消費して契約を確認するまで `0.x` に留める。
-- **カバレッジ閾値は未設定。** 参照実装は 99% を強制しているが、スケルトンに閾値を課しても意味がない。
-  計測とレポートは常に動かしており、99% ゲートは完成条件到達時に有効化する。
+- **カバレッジ閾値は 4 指標 99% で有効化済み(TEST_STANDARD.md §3)。** 現状の実測は
+  statements 100% / functions 100% / lines 100% / **branches 95.89%** であり、
+  `branches` が未達のため CI のカバレッジステップは赤い。これは組織としての既知・受容済みの結果であり、
+  閾値の緩和では対処しない(未到達分岐を埋めるテスト追加、または到達不能な分岐そのものの削除で対処する)。
 
 ## License
 

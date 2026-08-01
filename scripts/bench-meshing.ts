@@ -59,7 +59,7 @@ import {
   totalQuadCount,
   type LodLevel,
   type MeshLayers,
-} from '../index'
+} from '../src/index'
 import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, GLASS, LAKE, ROLLING, WATER } from './bench-fixtures'
 import {
   checkGuards,

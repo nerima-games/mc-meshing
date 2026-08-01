@@ -3,14 +3,14 @@
   // oxlint is the ONLY lint/format configuration in this repository.
   // There is deliberately no prettier, no biome and no .editorconfig.
   //
-  // NOTE on the `Date.now()` ban (see README 現状 / scripts/check-dependency-whitelist.ts):
-  // oxlint 0.12 does not implement `no-restricted-syntax` or `no-restricted-properties`,
-  // and while `no-restricted-globals` is listed by `oxlint --rules` it is not implemented
-  // either (no checkmark). Verified empirically against oxlint 0.12.0: a file containing
-  // `Date.now()` produces 0 diagnostics under all three rules. The ban is therefore
-  // enforced by `pnpm check:deps` (scripts/check-dependency-whitelist.ts) instead.
-  // When oxlint gains `no-restricted-syntax`, move the ban here and delete the script's
-  // time-source section.
+  // NOTE on the `Date.now()` ban (see DEPENDENCY_POLICY.md / PACKAGE_STANDARD.md
+  // "scripts/check-dependency-whitelist.ts の廃止"): oxlint 0.12 does not implement
+  // `no-restricted-syntax` or `no-restricted-properties`, and while
+  // `no-restricted-globals` is listed by `oxlint --rules` it is not implemented either
+  // (no checkmark). Verified empirically against oxlint 0.12.0: a file containing
+  // `Date.now()` produces 0 diagnostics under all three rules. The org standard no
+  // longer requires a bespoke replacement script for this check (org discretion); it is
+  // left unenforced here until oxlint implements `no-restricted-syntax`.
   "env": {
     "es2022": true,
     "node": true
@@ -112,7 +112,11 @@
     "default-case-last": "warn",
     "no-empty-character-class": "warn",
     // Declared for intent and for the day oxlint implements it; inert in 0.12.
-    // The real enforcement lives in scripts/check-dependency-whitelist.ts.
+    // The org-wide script that used to enforce a `Date.now()` ban
+    // (scripts/check-dependency-whitelist.ts) has been removed as part of the
+    // org-standard migration (PACKAGE_STANDARD.md); no replacement enforcement
+    // exists in this repository at present (org standard leaves this to each
+    // repository's discretion until oxlint implements the underlying rule).
     "no-restricted-globals": ["warn", "name", "open", "close", "event"],
     "no-restricted-imports": [
       "warn",
@@ -120,6 +124,14 @@
         "name": "effect",
         "message": "Please use named imports from 'effect' package",
         "importNames": ["default"]
+      },
+      {
+        "patterns": [
+          {
+            "regex": "^@nerima-games/(?!mc-kernel\\b).+",
+            "message": "mc-meshing is a Tier1 library (DEPENDENCY_POLICY.md) and must not depend on any other @nerima-games/* package. mc-kernel is universally importable and exempt, but mc-meshing does not currently declare it as a dependency either (zero internal deps, per package.json#dependencies)."
+          }
+        ]
       }
     ],
     "prefer-template": "warn",
@@ -133,5 +145,5 @@
     "no-param-reassign": "off",
     "no-plusplus": "off"
   },
-  "ignore": ["node_modules/**", "coverage/**", "dist/**", ".git/**", "*.config.ts", "docs/**"]
+  "ignorePatterns": ["node_modules/**", "coverage/**", "dist/**", ".git/**", "*.config.ts", "docs/**"]
 }
