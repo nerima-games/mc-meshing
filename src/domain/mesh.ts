@@ -196,8 +196,9 @@ export type MeshLayers = {
    * A FIFTH LIST, on the same terms and for the same reason as `crossPlants`. A
    * fluid top has four independently fractional corner heights, so it is a
    * bilinear patch rather than a rectangle and no `Quad` can describe it — and
-   * the slope between those corners is the whole feature, because that slope is
-   * what a viewer reads as flow direction. `domain/fluid-mesh.ts` argues it.
+   * the slope between those corners is the geometric feature. Top surfaces also
+   * carry a normalized flow descriptor for renderer animation; neither fact can
+   * be represented by the integer-extents `Quad`. `domain/fluid-mesh.ts` argues it.
    *
    * EMPTY UNLESS `MeshConfig.fluidMaxLevels` DECLARES SOMETHING. Absent means no
    * id is a fluid, which is what every config written before this list existed

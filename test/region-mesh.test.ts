@@ -14,10 +14,17 @@ const CONFIG: MeshConfig = {
   fluidMaxLevels: new Map([[WATER, 8]]),
 }
 
-const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
+const chunkWith = (
+  cells: ReadonlyArray<readonly [number, number, number, number]>,
+  fluidCells: ReadonlyArray<readonly [x: number, y: number, z: number, level: number]> = [],
+): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, id] of cells) blocks[blockIndex(x, y, z)] = id
-  return { blocks }
+  if (fluidCells.length === 0) return { blocks }
+  const levels = new Uint8Array(BLOCKS_PER_CHUNK)
+  const sources = new Uint8Array(BLOCKS_PER_CHUNK)
+  for (const [x, y, z, level] of fluidCells) levels[blockIndex(x, y, z)] = level
+  return { blocks, fluid: { levels, sources } }
 }
 
 const inRegion = (region: MeshRegion, x: number, y: number, z: number): boolean =>
@@ -29,12 +36,22 @@ const origin = (vertices: ReadonlyArray<readonly [number, number, number]>): rea
   Math.floor(Math.min(...vertices.map(([, , z]) => z))),
 ]
 
+const fluidOrigin = (quad: MeshLayers['fluids'][number]): readonly [number, number, number] => {
+  const [x, y, z] = origin(quad.vertices)
+  switch (quad.direction) {
+    case 'xPos': return [x - 1, y, z]
+    case 'yPos': return [x, Math.ceil(Math.max(...quad.vertices.map(([, vy]) => vy))) - 1, z]
+    case 'zPos': return [x, y, z - 1]
+    default: return [x, y, z]
+  }
+}
+
 const project = (layers: MeshLayers, region: MeshRegion): MeshLayers => ({
   opaque: layers.opaque.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
   water: layers.water.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
   transparentSolid: layers.transparentSolid.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
   crossPlants: layers.crossPlants.filter((q) => inRegion(region, ...origin(q.vertices))),
-  fluids: layers.fluids.filter((q) => inRegion(region, ...origin(q.vertices))),
+  fluids: layers.fluids.filter((q) => inRegion(region, ...fluidOrigin(q))),
 })
 
 describe('subregion meshing', () => {
@@ -59,6 +76,24 @@ describe('subregion meshing', () => {
       expect(result.ownedRegion).toStrictEqual({ min: [14, 39, 7], max: [16, 42, 10] })
       expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, { xPos }, CONFIG), result.ownedRegion))
       expect(result.layers.opaque.some((quad) => quad.direction === 'xPos')).toBe(false)
+    }),
+  )
+
+  it.effect('preserves fluid flow descriptors while matching the naive projection', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith(
+        [
+          [8, 64, 8, WATER],
+          [9, 64, 8, WATER],
+        ],
+        [
+          [8, 64, 8, 0],
+          [9, 64, 8, 8],
+        ],
+      )
+      const result = meshChunkRegion(chunk, {}, CONFIG, { min: [8, 64, 8], max: [9, 65, 9] })
+      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, {}, CONFIG), result.ownedRegion))
+      expect(result.layers.fluids.find((quad) => quad.direction === 'yPos')?.flow?.direction).toStrictEqual([1, 0])
     }),
   )
 

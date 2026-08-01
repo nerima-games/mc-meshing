@@ -83,7 +83,7 @@
 | `rendering/.../greedy-meshing-ao.ts:8`（ストレージレイアウト） | `domain/chunk-view.ts` の `blockIndex` | **同一**。参照実装の fixture 互換のため |
 | `rendering/.../greedy-meshing-types.ts:40`（`AIR = 0`） | `domain/chunk-view.ts` の `AIR` | 同一 |
 | `rendering/.../greedy-meshing-fluid-state.ts:37-43`（水面高） | `domain/fluid-mesh.ts` の `SOURCE_SURFACE_HEIGHT` / `heightForLevel` | `maxLevel` は注入（`design-notes.md` M-12） |
-| `rendering/.../greedy-meshing-fluid-state.ts:74-127`（4 隅の平均） | `domain/fluid-mesh.ts` の `cornerHeight` | **これが「流れ方向」である。** 流れベクトルは参照実装にも無い |
+| `rendering/.../greedy-meshing-fluid-state.ts:74-127`（4 隅の平均） | `domain/fluid-mesh.ts` の `cornerHeight` | 水面の幾何形状。renderer 向けの方向は復号済み状態から `FluidFlow` として追加 |
 | `rendering/.../greedy-meshing-fluid-state.ts:133-134`（`isFluidFaceOccluder`） | `domain/fluid-mesh.ts` の `hidesFluidFace` | `occludes()` で表現。植物も遮蔽しない（M-11 との整合） |
 | `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光とワールドオフセットを外した。側面 4 本は 1 つの関数に畳んだ |
 | `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植していない** | 符号化は所有者のもの。§3.2 |
@@ -113,6 +113,7 @@ mc-kernel が publish されたら、この型を kernel の `Chunk` に差し�
 export type FluidView = {
   readonly levels: Readonly<Uint8Array>
   readonly sources: Readonly<Uint8Array>
+  readonly falling?: Readonly<Uint8Array>
 }
 ```
 
@@ -134,7 +135,7 @@ export type FluidView = {
 | その層の置き場所 | — | mc-render（両方に依存する側）。責務表 §3.6 (c) |
 
 **mc-meshing 側は差し替え時も変わらない。** ここが要求しているのは
-「セルごとの level と source」であって「どう詰められていたか」ではないので、
+「セルごとの level / source / optional falling」であって「どう詰められていたか」ではないので、
 所有者が publish したときに書かれるのは `Uint8Array` → `FluidView` の変換 1 つであり、
 それは `decodeFluidByte` を**所有者から import して**書かれるべきものである。
 
@@ -184,7 +185,7 @@ plan.md §6 Step 2 は「各 Step で参照実装の対応テスト・fixture・
 | `packages/rendering/test/greedy-meshing-passes.test.ts` | 130 | `dequantLight`、`packMask` のビット配置、`runGreedyExpansion` のマージ / 消費意味論 | **未**。マージ実装と同時 |
 | `packages/rendering/test/greedy-meshing-boundary.test.ts` | 66 | 境界 | 移植済み（形は違う） |
 | `packages/worker/test/meshing-worker-config.test.ts` | 123 | `TRANSPARENT_IDS` に WATER、`TRANSPARENT_SOLID_IDS` に GLASS/LEAVES、**WATER を含まないこと**（:69） | 移植済み（レイヤ振り分けテストとして） |
-| `greedy-meshing-ao.test.ts` / `-accumulator.test.ts` / `-colors.test.ts` / `-fluid-*.test.ts` / `-pool.test.ts` | 636 | AO / アキュムレータ / 色 / 流体 / プール | **未**。対応機能が未実装 |
+| `greedy-meshing-ao.test.ts` / `-accumulator.test.ts` / `-colors.test.ts` / `-fluid-*.test.ts` / `-pool.test.ts` | 636 | AO / アキュムレータ / 色 / 流体 / プール | **一部**。AO と流体は移植済み。アキュムレータ / 色 / プールは未実装 |
 | `chunk-mesh*.test.ts` / `block-mesh.test.ts` / `lod-simplification*.test.ts` / `subregion-greedy*.test.ts` | — | Three.js 依存または帰属先が別 | mc-render の責務 |
 
 共有 fixture: `packages/rendering/test/greedy-meshing-test-utils.ts`（102 行）に

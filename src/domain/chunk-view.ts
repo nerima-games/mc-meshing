@@ -31,23 +31,23 @@ export const blockIndex = (lx: number, y: number, lz: number): number =>
  * The fluid simulation's per-cell state, as meshing needs to see it.
  *
  * ---------------------------------------------------------------------------
- * WHY THIS IS TWO PLAIN ARRAYS AND NOT THE REFERENCE'S PACKED BYTE
+ * WHY THIS USES DECODED ARRAYS AND NOT THE REFERENCE'S PACKED BYTE
  * ---------------------------------------------------------------------------
  *
  * The reference passes meshing a single `fluid: Uint8Array` and decodes each
- * byte with five masks — present `0x80`, kind `0x10`, source `0x08`, level
- * `0x07` (`packages/block/domain/fluid.ts:9-12`). Those masks belong to the
+ * byte with masks for presence, kind, source, falling, and level
+ * (`packages/block/domain/fluid.ts:9-12`). Those masks belong to the
  * fluid SIMULATION. Restating them here would put a second copy of another
  * repository's encoding in this one, which is the mistake docs/responsibility.md
  * §3.3 refused for coordinates, §3.4 for LOD distances and M-11 for rail shapes:
  * two spellings of one fact, and only one of them is the one anybody updates.
  *
- * So the seam is drawn at the DECODED state instead. The two facts meshing
- * actually needs are how full a cell is and whether it is a source, and they
- * arrive as arrays of numbers with no layout to agree on. Whoever owns the byte
- * decodes it; nothing here has an opinion about how it was stored.
+ * So the seam is drawn at the DECODED state instead. Meshing needs to know how
+ * full a cell is, whether it is a source, and optionally whether it is falling;
+ * those facts arrive as arrays of numbers with no byte layout to agree on.
+ * Whoever owns the byte decodes it; nothing here has an opinion about storage.
  *
- * The other three fields of that byte are not here, and each is absent for a
+ * The remaining encoded fields are not duplicated here, and each is absent for a
  * reason rather than by omission:
  *
  *  - PRESENT is redundant. A cell holds fluid exactly when its block id is one
@@ -61,10 +61,11 @@ export const blockIndex = (lx: number, y: number, lz: number): number =>
  *    (`fluid-model.ts:15-16`) — and it describes how far the fluid SPREADS,
  *    which is propagation vocabulary. It is injected through `MeshConfig`.
  *
- * BOTH ARRAYS ARE OPTIONAL IN EFFECT: `domain/fluid-mesh.ts` reads a missing
+ * THE STATE IS OPTIONAL IN EFFECT: `domain/fluid-mesh.ts` reads a missing
  * `FluidView` as all zeroes, which is a full, non-source cell. A caller that has
  * block ids but no simulation state yet therefore gets flat full-height fluid
- * rather than invisible fluid.
+ * rather than invisible fluid. The optional `falling` array preserves the same
+ * compatibility for callers that predate the renderer-facing flow descriptor.
  *
  * LIKE `ChunkView` ITSELF, THIS IS A PLACEHOLDER. docs/responsibility.md §3.6
  * left the fluid input undecided between "wait for the owner to publish" and
@@ -80,6 +81,11 @@ export type FluidView = {
   readonly levels: Readonly<Uint8Array>
   /** Non-zero where the cell is a fluid SOURCE rather than flow. Same layout. */
   readonly sources: Readonly<Uint8Array>
+  /**
+   * Non-zero where the fluid is falling vertically. Same layout. Optional for
+   * compatibility with callers that only provide level/source state.
+   */
+  readonly falling?: Readonly<Uint8Array>
 }
 
 export type ChunkView = {

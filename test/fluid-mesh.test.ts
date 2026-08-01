@@ -72,8 +72,8 @@ const CUBE_WATER_CONFIG: MeshConfig = {
 }
 
 type BlockCell = readonly [number, number, number, number]
-/** `lx, y, lz, level, source` — `source` as 0/1, the shape `FluidView` carries. */
-type FluidCell = readonly [number, number, number, number, number]
+/** `lx, y, lz, level, source, falling?` — flags use the decoded 0/1 representation. */
+type FluidCell = readonly [number, number, number, number, number, number?]
 
 const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<FluidCell> = []): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
@@ -85,11 +85,13 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
   }
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  for (const [lx, y, lz, level, source] of fluidCells) {
+  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
+  for (const [lx, y, lz, level, source, isFalling = 0] of fluidCells) {
     levels[blockIndex(lx, y, lz)] = level
     sources[blockIndex(lx, y, lz)] = source
+    falling[blockIndex(lx, y, lz)] = isFalling
   }
-  return { blocks, fluid: { levels, sources } }
+  return { blocks, fluid: { levels, sources, falling } }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -101,6 +103,9 @@ const faceOfDirection = (quads: ReadonlyArray<FluidQuad>, direction: string): Fl
 
 /** Every Y a quad's four vertices sit at, in vertex order. */
 const ysOf = (quad: FluidQuad): ReadonlyArray<number> => quad.vertices.map((vertex) => vertex[1])
+
+const topAt = (quads: ReadonlyArray<FluidQuad>, lx: number, lz: number): FluidQuad | undefined =>
+  quads.find((quad) => quad.direction === 'yPos' && quad.vertices[0][0] === lx && quad.vertices[0][2] === lz)
 
 describe('the height of one cell', () => {
   it.effect('a source sits at the reference’s 14/16, not flush with the cell top', () =>
@@ -236,11 +241,9 @@ describe('the height of one cell', () => {
 describe('the corner averaging', () => {
   it.effect('REGRESSION: the surface TILTS toward the emptier neighbour', () =>
     Effect.sync(() => {
-      // meshing-fluid-corners-are-the-flow-direction. THE test of this file.
-      //
-      // There is no flow vector anywhere in this repository or in the reference.
-      // A current is the SLOPE of the top patch, and the slope exists only
-      // because each corner is the mean of the up-to-four columns touching it
+      // The top patch's SLOPE is independent of its renderer-facing flow
+      // descriptor. It exists because each corner is the mean of the up-to-four
+      // columns touching it
       // (`greedy-meshing-fluid-state.ts:89-113`). Replace that average with the
       // cell's own height and every quad is still emitted, in the right order,
       // with the right winding and the right block id — and every lake in the
@@ -305,6 +308,101 @@ describe('the corner averaging', () => {
           }
         }
       }
+    }),
+  )
+})
+
+describe('the renderer flow descriptor', () => {
+  it.effect('source and flat flow state are horizontally still', () =>
+    Effect.sync(() => {
+      const source = chunkWith([[4, 64, 4, WATER]], [[4, 64, 4, 0, 1]])
+      const flat = chunkWith([[12, 64, 12, WATER]], [[12, 64, 12, 0, 0]])
+
+      expect(topAt(meshChunk(source, {}, CONFIG).fluids, 4, 4)?.flow).toStrictEqual({
+        direction: [0, 0],
+        falling: false,
+      })
+      expect(topAt(meshChunk(flat, {}, CONFIG).fluids, 12, 12)?.flow).toStrictEqual({
+        direction: [0, 0],
+        falling: false,
+      })
+    }),
+  )
+
+  it.effect('water and lava point toward the lower same-fluid neighbour', () =>
+    Effect.sync(() => {
+      for (const [blockId, lowLevel] of [
+        [WATER, WATER_MAX_LEVEL],
+        [LAVA, LAVA_MAX_LEVEL],
+      ] as const) {
+        const chunk = chunkWith(
+          [
+            [8, 64, 8, blockId],
+            [9, 64, 8, blockId],
+          ],
+          [
+            [8, 64, 8, 0, 0],
+            [9, 64, 8, lowLevel, 0],
+          ],
+        )
+        expect(topAt(meshChunk(chunk, {}, CONFIG).fluids, 8, 8)?.flow?.direction).toStrictEqual([1, 0])
+      }
+    }),
+  )
+
+  it.effect('combined X/Z gradients are normalized deterministically', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith(
+        [
+          [8, 64, 8, WATER],
+          [9, 64, 8, WATER],
+          [8, 64, 7, WATER],
+        ],
+        [
+          [8, 64, 8, 0, 0],
+          [9, 64, 8, 4, 0],
+          [8, 64, 7, 4, 0],
+        ],
+      )
+      const direction = topAt(meshChunk(chunk, {}, CONFIG).fluids, 8, 8)?.flow?.direction
+      expect(direction?.[0]).toBeCloseTo(Math.SQRT1_2)
+      expect(direction?.[1]).toBeCloseTo(-Math.SQRT1_2)
+    }),
+  )
+
+  it.effect('falling state is explicit and side skirts do not duplicate the top descriptor', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 0, 1]])
+      const quads = meshChunk(chunk, {}, CONFIG).fluids
+      expect(topAt(quads, 8, 8)?.flow).toStrictEqual({ direction: [0, 0], falling: true })
+      expect(quads.filter((quad) => quad.direction !== 'yPos').every((quad) => quad.flow === undefined)).toBe(true)
+    }),
+  )
+
+  it.effect('a stream crossing a ledge points toward the same fluid one cell below', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith(
+        [
+          [8, 64, 8, WATER],
+          [9, 63, 8, WATER],
+        ],
+        [
+          [8, 64, 8, 0, 0],
+          [9, 63, 8, 0, 0],
+        ],
+      )
+      expect(topAt(meshChunk(chunk, {}, CONFIG).fluids, 8, 8)?.flow?.direction).toStrictEqual([1, 0])
+    }),
+  )
+
+  it.effect('a loaded chunk neighbour contributes to flow while a missing neighbour stays neutral', () =>
+    Effect.sync(() => {
+      const last = CHUNK_SIZE - 1
+      const chunk = chunkWith([[last, 64, 8, WATER]], [[last, 64, 8, 0, 0]])
+      const xPos = chunkWith([[0, 64, 8, WATER]], [[0, 64, 8, WATER_MAX_LEVEL, 0]])
+
+      expect(topAt(meshChunk(chunk, { xPos }, CONFIG).fluids, last, 8)?.flow?.direction).toStrictEqual([1, 0])
+      expect(topAt(meshChunk(chunk, {}, CONFIG).fluids, last, 8)?.flow?.direction).toStrictEqual([0, 0])
     }),
   )
 })
@@ -732,12 +830,14 @@ const arbitraryFluidChunk = FastCheck.array(
     blockId: FastCheck.constantFrom(STONE, GLASS, WATER, LAVA, FLOWER),
     level: FastCheck.integer({ min: 0, max: 8 }),
     source: FastCheck.integer({ min: 0, max: 1 }),
+    falling: FastCheck.integer({ min: 0, max: 1 }),
   }),
   { minLength: 1, maxLength: 8 },
 ).map((boxes): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
+  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const box of boxes) {
     for (let lx = box.lx; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
       for (let y = box.y; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
@@ -746,16 +846,18 @@ const arbitraryFluidChunk = FastCheck.array(
           blocks[index] = box.blockId
           levels[index] = box.level
           sources[index] = box.source
+          falling[index] = box.falling
         }
       }
     }
   }
-  return { blocks, fluid: { levels, sources } }
+  return { blocks, fluid: { levels, sources, falling } }
 })
 
 /** A fluid quad as a string, for multiset comparison. */
 const keyOfFluid = (quad: FluidQuad): string =>
-  `${quad.blockId}:${quad.direction}:${quad.ao}:${quad.vertices.map((vertex) => vertex.join(',')).join('|')}`
+  `${quad.blockId}:${quad.direction}:${quad.ao}:${quad.vertices.map((vertex) => vertex.join(',')).join('|')}:` +
+  `${quad.flow === undefined ? '-' : `${quad.flow.direction.join(',')}:${Number(quad.flow.falling)}`}`
 
 /** Every unit block-face a `Quad` covers — the same translation `test/mesh.test.ts` rests on. */
 const unitFacesOf = (quad: Quad): ReadonlyArray<string> => {

@@ -83,10 +83,23 @@ import { meshChunk, emptyChunk, type MeshConfig } from '@nerima-games/mc-meshing
 const config: MeshConfig = {
   waterBlockIds: new Set([WATER_ID]),                    // 専用シェーダで描く
   transparentSolidBlockIds: new Set([GLASS_ID, LEAVES_ID]),  // アトラス + アルファブレンド
+  fluidMaxLevels: new Map([[WATER_ID, 7], [LAVA_ID, 3]]),
 }
 
-const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+const { opaque, water, transparentSolid, fluids } = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+
+for (const quad of fluids) {
+  if (quad.direction !== 'yPos' || quad.flow === undefined) continue
+  const [flowX, flowZ] = quad.flow.direction
+  animateFluidTexture(quad, flowX, flowZ, quad.flow.falling)
+}
 ```
+
+流体上面の `flow.direction` は正規化された chunk-local X/Z ベクトルで、静水は `[0, 0]`。
+`flow.falling` は `ChunkView.fluid.falling` の非ゼロ値を渡す。`falling` 配列と
+`FluidQuad.flow` は後方互換のため optional であり、側面 quad には `flow` が付かない。
+方向は同種流体の水面高の勾配から決定論的に計算し、空いた隣接セルの 1 段下に同種流体がある場合は
+段差を越える流れとして扱う。未ロード隣接チャンクは流れを捏造せず静止側として扱う。
 
 **透過集合は 2 つある。boolean 1 つでは足りない。**
 水は専用シェーダ（波紋・屈折・可変高さ）、ガラスと葉は通常のアトラス材質 + アルファブレンド。
@@ -137,8 +150,9 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
 - **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）。
   AO と流体の角平均は optional な対角チャンクも参照し、未ロードなら従来どおり開境界として扱う。
-  **未実装**なのは流体の流れ方向とアキュムレータプール。
-  それぞれの参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
+  流体上面は renderer 向けの正規化された流れ方向と落下フラグも持つ。
+  **未実装**なのはアキュムレータプール。
+  参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
   （参照実装自身がコメントで警告している）。プール版はベンチマークを用意してから

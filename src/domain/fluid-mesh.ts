@@ -26,12 +26,12 @@
  * So the seam is drawn one step further in, at the DECODED state:
  *
  *   the simulation owns   which cells hold fluid, of what kind, at what LEVEL,
- *                         and whether the cell is a source
+ *                         and whether the cell is a source or falling
  *   this file owns        level -> surface height, the corner averaging that
- *                         makes a slope, which faces are exposed, and the
- *                         geometry of the side skirts
+ *                         makes a slope, a deterministic horizontal flow
+ *                         descriptor, exposed faces, and side-skirt geometry
  *
- * `FluidView` (domain/chunk-view.ts) carries the first as two plain arrays, so
+ * `FluidView` (domain/chunk-view.ts) carries the first as decoded arrays, so
  * no byte layout is restated here. `maxLevel` — 7 for water and 3 for lava in the
  * reference (`fluid-model.ts:15-16`) — is a property of how a fluid SPREADS, so
  * it is injected through `MeshConfig.fluidMaxLevels` rather than named here, for
@@ -47,8 +47,9 @@
  * `Quad` is an origin cell, a face direction and two INTEGER extents. A fluid top
  * face has four independently fractional corner heights, so it is not a rectangle
  * in space at all — it is a bilinear patch, and the patch is the whole point: the
- * slope between the four corners is what a viewer reads as FLOW DIRECTION. Flat
- * corners are still water; sloped corners are water going somewhere.
+ * slope between the four corners gives the surface its geometric shape. A
+ * normalized `FluidFlow` derived from the same decoded state complements that
+ * shape with an unambiguous direction for texture animation.
  *
  * That also settles the merge question, and settles it the same way M-10 settled
  * per-vertex ambient occlusion. A run of N merged cells has N+1 corner heights
@@ -91,6 +92,7 @@
  * their `layered-water-glass` figures unamended.
  */
 import {
+  AIR,
   blockIndex,
   CHUNK_SIZE,
   getBlock,
@@ -147,6 +149,14 @@ const NO_FLUID_QUADS: ReadonlyArray<FluidQuad> = Object.freeze([])
  */
 export type FluidVertex = readonly [number, number, number]
 
+/** Normalized horizontal flow direction for top-surface texture animation. */
+export type FluidFlow = {
+  /** Chunk-local X/Z direction. `[0, 0]` means the surface is horizontally still. */
+  readonly direction: readonly [x: number, z: number]
+  /** Whether the simulation marks this cell as a vertical falling stream. */
+  readonly falling: boolean
+}
+
 /**
  * One fluid face: a top patch or a side skirt.
  *
@@ -166,6 +176,8 @@ export type FluidQuad = {
   /** Always `yPos`, `xPos`, `xNeg`, `zPos` or `zNeg`. Never `yNeg` — see `meshFluidSurfaces`. */
   readonly direction: FaceDirection
   readonly vertices: readonly [FluidVertex, FluidVertex, FluidVertex, FluidVertex]
+  /** Present on emitted `yPos` surfaces. Optional so existing quad consumers remain source-compatible. */
+  readonly flow?: FluidFlow
   /**
    * Always 0. The reference hands every fluid face `ZERO_AO`
    * (`greedy-meshing-fluids.ts:13`, used at :52). Carried as a field rather than
@@ -253,6 +265,10 @@ const levelIn = (fluid: FluidView | undefined, index: number): number =>
 /** Is one in-range cell a source? A missing `FluidView` reads as all zeroes. */
 const sourceIn = (fluid: FluidView | undefined, index: number): boolean =>
   fluid !== undefined && (fluid.sources[index] ?? 0) !== 0
+
+/** Is one in-range cell an explicitly falling stream? Missing legacy state is not falling. */
+const fallingIn = (fluid: FluidView | undefined, index: number): boolean =>
+  fluid !== undefined && (fluid.falling?.[index] ?? 0) !== 0
 
 /**
  * Height of `wantId`'s fluid in one cell of one chunk, or `NO_FLUID`.
@@ -356,6 +372,62 @@ const heightAcross = (
   return heightIn(chunk, context, lx, y, lz, wantId)
 }
 
+const FLOW_OFFSETS: ReadonlyArray<readonly [dx: number, dz: number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+]
+
+/**
+ * Derive a deterministic horizontal current from the decoded simulation state.
+ *
+ * Each same-fluid neighbour attracts the current in proportion to its surface
+ * drop. A horizontally empty neighbour only contributes when the same fluid is
+ * one cell below it, which represents flow crossing a ledge rather than an
+ * unloaded/open boundary. Opposite contributions cancel, leaving `[0, 0]` on a
+ * flat or symmetric surface.
+ */
+const flowAt = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+  here: number,
+): FluidFlow => {
+  let flowX = 0
+  let flowZ = 0
+  for (const [dx, dz] of FLOW_OFFSETS) {
+    const neighbourHeight = heightAcross(chunk, neighbours, context, lx + dx, y, lz + dz, blockId)
+    if (neighbourHeight !== NO_FLUID) {
+      const drop = here - neighbourHeight
+      flowX += dx * drop
+      flowZ += dz * drop
+      continue
+    }
+
+    const neighbourId = getBlockAcrossBoundary(chunk, neighbours, lx + dx, y, lz + dz)
+    if (neighbourId !== AIR) {
+      continue
+    }
+    const belowHeight = heightAcross(chunk, neighbours, context, lx + dx, y - 1, lz + dz, blockId)
+    if (belowHeight !== NO_FLUID) {
+      const drop = here + 1 - belowHeight
+      flowX += dx * drop
+      flowZ += dz * drop
+    }
+  }
+
+  const length = Math.hypot(flowX, flowZ)
+  return {
+    direction: length === 0 ? [0, 0] : [flowX / length, flowZ / length],
+    falling: fallingIn(chunk.fluid, blockIndex(lx, y, lz)),
+  }
+}
+
 /**
  * The height one column contributes to a corner average, or `NO_FLUID`.
  *
@@ -386,12 +458,11 @@ const surfaceHeightOfColumn = (
  * One corner of the top patch: the mean of the up-to-four columns touching it.
  *
  * The reference's `fluidCornerHeightForCell`
- * (`greedy-meshing-fluid-state.ts:89-113`). THIS FUNCTION IS THE FLOW DIRECTION.
- * There is no flow vector anywhere in the reference and none here: a cell whose
- * neighbours on one side are fuller than on the other gets a higher corner on
- * that side, the patch tilts, and the tilt is what the renderer animates and what
- * a player reads as a current. Computing a direction and storing it beside the
- * quad would be a second, redundant description of the same fact.
+ * (`greedy-meshing-fluid-state.ts:89-113`). A cell whose neighbours on one side
+ * are fuller than on the other gets a higher corner on that side, so the patch
+ * tilts. This geometric slope is independent of the renderer-facing
+ * `FluidFlow`: the latter gives shaders a stable normalized X/Z direction
+ * without asking each renderer to reverse-engineer one from four vertices.
  *
  * NO DIVISION-BY-ZERO GUARD, because there cannot be one: the caller only reaches
  * here for a cell that already resolved to `wantId`, and that cell is one of the
@@ -546,6 +617,7 @@ export const meshFluidSurfaces = (
               [lx + 1, y11, lz + 1],
               [lx + 1, y10, lz],
             ],
+            flow: flowAt(chunk, neighbours, context, lx, y, lz, blockId, here),
             ao: 0,
           })
         }
