@@ -19,7 +19,7 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
-import { AO_MAX } from '../domain/ambient-occlusion'
+import { AO_MAX } from '../src/domain/ambient-occlusion'
 import {
   AIR,
   BLOCKS_PER_CHUNK,
@@ -31,10 +31,10 @@ import {
   getBlockAcrossBoundary,
   type ChunkNeighbours,
   type ChunkView,
-} from '../domain/chunk-view'
-import { FACES, FACE_DIRECTIONS, tangentAxes, type FaceDirection, type QuadAxis } from '../domain/faces'
-import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../domain/mesh'
-import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../domain/opacity'
+} from '../src/domain/chunk-view'
+import { FACES, FACE_DIRECTIONS, tangentAxes, type FaceDirection, type QuadAxis } from '../src/domain/faces'
+import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../src/domain/mesh'
+import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1

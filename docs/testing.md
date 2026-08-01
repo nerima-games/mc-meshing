@@ -7,13 +7,10 @@
 | コマンド | 内容 |
 | --- | --- |
 | `pnpm typecheck` | `tsconfig.build.json`（出荷ソース）と `tsconfig.test.json`（テスト・ツール）の両方 |
-| `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`oxlint.json` は 5 カテゴリすべてと個別 67 ルールが `warn`、`error` は 4 つだけ。このフラグが無かった頃は実質その 4 つしかゲートになっていなかった） |
-| `pnpm check:deps` | 依存ホワイトリスト + 循環検査 + `Date.now()` 禁止 |
-| `pnpm api:check` | `api-lock.md` が実際の公開 API と食い違えば非ゼロ終了（[versioning.md](./versioning.md) §6） |
-| `pnpm api:update` | `api-lock.md` を書き直す |
+| `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
-| `pnpm test:coverage` | カバレッジ計測（閾値は未設定。§3 参照） |
-| `pnpm verify` | `typecheck` / `lint` / `check:deps` / `api:check` / `test` を直列実行。**CI と同じ内容** |
+| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。§3 参照) |
+| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**CI と同じ内容**(DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6) |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
@@ -185,15 +182,15 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 2. Setup pnpm（`pnpm/action-setup@v4`）
 3. Setup Node.js 22（pnpm キャッシュ有効）
 4. `pnpm install --frozen-lockfile`
-5. `pnpm typecheck`
-6. `pnpm lint`
-7. `pnpm check:deps` —— **ハードゲート**。参照実装の `check-package-dag.ts` と違い、
-   違反があれば必ず非ゼロ終了する
-8. `pnpm api:check`（step 名は `API lock`）—— **ハードゲート**。`api-lock.md` が
-   現在の公開 API と食い違えば非ゼロ終了する（[versioning.md](./versioning.md) §6）
-9. `pnpm test`
-10. `pnpm test:coverage`（閾値なし。§3）
-11. カバレッジレポートを artifact に upload（7 日保持）
+5. `pnpm verify`（`typecheck && lint && test`）
+6. `pnpm test:coverage` —— **ハードゲート**。4 指標(statements/branches/functions/lines)
+   99% のしきい値を下回れば非ゼロ終了する（§3）
+7. カバレッジレポートを artifact に upload（7 日保持）
+
+依存グラフの逸脱(Tier を越えた `@nerima-games/*` import)は、専用スクリプトではなく
+`pnpm lint` が読む `.oxlintrc.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
+公開 API の破壊的変更は自動スナップショットツールではなく人間のレビューで検出する
+(API_STANDARD.md §4、[versioning.md](./versioning.md) §6)。
 
 ## 6. 現時点のテスト一覧
 
@@ -205,7 +202,6 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 | `test/lod.test.ts` | LOD 段の語彙（`LOD_LEVELS` / `LodLevelSchema`）、`packQuadKey` の単射性（3^9 全数）と 2^53 上界、LOD 0 の同一性、純粋性（入力を書き換えない・水とガラスは素通し）、snap の軸（水平のみ・Y は不変）、**素朴メッシュに対する**削減の厳密な数（上下面 ÷step²、側面 ÷step）、**マージ済みメッシュに対しては何も削減しないこと**（M-8 / M-9）、穴が開かないこと（包含）、出力列が入力列の部分列であること（並べ替えでないこと）、接線軸規約（`faceOf` / `tangentAxes`） |
 | `test/plant-mesh.test.ts` | 十字板の頂点（**2 枚が逆の対角**であること —— 参照実装から転記した頂点列と、XZ 射影の外積が 0 でないことの二重検査、水平だけ inset して Y は inset しないこと、AO を持たないこと、`lx → lz → y` の順序を**同点を含む** fixture で）、6 パスとの関係（**立方体の面を 1 枚も出さない**、**何も遮蔽しない** —— 6 方向すべて + 不透明隣接の対照）、両メッシャの一致（プロパティ）、注入される集合（省略時は植物なし、平坦化表の全域一致、範囲外 ID、形状と材質が両立すること） |
 | `test/fluid-mesh.test.ts` | セルの高さ（水源 = `14/16`、レベルごとの段が**注入された `maxLevel`** で決まること —— 水 1/8 と溶岩 1/4 を**別の値で**検査、段の下限、水没セルは満水、`FluidView` 欠如時は満水）、**4 隅の平均 = 流れ方向**（空いている側へ傾くこと、リテラルと独立した不等式の二重検査、孤立セルは平ら、どの隅でも NaN にならないこと）、どの面が出るか（**上面 + 側面 4 枚。下面は無い**、不透明な蓋は隠すがガラスは隠さない、上に流体があれば別種でも隠す、**流体も植物も遮蔽しない**（不透明隣接の対照つき）、同高の 2 セルは壁を作らない、**側面の下端は隣接の水面**、AO は常に 0）、6 パスとの関係（**立方体の面を 1 枚も出さない**、流体表を外すと立方体に戻ること、`totalQuadArea` / `totalQuadCount` に入らないこと、湖底の面は消えないこと）、チャンク境界（**4 辺すべて**で継ぎ目に壁ができないこと + 隣接なしの対照、隣接の**レベル**が隅の平均に届くこと）、注入される表（キーが集合であること、省略時は流体なし、範囲外の記述）、両メッシャの一致・**被覆同値性が成立し続けること**・**マージしないこと**（プロパティ 3 本）、`lx → y → lz` の順序、LOD 素通し |
-| `test/check-dependency-whitelist.test.ts` | 16 リポジトリ roster の完全性、非循環、体験モジュール間エッジ 0、kit の devDependency 専用性、推移閉包の拒否、`Date.now()` 禁止、import 抽出 |
 
 ## 7. ベンチマーク（`pnpm bench`）
 

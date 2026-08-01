@@ -29,7 +29,7 @@ import {
   CHUNK_SIZE,
   type ChunkView,
   type MeshConfig,
-} from '../index'
+} from '../src/index'
 
 /** Opaque ids. mc-meshing has no registry; `MeshConfig` is the only source of truth. */
 export const STONE = 1
