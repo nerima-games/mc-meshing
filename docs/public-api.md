@@ -208,6 +208,8 @@ export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz
 export type ChunkNeighbours = {
   readonly xPos?: ChunkView; readonly xNeg?: ChunkView
   readonly zPos?: ChunkView; readonly zNeg?: ChunkView
+  readonly xPosZPos?: ChunkView; readonly xPosZNeg?: ChunkView
+  readonly xNegZPos?: ChunkView; readonly xNegZNeg?: ChunkView
 }
 export const getBlockAcrossBoundary = (
   chunk: ChunkView, neighbours: ChunkNeighbours, lx: number, y: number, lz: number,

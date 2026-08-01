@@ -703,12 +703,20 @@ describe('getBlockAcrossBoundary', () => {
   const XPOS = 12
   const ZNEG = 13
   const ZPOS = 14
+  const XNEG_ZNEG = 15
+  const XNEG_ZPOS = 16
+  const XPOS_ZNEG = 17
+  const XPOS_ZPOS = 18
 
   const NEIGHBOURS: ChunkNeighbours = {
     xNeg: chunkWith([[CHUNK_SIZE - 1, 40, 5, XNEG]]),
     xPos: chunkWith([[0, 41, 6, XPOS]]),
     zNeg: chunkWith([[7, 42, CHUNK_SIZE - 1, ZNEG]]),
     zPos: chunkWith([[8, 43, 0, ZPOS]]),
+    xNegZNeg: chunkWith([[CHUNK_SIZE - 1, 45, CHUNK_SIZE - 1, XNEG_ZNEG]]),
+    xNegZPos: chunkWith([[CHUNK_SIZE - 1, 46, 0, XNEG_ZPOS]]),
+    xPosZNeg: chunkWith([[0, 47, CHUNK_SIZE - 1, XPOS_ZNEG]]),
+    xPosZPos: chunkWith([[0, 48, 0, XPOS_ZPOS]]),
   }
 
   const CHUNK = chunkWith([[9, 44, 9, STONE]])
@@ -719,6 +727,15 @@ describe('getBlockAcrossBoundary', () => {
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, CHUNK_SIZE, 41, 6)).toBe(XPOS)
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, 7, 42, -1)).toBe(ZNEG)
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, 8, 43, CHUNK_SIZE)).toBe(ZPOS)
+    }),
+  )
+
+  it.effect('maps each out-of-range corner to the facing cell of the diagonal neighbour', () =>
+    Effect.sync(() => {
+      expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, -1, 45, -1)).toBe(XNEG_ZNEG)
+      expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, -1, 46, CHUNK_SIZE)).toBe(XNEG_ZPOS)
+      expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, CHUNK_SIZE, 47, -1)).toBe(XPOS_ZNEG)
+      expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, CHUNK_SIZE, 48, CHUNK_SIZE)).toBe(XPOS_ZPOS)
     }),
   )
 
@@ -748,6 +765,10 @@ describe('getBlockAcrossBoundary', () => {
         [CHUNK_SIZE, 41, 6],
         [7, 42, -1],
         [8, 43, CHUNK_SIZE],
+        [-1, 45, -1],
+        [-1, 46, CHUNK_SIZE],
+        [CHUNK_SIZE, 47, -1],
+        [CHUNK_SIZE, 48, CHUNK_SIZE],
       ] as const) {
         expect(getBlockAcrossBoundary(CHUNK, {}, lx, y, lz)).toBe(AIR)
       }

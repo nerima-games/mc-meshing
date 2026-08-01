@@ -649,6 +649,23 @@ describe('across a chunk boundary', () => {
       }
     }),
   )
+
+  it.effect('a diagonal neighbour contributes its level to the shared corner', () =>
+    Effect.sync(() => {
+      const chunk = waterAt(0, 0, 0, 1)
+      const half = waterAt(LAST, LAST, 4, 0)
+
+      const openTop = meshChunk(chunk, {}, CONFIG).fluids.find((quad) => quad.direction === 'yPos')
+      const joinedTop = meshChunk(chunk, { xNegZNeg: half }, CONFIG).fluids.find(
+        (quad) => quad.direction === 'yPos',
+      )
+      const open = ysOf(openTop as FluidQuad)
+      const joined = ysOf(joinedTop as FluidQuad)
+
+      expect(joined[0]).toBeLessThan(open[0] as number)
+      expect(joined.slice(1)).toEqual(open.slice(1))
+    }),
+  )
 })
 
 describe('the injected fluid table', () => {

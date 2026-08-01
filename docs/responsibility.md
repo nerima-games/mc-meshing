@@ -58,15 +58,16 @@
 
 ### 3.3 このリポジトリは座標を持たない（意図的）
 
-`ChunkNeighbours`（`domain/chunk-view.ts`）は 4 つの optional な `ChunkView` であり、
+`ChunkNeighbours`（`domain/chunk-view.ts`）は軸方向 4 つと対角方向 4 つの optional な `ChunkView` であり、
 「どの `ChunkView` がどの隣接チャンクか」を決める座標はここに無い。
 縦切りスパイクはこれを穴として指摘した — 座標をキーにしたストアから
-`ChunkNeighbours` を埋めるには、呼び出し側が 4 回手でルックアップすることになる、と。
+`ChunkNeighbours` を埋めるには、呼び出し側が手でルックアップすることになる、と。
 
 **決着: 座標はここに入れない。ルックアップはキーを所有する側が持つ。**
 
-`mc-worldgen` の `ChunkStore.neighbours(coord)` がその 4 回を行い、
-`{ xPos?, xNeg?, zPos?, zNeg? }` を返す。その戻り値は本リポジトリの
+`mc-worldgen` の `ChunkStore.neighbours(coord)` がルックアップを行い、
+`{ xPos?, xNeg?, zPos?, zNeg?, xPosZPos?, xPosZNeg?, xNegZPos?, xNegZNeg? }` を返せる。
+対角 4 つは AO と流体の角サンプル用で optional のため、軸方向 4 つだけを返す既存実装も本リポジトリの
 `ChunkNeighbours` に**構造的に**適合する（mc-worldgen は mc-meshing を import できない —
 そのエッジは plan.md §2.1 のグラフに無く、mc-worldgen 側の `oxlint.json` の
 `no-restricted-imports` が落とす — ので名前的な適合ではない）。

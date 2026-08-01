@@ -80,14 +80,9 @@
  * deviation costs nothing where the reference was right and fixes the case where
  * it was not.
  *
- * The one place it cannot help is a DIAGONAL sample — the air cell is one step
- * out along the normal and the sample one more step out along a tangent, so at a
- * chunk corner it lands in a diagonal neighbour. `ChunkNeighbours` holds four
- * axis neighbours and no diagonals (docs/responsibility.md §3.3: this repository
- * has no coordinates, so it cannot name a diagonal), and
- * `getBlockAcrossBoundary` answers `AIR` there. That is the same "mesh as open"
- * answer the rest of the boundary handling gives, and it affects at most the
- * four vertical edges of a chunk.
+ * At a chunk corner, the sample can land in one of the optional diagonal
+ * neighbours. A loaded diagonal is consulted; an absent one keeps the same
+ * "mesh as open" answer as every other unloaded boundary.
  */
 import { AIR, getBlockAcrossBoundary, type ChunkNeighbours, type ChunkView } from './chunk-view'
 import { faceOf, tangentAxes, type FaceDirection, type QuadAxis } from './faces'

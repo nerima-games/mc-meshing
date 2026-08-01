@@ -310,13 +310,9 @@ const heightIn = (
  * for ambient occlusion and recorded it; this is that decision applied again
  * rather than a new one.
  *
- * The DIAGONAL neighbour is not reachable and reads as no fluid. `ChunkNeighbours`
- * has four entries and none of them is a corner, so at the four corner columns of
- * a chunk one of the four samples the averaging below takes is missing. That is
- * the identical limitation `getBlockAcrossBoundary` already has, so it is the
- * repository's existing shape rather than a new wart; the visible effect is a
- * corner height computed from three samples instead of four, at one column per
- * chunk corner.
+ * The optional diagonal neighbours participate in corner averaging too. When a
+ * diagonal is not loaded, it contributes no fluid under the same open-boundary
+ * rule as a missing direct neighbour.
  */
 const heightAcross = (
   chunk: ChunkView,
@@ -327,6 +323,24 @@ const heightAcross = (
   lz: number,
   wantId: number,
 ): number => {
+  if (lx < 0 && lz < 0) {
+    return neighbours.xNegZNeg === undefined
+      ? NO_FLUID
+      : heightIn(neighbours.xNegZNeg, context, CHUNK_SIZE - 1, y, CHUNK_SIZE - 1, wantId)
+  }
+  if (lx < 0 && lz >= CHUNK_SIZE) {
+    return neighbours.xNegZPos === undefined
+      ? NO_FLUID
+      : heightIn(neighbours.xNegZPos, context, CHUNK_SIZE - 1, y, 0, wantId)
+  }
+  if (lx >= CHUNK_SIZE && lz < 0) {
+    return neighbours.xPosZNeg === undefined
+      ? NO_FLUID
+      : heightIn(neighbours.xPosZNeg, context, 0, y, CHUNK_SIZE - 1, wantId)
+  }
+  if (lx >= CHUNK_SIZE && lz >= CHUNK_SIZE) {
+    return neighbours.xPosZPos === undefined ? NO_FLUID : heightIn(neighbours.xPosZPos, context, 0, y, 0, wantId)
+  }
   if (lx < 0) {
     return neighbours.xNeg === undefined ? NO_FLUID : heightIn(neighbours.xNeg, context, CHUNK_SIZE - 1, y, lz, wantId)
   }

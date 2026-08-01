@@ -135,18 +135,22 @@ export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz
 }
 
 /**
- * The six neighbouring chunks, for boundary faces.
+ * The horizontal neighbouring chunks needed by boundary sampling.
  *
  * All optional: an unloaded neighbour is `undefined` and reads as air, which is
- * the same "mesh as open" rule `getBlock` applies inside a chunk. `yPos`/`yNeg`
- * are present for symmetry but are always `undefined` today, because chunks are
- * full-height columns and therefore have no vertical neighbour.
+ * the same "mesh as open" rule `getBlock` applies inside a chunk. The diagonal
+ * entries are needed only by corner samples such as AO and fluid heights; face
+ * visibility still consults the four direct neighbours.
  */
 export type ChunkNeighbours = {
   readonly xPos?: ChunkView
   readonly xNeg?: ChunkView
   readonly zPos?: ChunkView
   readonly zNeg?: ChunkView
+  readonly xPosZPos?: ChunkView
+  readonly xPosZNeg?: ChunkView
+  readonly xNegZPos?: ChunkView
+  readonly xNegZNeg?: ChunkView
 }
 
 /**
@@ -166,6 +170,20 @@ export const getBlockAcrossBoundary = (
 ): number => {
   if (y < 0 || y >= CHUNK_HEIGHT) {
     return AIR
+  }
+  if (lx < 0 && lz < 0) {
+    return neighbours.xNegZNeg === undefined
+      ? AIR
+      : getBlock(neighbours.xNegZNeg.blocks, CHUNK_SIZE - 1, y, CHUNK_SIZE - 1)
+  }
+  if (lx < 0 && lz >= CHUNK_SIZE) {
+    return neighbours.xNegZPos === undefined ? AIR : getBlock(neighbours.xNegZPos.blocks, CHUNK_SIZE - 1, y, 0)
+  }
+  if (lx >= CHUNK_SIZE && lz < 0) {
+    return neighbours.xPosZNeg === undefined ? AIR : getBlock(neighbours.xPosZNeg.blocks, 0, y, CHUNK_SIZE - 1)
+  }
+  if (lx >= CHUNK_SIZE && lz >= CHUNK_SIZE) {
+    return neighbours.xPosZPos === undefined ? AIR : getBlock(neighbours.xPosZPos.blocks, 0, y, 0)
   }
   if (lx < 0) {
     return neighbours.xNeg === undefined ? AIR : getBlock(neighbours.xNeg.blocks, CHUNK_SIZE - 1, y, lz)

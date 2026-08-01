@@ -1,6 +1,6 @@
 {
   "name": "@nerima-games/mc-meshing",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Pure chunk-data -> geometry-buffer conversion for the nerima-games Minecraft-clone rebuild: the three-valued opacity model, canonical face order, and greedy meshing.",
   "homepage": "https://github.com/nerima-games/mc-meshing#readme",
