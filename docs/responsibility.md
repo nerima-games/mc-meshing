@@ -341,8 +341,9 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
   「どこまで広がるか」という**伝播の語彙**なので、`MeshConfig.fluidMaxLevels` で注入する。
   §3.2 が `waterBlockIds` について定めたのと同じ 3 つの理由である。
 
-`ChunkView` と同じく**これは差し替え予定の placeholder** であり、`porting.md` に記録した。
-所有者が publish したら `FluidView` は 1 行で差し替わる。
+`FluidCell` / `FluidWorkItem` / `FluidKind` は流体の伝播規則を所有する `mx-gameplay` に属する。
+この `FluidView` は gameplay の状態をメッシュ生成へ渡す geometry-neutral な adapter であり、
+メッシュ側は流体の伝播や tick scheduling を所有しない。
 
 #### (d) 移植した中身と、その出典
 
