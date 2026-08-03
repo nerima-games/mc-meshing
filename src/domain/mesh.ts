@@ -7,7 +7,8 @@
  * ---------------------------------------------------------------------------
  *
  * `meshChunk` emits one quad per MAXIMAL RECTANGLE of coplanar, like-for-like
- * faces. `meshChunkNaive` emits one quad per exposed block face, as this file
+ * opaque faces. Transparent cube faces stay unit-sized so sorting and future
+ * per-cell attributes remain conservative. `meshChunkNaive` emits one quad per exposed block face, as this file
  * did before the merge landed, and it is retained and exported because it is the
  * ORACLE: `meshChunk` is correct exactly when it covers the same surface as
  * `meshChunkNaive` with fewer quads, and that is a property a test can state
@@ -24,10 +25,10 @@
  * would only mean the property fails for reasons that are not about merging.
  *
  * ---------------------------------------------------------------------------
- * What may be merged: `blockId` AND ambient occlusion
+ * What may be merged: opaque `blockId` AND ambient occlusion
  * ---------------------------------------------------------------------------
  *
- * Two faces merge when they are in the same direction, on the same depth slice,
+ * Two opaque faces merge when they are in the same direction, on the same depth slice,
  * and carry the same `blockId` AND the same `ao`. The invariants say merging
  * must never join across layers, across block types, or across faces with
  * different occlusion, so each of the three is worth saying explicitly:
@@ -195,8 +196,9 @@ export type MeshLayers = {
    * A FIFTH LIST, on the same terms and for the same reason as `crossPlants`. A
    * fluid top has four independently fractional corner heights, so it is a
    * bilinear patch rather than a rectangle and no `Quad` can describe it — and
-   * the slope between those corners is the whole feature, because that slope is
-   * what a viewer reads as flow direction. `domain/fluid-mesh.ts` argues it.
+   * the slope between those corners is the geometric feature. Top surfaces also
+   * carry a normalized flow descriptor for renderer animation; neither fact can
+   * be represented by the integer-extents `Quad`. `domain/fluid-mesh.ts` argues it.
    *
    * EMPTY UNLESS `MeshConfig.fluidMaxLevels` DECLARES SOMETHING. Absent means no
    * id is a fluid, which is what every config written before this list existed
@@ -207,6 +209,25 @@ export type MeshLayers = {
    * merge's conservation invariant read as violated by a puddle.
    */
   readonly fluids: ReadonlyArray<FluidQuad>
+}
+
+/** Chunk-local, half-open integer bounds: min is inclusive and max is exclusive. */
+export type MeshRegion = {
+  readonly min: readonly [lx: number, y: number, lz: number]
+  readonly max: readonly [lx: number, y: number, lz: number]
+}
+
+/**
+ * Independently owned geometry for one replaceable chunk subregion.
+ *
+ * Consumers must replace the complete buffer previously stored for
+ * `ownedRegion`; this is deliberately not a patch over a greedy full-chunk
+ * mesh, whose quads may cross region boundaries.
+ */
+export type RegionMesh = {
+  readonly dirtyRegion: MeshRegion
+  readonly ownedRegion: MeshRegion
+  readonly layers: MeshLayers
 }
 
 /**
@@ -502,10 +523,12 @@ const meshXPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
-          mask[rowBase + y] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + y] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -567,10 +590,12 @@ const meshYPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
-          mask[rowBase + lz] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + lz] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -628,10 +653,12 @@ const meshZPass = (
           continue
         }
         if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
-          mask[rowBase + y] = packFaceCell(
-            blockId,
-            ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          )
+          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
+          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
+            mask[rowBase + y] = packFaceCell(blockId, ao)
+          } else {
+            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
+          }
         }
       }
     }
@@ -665,7 +692,7 @@ const makeSink = (
 }
 
 /**
- * Mesh one chunk, merging coplanar like-for-like faces into maximal rectangles.
+ * Mesh one chunk, merging coplanar like-for-like opaque faces into maximal rectangles.
  *
  * Faces are emitted in the canonical direction order (`FACES`); within a
  * direction, see the emission-order table in this file's header. A face is
@@ -794,4 +821,94 @@ export const meshChunkNaive = (
   }
 
   return layers
+}
+
+const clampInteger = (value: number, lower: number, upper: number): number =>
+  Math.min(upper, Math.max(lower, Math.trunc(Number.isFinite(value) ? value : lower)))
+
+const normalizeRegion = (region: MeshRegion): MeshRegion => {
+  const minX = clampInteger(region.min[0], 0, CHUNK_SIZE)
+  const minY = clampInteger(region.min[1], 0, CHUNK_HEIGHT)
+  const minZ = clampInteger(region.min[2], 0, CHUNK_SIZE)
+  return {
+    min: [minX, minY, minZ],
+    max: [
+      clampInteger(region.max[0], minX, CHUNK_SIZE),
+      clampInteger(region.max[1], minY, CHUNK_HEIGHT),
+      clampInteger(region.max[2], minZ, CHUNK_SIZE),
+    ],
+  }
+}
+
+/**
+ * Remesh the cells whose geometry can be affected by a dirty chunk-local AABB.
+ *
+ * Face exposure, AO and fluid corners read at most one neighbouring cell, so
+ * `ownedRegion` is the normalized dirty region plus a one-cell halo, clamped to
+ * this chunk. Output uses unit faces rather than greedy quads so every geometry
+ * item has exactly one owning cell and region buffers can be replaced safely.
+ */
+export const meshChunkRegion = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  config: MeshConfig,
+  dirtyRegion: MeshRegion,
+): RegionMesh => {
+  const dirty = normalizeRegion(dirtyRegion)
+  const empty = dirty.min.some((value, axis) => value >= (dirty.max[axis] ?? value))
+  const owned: MeshRegion = empty
+    ? dirty
+    : {
+        min: [Math.max(0, dirty.min[0] - 1), Math.max(0, dirty.min[1] - 1), Math.max(0, dirty.min[2] - 1)],
+        max: [
+          Math.min(CHUNK_SIZE, dirty.max[0] + 1),
+          Math.min(CHUNK_HEIGHT, dirty.max[1] + 1),
+          Math.min(CHUNK_SIZE, dirty.max[2] + 1),
+        ],
+      }
+  const lookup = buildLayerLookup(config)
+  const plants = buildCrossPlantLookup(config)
+  const fluids = buildFluidLookup(config)
+  const { layers, push } = makeSink(
+    lookup,
+    empty ? [] : meshCrossPlants(chunk, plants, CHUNK_HEIGHT, owned),
+    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, CHUNK_HEIGHT, owned),
+  )
+
+  if (!empty) {
+    for (const face of FACES) {
+      for (let lx = owned.min[0]; lx < owned.max[0]; lx += 1) {
+        for (let lz = owned.min[2]; lz < owned.max[2]; lz += 1) {
+          for (let y = owned.min[1]; y < owned.max[1]; y += 1) {
+            const blockId = getBlock(chunk.blocks, lx, y, lz)
+            if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) continue
+            const neighbourId = getBlockAcrossBoundary(
+              chunk,
+              neighbours,
+              lx + face.nx,
+              y + face.ny,
+              lz + face.nz,
+            )
+            if (!isFaceExposed(lookup, plants, blockId, neighbourId)) continue
+            push({
+              blockId,
+              direction: face.direction,
+              role: face.role,
+              lx,
+              y,
+              lz,
+              width: 1,
+              height: 1,
+              ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+            })
+          }
+        }
+      }
+    }
+  }
+  return {
+    dirtyRegion: dirty,
+    ownedRegion: owned,
+    layers,
+  }
 }

@@ -208,10 +208,18 @@ export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz
 export type ChunkNeighbours = {
   readonly xPos?: ChunkView; readonly xNeg?: ChunkView
   readonly zPos?: ChunkView; readonly zNeg?: ChunkView
+  readonly xPosZPos?: ChunkView; readonly xPosZNeg?: ChunkView
+  readonly xNegZPos?: ChunkView; readonly xNegZNeg?: ChunkView
 }
 export const getBlockAcrossBoundary = (
   chunk: ChunkView, neighbours: ChunkNeighbours, lx: number, y: number, lz: number,
 ): number
+
+export type FluidView = {
+  readonly levels: Readonly<Uint8Array>
+  readonly sources: Readonly<Uint8Array>
+  readonly falling?: Readonly<Uint8Array>
+}
 ```
 
 ### ストレージレイアウト
@@ -253,17 +261,43 @@ export type Quad = {
   readonly lx: number; readonly y: number; readonly lz: number
   readonly width: number; readonly height: number
 }
-export type MeshLayers = { readonly [K in MeshLayer]: ReadonlyArray<Quad> }
+export type MeshLayers = {
+  readonly opaque: ReadonlyArray<Quad>
+  readonly water: ReadonlyArray<Quad>
+  readonly transparentSolid: ReadonlyArray<Quad>
+  readonly crossPlants: ReadonlyArray<CrossPlantQuad>
+  readonly fluids: ReadonlyArray<FluidQuad>
+}
 export const totalQuadCount = (layers: MeshLayers): number
 export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig): MeshLayers
 ```
 
-**現在の実装は素朴な面抽出であり、グリーディマージは入っていない。**
-`width` / `height` は常に 1 である。マージが入ったらここが 1 より大きくなる。
+流体を `MeshConfig.fluidMaxLevels` で opt-in すると、`MeshLayers.fluids` に専用の
+`FluidQuad` が返る。上面 (`direction === 'yPos'`) は renderer がテクスチャを流すための記述子を持つ:
 
-これは stub ではない。正しいが速くないだけである。マージが保存すべき不変条件
-（レイヤ振り分け・正準面順序・遮蔽規則・境界挙動）はすべてここで確定しており、
-現在の実装はマージ実装のオラクルとして機能する。
+```typescript
+export type FluidFlow = {
+  readonly direction: readonly [x: number, z: number]
+  readonly falling: boolean
+}
+
+export type FluidQuad = {
+  readonly blockId: number
+  readonly direction: FaceDirection
+  readonly vertices: readonly [FluidVertex, FluidVertex, FluidVertex, FluidVertex]
+  readonly flow?: FluidFlow
+  readonly ao: number
+}
+```
+
+`flow.direction` は chunk-local X/Z の正規化ベクトルで、水平の勾配が無ければ `[0, 0]`。
+同種流体の隣接水面が低い方向へ向き、空いた隣接セルの 1 段下に同種流体があれば段差を越える方向へ向く。
+未ロード隣接チャンクは流れを作らない。`flow.falling` は復号済みの simulation state を写す。
+`falling` と `flow` は既存 caller/consumer の型を壊さないため optional だが、現行メッシャが出す上面には
+必ず `flow` があり、側面には無い。水と溶岩は同じ計算を使い、差は注入された `maxLevel` による。
+
+通常の不透明面にはグリーディマージが入り、`width` / `height` は 1 より大きくなり得る。
+一方、4 隅の高さを個別に持つ流体面は情報を失わずにマージできないため、セル単位で出力する。
 
 ### 面が出る条件
 
@@ -285,7 +319,7 @@ export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config:
 | --- | --- | --- | --- |
 | グリーディマージ本体 | `greedy-meshing-algorithms.ts` + `-accumulator.ts` + `-passes.ts` | 616 | **移植済み**: `domain/mesh.ts`（M-9） |
 | アンビエントオクルージョン | `greedy-meshing-ao.ts` | 149 | **移植済み**: `domain/ambient-occlusion.ts`（M-10）。光サンプリング半分は未移植（ライトグリッドは mc-worldgen） |
-| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | **移植済み**: `domain/fluid-mesh.ts`（M-12）。バイト符号化と光は未移植 —— 継ぎ目は `FluidView`（復号済み） |
+| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | **移植済み**: `domain/fluid-mesh.ts`（M-12）。renderer 向け flow descriptor を追加。バイト符号化と光は未移植 —— 継ぎ目は `FluidView`（復号済み） |
 | 植生メッシュ | `plant-mesh.ts` | 258 | **十字板のみ移植済み**: `domain/plant-mesh.ts`（M-11）。サボテン・レール・スイレンは未移植 |
 | LOD 段の選択（`lodForDistance` + 距離定数） | `lod-simplification.ts` | 約 48 | **mc-render の責務**（`responsibility.md` §3.4）。簡約本体（約 240）は `domain/lod.ts` に移植済み |
 | subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | 382 | 保留。1 ブロック変更で全チャンクを再メッシュしない最適化 |

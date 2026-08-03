@@ -34,8 +34,9 @@
   `MeshLayers.crossPlants` で運ぶ。どの ID が植物かは `config` で注入する（`design-notes.md` M-11）
 - **流体の水面高と流れ方向（実装済み）** —— `domain/fluid-mesh.ts`。
   4 隅の Y が別々の小数なので `Quad` ではなく `MeshLayers.fluids` で運ぶ。
-  **流れ方向は 4 隅の傾きそのものであり、流れベクトルという値は存在しない。**
-  入力は復号済みの `FluidView`、`maxLevel` は `config` で注入する（`design-notes.md` M-12）
+  水面の形は 4 隅の傾き、renderer 用の流れ方向は上面の正規化済み `FluidFlow.direction` で運ぶ。
+  入力は復号済みの `FluidView`（level / source / optional falling）、`maxLevel` は `config` で注入する
+  （`design-notes.md` M-12）
 
 ## 3. 明示的にスコープ外のもの
 
@@ -54,19 +55,20 @@
 | **`three` のジオメトリ / マテリアル生成**（`block-mesh.ts` 91 LOC） | **mc-render**（決着。§3.4） | `import * as THREE` が 8 箇所。本リポジトリは `three` に依存しない |
 | **アンビエントオクルージョン** | **mc-meshing**（決着。**実装済み**: `domain/ambient-occlusion.ts`） | 参照実装の `greedy-meshing-ao.ts` 149 LOC のうち **AO の半分**（`aoXPos` .. `aoZNeg`、:15-87）。「まず基本を固める」の基本＝グリーディマージは着地した（M-9）ので保留の理由は消えた。**面ごとに 1 値**（頂点ごとではない。参照実装がそうである根拠は M-10）で、**マージキーに入る**。残り半分の光サンプリング（:95-149）は `LightGrids` を読むので**移植していない** —— 下の「ライトグリッド」の行に従う |
 | **植生メッシュ（十字板）** | **mc-meshing**（決着。**実装済み**: `domain/plant-mesh.ts`） | 参照実装の `plant-mesh.ts` 258 LOC のうち `addCrossPlant`（:79-98）と id 表（:18-28）。**十字板だけ**であり、同ファイルのサボテン・レール・スイレンは移植していない —— 特にレールは形状が物理側の `game/domain/rail-shape.ts` を鏡写しにしており、ここで 2 つ目の綴りを作るのは §3.3 が座標について禁じたのと同じ形になる（M-11）。十字板は `Quad` になれない（対角・小数・ブロック面を 0 枚しか覆わない）ので、`MeshLayers` に 4 つ目のリスト `crossPlants` が生えた |
-| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level と source）を受け取るので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
+| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / optional falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
 
 ### 3.3 このリポジトリは座標を持たない（意図的）
 
-`ChunkNeighbours`（`domain/chunk-view.ts`）は 4 つの optional な `ChunkView` であり、
+`ChunkNeighbours`（`domain/chunk-view.ts`）は軸方向 4 つと対角方向 4 つの optional な `ChunkView` であり、
 「どの `ChunkView` がどの隣接チャンクか」を決める座標はここに無い。
 縦切りスパイクはこれを穴として指摘した — 座標をキーにしたストアから
-`ChunkNeighbours` を埋めるには、呼び出し側が 4 回手でルックアップすることになる、と。
+`ChunkNeighbours` を埋めるには、呼び出し側が手でルックアップすることになる、と。
 
 **決着: 座標はここに入れない。ルックアップはキーを所有する側が持つ。**
 
-`mc-worldgen` の `ChunkStore.neighbours(coord)` がその 4 回を行い、
-`{ xPos?, xNeg?, zPos?, zNeg? }` を返す。その戻り値は本リポジトリの
+`mc-worldgen` の `ChunkStore.neighbours(coord)` がルックアップを行い、
+`{ xPos?, xNeg?, zPos?, zNeg?, xPosZPos?, xPosZNeg?, xNegZPos?, xNegZNeg? }` を返せる。
+対角 4 つは AO と流体の角サンプル用で optional のため、軸方向 4 つだけを返す既存実装も本リポジトリの
 `ChunkNeighbours` に**構造的に**適合する（mc-worldgen は mc-meshing を import できない —
 そのエッジは plan.md §2.1 のグラフに無く、mc-worldgen 側の `oxlint.json` の
 `no-restricted-imports` が落とす — ので名前的な適合ではない）。
@@ -326,8 +328,8 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 
 | 所有 | 内容 |
 | --- | --- |
-| シミュレーション側 | どのセルに流体があるか、どの種類か、**レベル**、**水源か** |
-| mc-meshing | レベル→水面高、4 隅の平均（＝流れ方向）、面の露出規則、側面の形 |
+| シミュレーション側 | どのセルに流体があるか、どの種類か、**レベル**、**水源か**、**落下中か** |
+| mc-meshing | レベル→水面高、4 隅の平均、水面高からの水平 flow、面の露出規則、側面の形 |
 
 バイト配置についての合意が 1 つも要らなくなるので、**マスクはここに 1 つも現れない。**
 5 ビットのうちここに来ないものにもそれぞれ理由がある:
@@ -339,8 +341,9 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
   「どこまで広がるか」という**伝播の語彙**なので、`MeshConfig.fluidMaxLevels` で注入する。
   §3.2 が `waterBlockIds` について定めたのと同じ 3 つの理由である。
 
-`ChunkView` と同じく**これは差し替え予定の placeholder** であり、`porting.md` に記録した。
-所有者が publish したら `FluidView` は 1 行で差し替わる。
+`FluidCell` / `FluidWorkItem` / `FluidKind` は流体の伝播規則を所有する `mx-gameplay` に属する。
+この `FluidView` は gameplay の状態をメッシュ生成へ渡す geometry-neutral な adapter であり、
+メッシュ側は流体の伝播や tick scheduling を所有しない。
 
 #### (d) 移植した中身と、その出典
 
@@ -348,7 +351,8 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | --- | --- | --- |
 | 水源の水面高 `14/16` | `greedy-meshing-fluid-state.ts:37` | **出典あり**（コメントに理由。岸辺がガラス壁に見えないため） |
 | セルの高さ `max(1/(maxLevel+1), 1 - level/(maxLevel+1))` | 同 :39-43 | 出典あり。`maxLevel` は注入 |
-| 4 隅の高さ = 周囲 2x2 列の平均 | 同 :89-113 | 出典あり。**「流れ方向」はこの 4 隅の傾きとして現れる** |
+| 4 隅の高さ = 周囲 2x2 列の平均 | 同 :89-113 | 出典あり。水面の幾何学的な傾きとして現れる |
+| 上面の正規化 X/Z flow | 本実装の追加契約 | 同種流体の水面高の降下を 4 近傍で合成。段差は 1 段下の同種流体を確認し、未ロード境界は寄与させない |
 | 同種流体が上にあれば高さ 1 | 同 :74-87 | 出典あり |
 | 面の露出規則（ガラス越しの水槽は見える） | 同 :129-134 | 出典あり |
 | 側面の下端が隣接流体の高さに合う | `greedy-meshing-fluids.ts:94-97` | 出典あり |

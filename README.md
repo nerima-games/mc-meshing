@@ -83,10 +83,23 @@ import { meshChunk, emptyChunk, type MeshConfig } from '@nerima-games/mc-meshing
 const config: MeshConfig = {
   waterBlockIds: new Set([WATER_ID]),                    // 専用シェーダで描く
   transparentSolidBlockIds: new Set([GLASS_ID, LEAVES_ID]),  // アトラス + アルファブレンド
+  fluidMaxLevels: new Map([[WATER_ID, 7], [LAVA_ID, 3]]),
 }
 
-const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+const { opaque, water, transparentSolid, fluids } = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+
+for (const quad of fluids) {
+  if (quad.direction !== 'yPos' || quad.flow === undefined) continue
+  const [flowX, flowZ] = quad.flow.direction
+  animateFluidTexture(quad, flowX, flowZ, quad.flow.falling)
+}
 ```
+
+流体上面の `flow.direction` は正規化された chunk-local X/Z ベクトルで、静水は `[0, 0]`。
+`flow.falling` は `ChunkView.fluid.falling` の非ゼロ値を渡す。`falling` 配列と
+`FluidQuad.flow` は後方互換のため optional であり、側面 quad には `flow` が付かない。
+方向は同種流体の水面高の勾配から決定論的に計算し、空いた隣接セルの 1 段下に同種流体がある場合は
+段差を越える流れとして扱う。未ロード隣接チャンクは流れを捏造せず静止側として扱う。
 
 **透過集合は 2 つある。boolean 1 つでは足りない。**
 水は専用シェーダ（波紋・屈折・可変高さ）、ガラスと葉は通常のアトラス材質 + アルファブレンド。
@@ -103,14 +116,16 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
 
 **このリポジトリはまだ第一版（叩き台）である。**
 
-- **グリーディマージは実装済み。これがこのリポジトリの本体である。**
-  同一スライス・同一方向・同一 `blockId` の面を最大矩形にまとめる（`domain/mesh.ts`）。
-  quad 削減は flat で **-99.8%**（4,608 → 10）、rolling で **-86.2%**（5,558 → 768）、
+- **opaque 限定のグリーディマージは実装済み。これがこのリポジトリの本体である。**
+  同一スライス・同一方向・同一 `blockId`・同一 AO の opaque 面だけを最大矩形にまとめる
+  （`domain/mesh.ts`）。transparentSolid、water、専用 fluid、plant は描画順やセル固有属性を
+  安全に保つため統合せず、1x1 primitive のまま出力する。
+  quad 削減は flat で **-99.8%**（4,608 → 10）、rolling で **-82.7%**（5,558 → 960）、
   checkerboard で **0.0%** —— 最後のは欠陥ではなく、`(lx+y+lz)%2` には
   まとめられる面の対が 1 つも無いという**定義**である。被覆面積は 4 shape すべてで素朴実装と一致する。
   素朴な面抽出は `meshChunkNaive` として残してあり、**オラクル**である
   （`meshChunk` の各 quad を単位面へ展開して多重集合で突き合わせる性質テストがある）。
-  `Quad.width` / `height` はもう常に 1 ではない。
+  opaque の `Quad.width` / `height` はもう常に 1 ではない。
 - **wall-clock ではマージは損である。** 4 shape すべてで素朴実装より 1.16-1.47 倍**遅い**
   （checkerboard が最悪）。時計が速くなって見えるのは同時に入れた `solidCeiling`
   （参照実装の `yLimit`）のおかげであり、マージのおかげではない。
@@ -133,14 +148,20 @@ const { opaque, water, transparentSolid } = meshChunk(chunk, { xNeg: leftNeighbo
   まだ publish されていないので必要最小限の形だけ宣言してある。
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
-- **未実装のもの**: アンビエントオクルージョン、流体の高さ / 流れ、植生メッシュ（十字板）、
-  subregion 差分メッシュ、アキュムレータプール。（`yLimit` による打ち切りは
-  `solidCeiling` として実装済み。）
-  それぞれの参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
+- **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）。
+  AO と流体の角平均は optional な対角チャンクも参照し、未ロードなら従来どおり開境界として扱う。
+  流体上面は renderer 向けの正規化された流れ方向と落下フラグも持つ。
+  **未実装**なのはアキュムレータプール。
+  参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
   （参照実装自身がコメントで警告している）。プール版はベンチマークを用意してから
   明示的な opt-in として追加する。
+- **局所更新は `meshChunkRegion`。** chunk-local の半開 `dirtyRegion` を渡すと、face culling、AO、
+  fluid corner が読む範囲を含む 1-cell halo（chunk 境界で clamp）を `ownedRegion` として返す。
+  cube は安全な単位 face、plant / fluid もセル単位の独立所有バッファであり、呼び出し側は同じ
+  `ownedRegion` の以前のバッファを丸ごと交換する。greedy な full-chunk mesh の quad を途中で splice
+  してはならない。空領域は空の所有バッファを返し、従来の `meshChunk` API と出力は不変である。
 - **ビルド／publish はまだない。** `exports` は TypeScript ソースを直接指している。
   `version` は mc-render が実際に消費して契約を確認するまで `0.x` に留める。
 - **カバレッジ閾値は 4 指標 99% で有効化済み(TEST_STANDARD.md §3)。** 現状の実測は

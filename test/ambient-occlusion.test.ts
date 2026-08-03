@@ -441,25 +441,13 @@ describe('chunk boundaries', () => {
     }),
   )
 
-  it.effect('a diagonal sample at a chunk corner reads as air: there is no diagonal neighbour to ask', () =>
+  it.effect('a loaded diagonal neighbour darkens the matching chunk corner', () =>
     Effect.sync(() => {
-      // The documented limit of the deviation. `ChunkNeighbours` holds four axis
-      // neighbours and no diagonals — docs/responsibility.md §3.3 keeps
-      // coordinates out of this repository, so a diagonal cannot even be named —
-      // and a sample one step out along the normal and one more along a tangent
-      // lands in one at a chunk corner. AIR there is the same "mesh as open"
-      // answer the rest of the boundary handling gives.
       const corner = [0, 64, 0] as const
       const chunk = chunkWith([[...corner, STONE]])
-      // The xNeg face samples (-1, 64, -1), which is the xNeg/zNeg diagonal.
-      // Filling the corresponding cell of EITHER axis neighbour cannot be seen.
-      const acrossX = chunkWith([[CHUNK_SIZE - 1, 64, CHUNK_SIZE - 1, STONE]])
-      expect(ambientOcclusionAt(chunk, { xNeg: acrossX }, 'xNeg', ...corner)).toBe(AO_NONE)
-      // While the NON-diagonal sample through the same neighbour is seen, so the
-      // assertion above is about the diagonal and not about the wiring.
-      expect(
-        ambientOcclusionAt(chunk, { xNeg: chunkWith([[CHUNK_SIZE - 1, 65, 0, STONE]]) }, 'xNeg', ...corner),
-      ).toBe(1)
+      const diagonal = chunkWith([[CHUNK_SIZE - 1, 64, CHUNK_SIZE - 1, STONE]])
+      expect(ambientOcclusionAt(chunk, { xNegZNeg: diagonal }, 'xNeg', ...corner)).toBe(1)
+      expect(ambientOcclusionAt(chunk, {}, 'xNeg', ...corner)).toBe(AO_NONE)
     }),
   )
 
