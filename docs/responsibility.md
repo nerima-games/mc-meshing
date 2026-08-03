@@ -376,13 +376,10 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | 親（依存先） | `mc-kernel` のみ |
 | 子（依存元） | `mc-render` のみ |
 
-現時点では `mc-kernel` すら `package.json` に入っていない（まだ publish されていないため）。
-`architecture.md` §7 を参照。
-
-`domain/chunk-view.ts` の `ChunkView` は**ローカルな構造型**である。
-本来 `Chunk` を所有するのは mc-kernel（plan.md §3.1）だが、まだ publish されていないので
-メッシングが必要とする最小の形だけを宣言してある。
-mc-kernel が publish されたら 1 行の差し替えで済む（`porting.md` §3）。
+`mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。
+`domain/kernel-adapter.ts` の `chunkViewOf` が、kernelの可変高さデータを
+meshingの256高さビューへ変換する責務を持つ。高さが一致しない入力は拒否し、
+暗黙の切り詰め・ゼロ埋めでワールドデータを破壊しない。
 
 ## 5. 完成条件
 

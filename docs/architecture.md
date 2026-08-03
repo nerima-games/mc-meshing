@@ -188,16 +188,15 @@ org 標準では、リポジトリ間依存の許可グラフの実効機構は�
 org 標準としては個別リポジトリの裁量に委ねられており、本リポジトリでは現在専用の代替スクリプトを
 持たない。
 
-## 7. スケルトン段階の依存宣言について
+## 7. 依存宣言とkernel境界
 
-**現時点で `package.json` の `dependencies` は `effect` だけである。**
-`@nerima-games/mc-kernel` は入っていない。理由は 2 つ:
+`@nerima-games/mc-kernel` は `dependencies` に固定され、メッシュ入力の
+`Chunk` 型を直接消費する。mc-meshing固有の `ChunkView` はレンダラー向けの固定高さ
+ビューとして残し、`chunkViewOf` がkernelの可変高さチャンクを検証しながら変換する。
+高さが一致しない場合は暗黙の切り詰め・パディングをせず、明示的に失敗する。
 
-1. まだ何も publish されていない（bottom-up に publish してから pin する方式）。
-2. スケルトンには import すべき兄弟コードがまだ存在しない。
-
-意図されたグラフは `DEPENDENCY_POLICY.md` の roster と本ドキュメントに記録されている。
-グラフは仕様であり、最初の publish より前に循環検出を意味あるものにしているのはこの記録である。
+この依存境界により、共有語彙はmc-kernel、チャンク表現の変換と面生成はmc-meshingが
+所有する。依存グラフの制約は `DEPENDENCY_POLICY.md` の roster に従う。
 
 ## 参照
 

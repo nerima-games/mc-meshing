@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@nerima-games/mc-kernel':
+        specifier: 0.2.16
+        version: 0.2.16
       effect:
         specifier: ^3.22.0
         version: 3.22.0
@@ -329,6 +332,10 @@ packages:
 
   '@manypkg/get-packages@1.1.3':
     resolution: {integrity: sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A==}
+
+  '@nerima-games/mc-kernel@0.2.16':
+    resolution: {integrity: sha512-dR/BzRL/G+wkrOCKPPoVQ9mRLvUwn2udU5pMzY3c51glPAySNfbEzIm8A/H1D//DTy5zvjP6mo94JCmGrgy88Q==, tarball: https://npm.pkg.github.com/download/@nerima-games/mc-kernel/0.2.16/da9a741d74c4f0909e287dacd147cabe04cb5a82}
+    engines: {node: '>=24.0.0', pnpm: '>=11.0.0'}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1666,6 +1673,10 @@ snapshots:
       fs-extra: 8.1.0
       globby: 11.1.0
       read-yaml-file: 1.1.0
+
+  '@nerima-games/mc-kernel@0.2.16':
+    dependencies:
+      effect: 3.22.0
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

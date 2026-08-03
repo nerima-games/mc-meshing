@@ -1,10 +1,8 @@
 /**
  * The chunk as meshing sees it, and the hot-path block read.
  *
- * FIRST CUT (叩き台). `ChunkView` is a local structural type: mc-kernel owns the
- * real `Chunk` (plan.md §3.1) but nothing is published yet, so meshing declares
- * the minimum shape it needs. Replacing this with kernel's `Chunk` is a
- * one-line change once mc-kernel ships — see docs/porting.md.
+ * `ChunkView` is the renderer-facing fixed-height view. mc-kernel owns the
+ * source `Chunk`; use `chunkViewOf` from `kernel-adapter.ts` at that boundary.
  */
 
 /** Horizontal extent of a chunk, in blocks. */
