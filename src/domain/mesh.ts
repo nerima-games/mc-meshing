@@ -490,6 +490,7 @@ const meshXPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
+  const blocks = chunk.blocks
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
       blockId: faceCellBlockId(cell),
@@ -505,11 +506,13 @@ const meshXPass = (
   }
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
+    const xBase = lx * CHUNK_HEIGHT * CHUNK_SIZE
     mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
     for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
+      const columnBase = xBase + lz * CHUNK_HEIGHT
       const rowBase = lz * yLimit
       for (let y = 0; y < yLimit; y += 1) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
+        const blockId = blocks[columnBase + y] ?? AIR
         // A plant emits no cube faces at all — it is drawn as two diagonal
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
@@ -557,6 +560,7 @@ const meshYPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
+  const blocks = chunk.blocks
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
       blockId: faceCellBlockId(cell),
@@ -574,9 +578,10 @@ const meshYPass = (
   for (let y = 0; y < yLimit; y += 1) {
     mask.fill(NO_FACE, 0, CHUNK_SIZE * CHUNK_SIZE)
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
+      const columnBase = lx * CHUNK_HEIGHT * CHUNK_SIZE + y
       const rowBase = lx * CHUNK_SIZE
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
+        const blockId = blocks[columnBase + lz * CHUNK_HEIGHT] ?? AIR
         // A plant emits no cube faces at all — it is drawn as two diagonal
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
@@ -620,6 +625,7 @@ const meshZPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
+  const blocks = chunk.blocks
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
       blockId: faceCellBlockId(cell),
@@ -637,9 +643,10 @@ const meshZPass = (
   for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
     mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
+      const columnBase = lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
       const rowBase = lx * yLimit
       for (let y = 0; y < yLimit; y += 1) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
+        const blockId = blocks[columnBase + y] ?? AIR
         // A plant emits no cube faces at all — it is drawn as two diagonal
         // panes by `meshCrossPlants`. The reference guards all six passes the
         // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);

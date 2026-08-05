@@ -1226,6 +1226,18 @@ describe('the Y scan ceiling', () => {
       expect(layers.water).not.toBe(layers.transparentSolid)
     }),
   )
+
+  it.effect('REGRESSION: short block storage treats missing in-bounds cells as AIR in canonical order', () =>
+    Effect.sync(() => {
+      // ChunkView is structural, so a producer can temporarily expose a short
+      // typed array. The hot passes may read directly only if they retain
+      // getBlock's missing-cell-as-AIR behavior and the emitted sequence.
+      const blocks = new Uint8Array(1)
+      blocks[0] = STONE
+      const chunk: ChunkView = { blocks }
+      expect(meshChunk(chunk, {}, EMPTY_MESH_CONFIG)).toStrictEqual(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))
+    }),
+  )
 })
 
 describe('getBlock', () => {
