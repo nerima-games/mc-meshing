@@ -878,8 +878,8 @@ export const meshChunkRegion = (
   const fluids = buildFluidLookup(config)
   const { layers, push } = makeSink(
     lookup,
-    empty ? [] : meshCrossPlants(chunk, plants, CHUNK_HEIGHT, owned),
-    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, CHUNK_HEIGHT, owned),
+    empty ? [] : meshCrossPlants(chunk, plants, owned.max[1], owned),
+    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, owned.max[1], owned),
   )
 
   if (!empty) {
