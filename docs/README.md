@@ -32,7 +32,7 @@ plan.md の数値のうち再検証で食い違ったものは `porting.md` に�
 - **透過集合がネイティブ `Set` でなければならない理由（~40万call/chunk）** → `design-notes.md` M-1
 - **`getBlock` が `Option` を返さない理由** → `design-notes.md` M-2
 - **正準面順序 +X -X +Y -Y +Z -Z** → `public-api.md` §3
-- **グリーディマージが未実装であること** → `public-api.md` §5、`testing.md` §4
+- **グリーディマージの公開契約と被覆面積による検証** → `public-api.md` §5、`testing.md` §4
 
 ## 上位資料
 
