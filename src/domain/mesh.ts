@@ -260,6 +260,25 @@ export const totalQuadArea = (layers: MeshLayers): number => {
 /** Index into `MESH_LAYERS`, i.e. the value `buildLayerLookup` stores. */
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
 
+// MeshConfig's readonly Set references are retained by callers, so cache only
+// the two identities that affect the layer table and keep the public builder fresh.
+const LAYER_LOOKUP_CACHE = new WeakMap<object, WeakMap<object, Uint8Array>>()
+
+const layerLookupForMesh = (config: MeshConfig): Uint8Array => {
+  let byWater = LAYER_LOOKUP_CACHE.get(config.waterBlockIds)
+  if (!byWater) {
+    byWater = new WeakMap<object, Uint8Array>()
+    LAYER_LOOKUP_CACHE.set(config.waterBlockIds, byWater)
+  }
+  const cached = byWater.get(config.transparentSolidBlockIds)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildLayerLookup(config)
+  byWater.set(config.transparentSolidBlockIds, lookup)
+  return lookup
+}
+
 /**
  * The layer a block id belongs to, read from the flattened table.
  *
@@ -714,7 +733,7 @@ export const meshChunk = (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
 ): MeshLayers => {
-  const lookup = buildLayerLookup(config)
+  const lookup = layerLookupForMesh(config)
   const plants = buildCrossPlantLookup(config)
   const fluids = buildFluidLookup(config)
   const yLimit = solidCeiling(chunk.blocks)
@@ -780,7 +799,7 @@ export const meshChunkNaive = (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
 ): MeshLayers => {
-  const lookup = buildLayerLookup(config)
+  const lookup = layerLookupForMesh(config)
   const plants = buildCrossPlantLookup(config)
   const fluids = buildFluidLookup(config)
   // CHUNK_HEIGHT, not `solidCeiling`: the oracle deliberately does no such
@@ -884,7 +903,7 @@ export const meshChunkRegion = (
       Math.min(CHUNK_SIZE, dirty.max[2] + 1),
     ],
   }
-  const lookup = buildLayerLookup(config)
+  const lookup = layerLookupForMesh(config)
   const plants = buildCrossPlantLookup(config)
   const fluids = buildFluidLookup(config)
   const { layers, push } = makeSink(

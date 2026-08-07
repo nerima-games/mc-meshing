@@ -179,7 +179,8 @@ export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer =
  * notes that "the resulting lookup is still faster than iterating a Set in the
  * inner meshing loop".
  *
- * Building it here is O(256) once per config, not per chunk and not per cell.
+ * Building it here is O(256). Internal mesh entry points reuse the result by
+ * Set identity, while this public builder returns a fresh table for each call.
  * Values are indices into `MESH_LAYERS`.
  */
 export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
@@ -189,6 +190,8 @@ export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
   }
   return lookup
 }
+
+const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
 
 /**
  * Does a block occlude the face of its neighbour?
@@ -200,4 +203,4 @@ export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
  * here, and shared by every face pass.
  */
 export const occludes = (lookup: Uint8Array, blockId: number): boolean =>
-  blockId !== AIR && lookup[blockId] === MESH_LAYERS.indexOf('opaque')
+  blockId !== AIR && lookup[blockId] === OPAQUE_LAYER

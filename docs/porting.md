@@ -75,7 +75,7 @@
 | 参照実装 | 本リポジトリ | 備考 |
 | --- | --- | --- |
 | `worker/.../meshing-worker-config.ts:7-13`（2 つの透過集合） | `domain/opacity.ts` の `MeshConfig` | boolean ではなく三値の `MeshLayer` としてモデル化（`design-notes.md` M-3） |
-| `rendering/.../greedy-meshing.ts:41-57`（`buildLookup` + `WeakMap`） | `domain/opacity.ts` の `buildLayerLookup` | `WeakMap` メモ化は未実装。config は呼び出し側が保持する想定 |
+| `rendering/.../greedy-meshing.ts:41-57`（`buildLookup` + `WeakMap`） | `domain/opacity.ts` の `buildLayerLookup` と `domain/mesh.ts` | `meshChunk*` は2つの Set identity でメモ化。公開 `buildLayerLookup` は単独利用向けに毎回新規生成し、config の集合は呼び出し側が保持・不変扱いする |
 | `rendering/.../greedy-meshing-passes.ts:148-152`（振り分け優先度） | `domain/opacity.ts` の `layerOfBlockId` | 入れ子三項 → 値としての `MESH_LAYER_PRIORITY` |
 | `rendering/.../greedy-meshing.ts:122-128`（面パスの呼び出し順） | `domain/faces.ts` の `FACES` | 順序を値として固定 |
 | `rendering/.../greedy-meshing-algorithms.ts` の各法線・role | `domain/faces.ts` の `FACES` | 表は `public-api.md` §3 |
