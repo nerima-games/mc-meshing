@@ -88,7 +88,7 @@
 | `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光とワールドオフセットを外した。側面 4 本は 1 つの関数に畳んだ |
 | `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植していない** | 符号化は所有者のもの。§3.2 |
 
-## 3. `ChunkView` と `FluidView` について —— 2 つの差し替え予定
+## 3. `ChunkView` と `FluidView` について —— 2 つの境界
 
 ### 3.1 `ChunkView`
 

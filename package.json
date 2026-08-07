@@ -52,7 +52,7 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "dependencies": {
-    "@nerima-games/mc-kernel": "0.2.16",
+    "@nerima-games/mc-kernel": "0.2.18",
     "effect": "^3.22.0"
   },
   "devDependencies": {
