@@ -863,6 +863,19 @@ export const meshChunkRegion = (
 ): RegionMesh => {
   const dirty = normalizeRegion(dirtyRegion)
   const empty = dirty.min.some((value, axis) => value >= (dirty.max[axis] ?? value))
+  if (empty) {
+    return {
+      dirtyRegion: dirty,
+      ownedRegion: dirty,
+      layers: {
+        opaque: [],
+        water: [],
+        transparentSolid: [],
+        crossPlants: [],
+        fluids: [],
+      },
+    }
+  }
   const owned: MeshRegion = empty
     ? dirty
     : {
