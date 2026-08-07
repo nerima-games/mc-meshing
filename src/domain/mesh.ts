@@ -866,62 +866,58 @@ export const meshChunkRegion = (
   if (empty) {
     return {
       dirtyRegion: dirty,
-      ownedRegion: dirty,
       layers: {
-        opaque: [],
-        water: [],
-        transparentSolid: [],
         crossPlants: [],
         fluids: [],
+        opaque: [],
+        transparentSolid: [],
+        water: [],
       },
+      ownedRegion: dirty,
     }
   }
-  const owned: MeshRegion = empty
-    ? dirty
-    : {
-        min: [Math.max(0, dirty.min[0] - 1), Math.max(0, dirty.min[1] - 1), Math.max(0, dirty.min[2] - 1)],
-        max: [
-          Math.min(CHUNK_SIZE, dirty.max[0] + 1),
-          Math.min(CHUNK_HEIGHT, dirty.max[1] + 1),
-          Math.min(CHUNK_SIZE, dirty.max[2] + 1),
-        ],
-      }
+  const owned: MeshRegion = {
+    min: [Math.max(0, dirty.min[0] - 1), Math.max(0, dirty.min[1] - 1), Math.max(0, dirty.min[2] - 1)],
+    max: [
+      Math.min(CHUNK_SIZE, dirty.max[0] + 1),
+      Math.min(CHUNK_HEIGHT, dirty.max[1] + 1),
+      Math.min(CHUNK_SIZE, dirty.max[2] + 1),
+    ],
+  }
   const lookup = buildLayerLookup(config)
   const plants = buildCrossPlantLookup(config)
   const fluids = buildFluidLookup(config)
   const { layers, push } = makeSink(
     lookup,
-    empty ? [] : meshCrossPlants(chunk, plants, owned.max[1], owned),
-    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, owned.max[1], owned),
+    meshCrossPlants(chunk, plants, owned.max[1], owned),
+    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, owned.max[1], owned),
   )
 
-  if (!empty) {
-    for (const face of FACES) {
-      for (let lx = owned.min[0]; lx < owned.max[0]; lx += 1) {
-        for (let lz = owned.min[2]; lz < owned.max[2]; lz += 1) {
-          for (let y = owned.min[1]; y < owned.max[1]; y += 1) {
-            const blockId = getBlock(chunk.blocks, lx, y, lz)
-            if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) continue
-            const neighbourId = getBlockAcrossBoundary(
-              chunk,
-              neighbours,
-              lx + face.nx,
-              y + face.ny,
-              lz + face.nz,
-            )
-            if (!isFaceExposed(lookup, plants, blockId, neighbourId)) continue
-            push({
-              blockId,
-              direction: face.direction,
-              role: face.role,
-              lx,
-              y,
-              lz,
-              width: 1,
-              height: 1,
-              ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-            })
-          }
+  for (const face of FACES) {
+    for (let lx = owned.min[0]; lx < owned.max[0]; lx += 1) {
+      for (let lz = owned.min[2]; lz < owned.max[2]; lz += 1) {
+        for (let y = owned.min[1]; y < owned.max[1]; y += 1) {
+          const blockId = getBlock(chunk.blocks, lx, y, lz)
+          if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) continue
+          const neighbourId = getBlockAcrossBoundary(
+            chunk,
+            neighbours,
+            lx + face.nx,
+            y + face.ny,
+            lz + face.nz,
+          )
+          if (!isFaceExposed(lookup, plants, blockId, neighbourId)) continue
+          push({
+            blockId,
+            direction: face.direction,
+            role: face.role,
+            lx,
+            y,
+            lz,
+            width: 1,
+            height: 1,
+            ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
+          })
         }
       }
     }
