@@ -7,14 +7,12 @@
 
 ## 依存
 
-`effect` のみ。`@nerima-games/*` のどのリポジトリにも依存しない。
-
-将来的には `mc-kernel` に依存する（`Chunk` 型・能力フラグ）。
-現時点で宣言していないのは、まだ何も publish されていないためである
-（bottom-up に publish してから pin する方式）。
+`effect` と `@nerima-games/mc-kernel` に依存する。`Chunk` 型と能力フラグは
+mc-kernel が所有し、`chunkViewOf` が kernel の可変高さチャンクをメッシング専用の
+固定高さビューへ変換する。
 意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
 （org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
-`.oxlintrc.json` の `no-restricted-imports`（Tier1: `@nerima-games/*` への依存を一切禁止）である。
+`.oxlintrc.json` の `no-restricted-imports`（Tier1: `mc-kernel` 以外の `@nerima-games/*` への依存を禁止）である。
 
 **Three.js には依存しない。永久に。**
 参照実装は `packages/world` の Three.js import をゼロに保っており（再検証済み）、
@@ -144,8 +142,8 @@ for (const quad of fluids) {
   故障ではなく**吸収**である。`renderDistance = 4` で LOD 1 が買うのは quad の約 1.2% であり、
   その代金は約 11 px の水平方向のずれである —— 4 / 8 という定数どころか
   LOD 1 という段そのものが疑わしい。判断は mc-render のもの（`responsibility.md` §3.4 / §3.5）。
-- **`ChunkView` はローカルな構造型。** 本来 `Chunk` を所有するのは mc-kernel だが、
-  まだ publish されていないので必要最小限の形だけ宣言してある。
+- **`ChunkView` はメッシング専用の固定高さビュー。** `Chunk` を所有するのは mc-kernel であり、
+  `chunkViewOf` が境界で高さを検証して変換する。異なる高さは暗黙に切り詰めたりゼロ埋めしたりしない。
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
 - **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）。

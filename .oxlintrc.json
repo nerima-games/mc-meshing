@@ -127,7 +127,7 @@
             // DEPENDENCY_POLICY.md §5, which already avoid lookahead) is the working equivalent:
             // every `@nerima-games/*` package except the universally-exempt `mc-kernel`.
             "regex": "^@nerima-games/(mc-noise|mc-physics|mc-save|mc-audio|mc-worldgen|mc-sim|mc-render|mc-playground-kit|mx-gameplay|mx-redstone|mx-ui|mx-multiplayer|mc-compose|mc-dev-meta)(/.*)?$",
-            "message": "mc-meshing is a Tier1 library (DEPENDENCY_POLICY.md) and must not depend on any other @nerima-games/* package. mc-kernel is universally importable and exempt, but mc-meshing does not currently declare it as a dependency either (zero internal deps, per package.json#dependencies)."
+            "message": "mc-meshing is a Tier1 library (DEPENDENCY_POLICY.md) and may depend only on the universally exempt mc-kernel within @nerima-games/*. mc-kernel is declared directly in package.json; every other @nerima-games/* package is forbidden."
           }
         ]
       }
