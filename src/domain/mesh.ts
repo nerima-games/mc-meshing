@@ -279,6 +279,42 @@ const layerLookupForMesh = (config: MeshConfig): Uint8Array => {
   return lookup
 }
 
+// Optional shape tables are derived from readonly collection identities too;
+// Mesh code only reads these private tables, so the empty tables can be shared.
+const CROSS_PLANT_LOOKUP_CACHE = new WeakMap<object, Uint8Array>()
+const EMPTY_CROSS_PLANT_LOOKUP = new Uint8Array(MAX_BLOCK_ID + 1)
+
+const crossPlantLookupForMesh = (config: MeshConfig): Uint8Array => {
+  const blockIds = config.crossPlantBlockIds
+  if (blockIds === undefined) {
+    return EMPTY_CROSS_PLANT_LOOKUP
+  }
+  const cached = CROSS_PLANT_LOOKUP_CACHE.get(blockIds)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildCrossPlantLookup(config)
+  CROSS_PLANT_LOOKUP_CACHE.set(blockIds, lookup)
+  return lookup
+}
+
+const FLUID_LOOKUP_CACHE = new WeakMap<object, Uint8Array>()
+const EMPTY_FLUID_LOOKUP = new Uint8Array(MAX_BLOCK_ID + 1)
+
+const fluidLookupForMesh = (config: MeshConfig): Uint8Array => {
+  const maxLevels = config.fluidMaxLevels
+  if (maxLevels === undefined) {
+    return EMPTY_FLUID_LOOKUP
+  }
+  const cached = FLUID_LOOKUP_CACHE.get(maxLevels)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildFluidLookup(config)
+  FLUID_LOOKUP_CACHE.set(maxLevels, lookup)
+  return lookup
+}
+
 /**
  * The layer a block id belongs to, read from the flattened table.
  *
@@ -734,8 +770,8 @@ export const meshChunk = (
   config: MeshConfig,
 ): MeshLayers => {
   const lookup = layerLookupForMesh(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
+  const plants = crossPlantLookupForMesh(config)
+  const fluids = fluidLookupForMesh(config)
   const yLimit = solidCeiling(chunk.blocks)
   // Plants and fluid surfaces are meshed BEFORE the sink is built, because the
   // sink owns the result object and both are part of it. Both are bounded by the
@@ -800,8 +836,8 @@ export const meshChunkNaive = (
   config: MeshConfig,
 ): MeshLayers => {
   const lookup = layerLookupForMesh(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
+  const plants = crossPlantLookupForMesh(config)
+  const fluids = fluidLookupForMesh(config)
   // CHUNK_HEIGHT, not `solidCeiling`: the oracle deliberately does no such
   // optimisation, so that `solidCeiling` itself is something the property tests
   // can catch being wrong. The plates and the fluid surfaces are identical
@@ -904,8 +940,8 @@ export const meshChunkRegion = (
     ],
   }
   const lookup = layerLookupForMesh(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
+  const plants = crossPlantLookupForMesh(config)
+  const fluids = fluidLookupForMesh(config)
   const { layers, push } = makeSink(
     lookup,
     meshCrossPlants(chunk, plants, owned.max[1], owned),
