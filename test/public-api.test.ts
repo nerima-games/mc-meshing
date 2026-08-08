@@ -15,7 +15,7 @@ describe('public API surface', () => {
   it.effect('re-exports every value mc-render is expected to import', () =>
     Effect.sync(() => {
       const expected = [
-        // chunk-view
+        // Chunk-view
         'AIR',
         'CHUNK_SIZE',
         'CHUNK_HEIGHT',
@@ -24,7 +24,7 @@ describe('public API surface', () => {
         'emptyChunk',
         'getBlock',
         'getBlockAcrossBoundary',
-        // faces
+        // Faces
         'FACES',
         'FACE_DIRECTIONS',
         'VERTICES_PER_QUAD',
@@ -32,13 +32,13 @@ describe('public API surface', () => {
         'oppositeDirection',
         'faceOf',
         'tangentAxes',
-        // lod — mc-render decides WHICH level a chunk is at and imports the
-        // vocabulary for it from here; see docs/responsibility.md §3.4.
+        // Lod — mc-render decides WHICH level a chunk is at and imports the
+        // Vocabulary for it from here; see docs/responsibility.md §3.4.
         'LOD_LEVELS',
         'LodLevelSchema',
         'packQuadKey',
         'simplifyMesh',
-        // opacity
+        // Opacity
         'MESH_LAYERS',
         'MESH_LAYER_PRIORITY',
         'MAX_BLOCK_ID',
@@ -46,15 +46,15 @@ describe('public API surface', () => {
         'layerOfBlockId',
         'buildLayerLookup',
         'occludes',
-        // mesh
+        // Mesh
         'meshChunk',
         'totalQuadCount',
         // Added with the greedy merge. `totalQuadArea` is the quantity merging
-        // must NOT change, and mc-render wants it for the same reason this
-        // repository's tests do — a quad count stopped being a face count the
-        // day quads stopped being 1x1. `meshChunkNaive` is the oracle the merge
-        // is checked against; see domain/mesh.ts on why it is public rather
-        // than copied into test/.
+        // Must NOT change, and mc-render wants it for the same reason this
+        // Repository's tests do — a quad count stopped being a face count the
+        // Day quads stopped being 1x1. `meshChunkNaive` is the oracle the merge
+        // Is checked against; see domain/mesh.ts on why it is public rather
+        // Than copied into test/.
         'totalQuadArea',
         'meshChunkNaive',
         'meshChunkRegion',
@@ -71,8 +71,8 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
   it.effect('the transparency sets are NATIVE Set, never Effect HashSet', () =>
     Effect.sync(() => {
       // ~400k membership tests per chunk. Effect's HashSet compares by
-      // structural equality through Equal/Hash dispatch, which is orders of
-      // magnitude slower per lookup. This is measured, not preferred.
+      // Structural equality through Equal/Hash dispatch, which is orders of
+      // Magnitude slower per lookup. This is measured, not preferred.
       expect(meshing.EMPTY_MESH_CONFIG.waterBlockIds).toBeInstanceOf(Set)
       expect(meshing.EMPTY_MESH_CONFIG.transparentSolidBlockIds).toBeInstanceOf(Set)
     }),
@@ -96,7 +96,7 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
         [0, 0, -1],
       ])
       // A grass block needs different textures on top, sides and bottom, and
-      // nothing finer than that is ever needed.
+      // Nothing finer than that is ever needed.
       expect(meshing.FACES.map((face) => face.role)).toStrictEqual([
         'side',
         'side',
@@ -120,8 +120,8 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
   it.effect('the layer lookup table covers every representable block id', () =>
     Effect.sync(() => {
       const config = {
-        waterBlockIds: new Set([2]),
         transparentSolidBlockIds: new Set([3, 255]),
+        waterBlockIds: new Set([2]),
       }
       const lookup = meshing.buildLayerLookup(config)
       expect(lookup.length).toBe(meshing.MAX_BLOCK_ID + 1)
@@ -134,10 +134,10 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
   it.effect('only fully opaque non-air blocks occlude their neighbours', () =>
     Effect.sync(() => {
       // If water or glass occluded, the underside of a lake and the far pane of
-      // a glass box would not render — the classic "world is inside out" bug.
+      // A glass box would not render — the classic "world is inside out" bug.
       const config = {
-        waterBlockIds: new Set([2]),
         transparentSolidBlockIds: new Set([3]),
+        waterBlockIds: new Set([2]),
       }
       const lookup = meshing.buildLayerLookup(config)
       expect(meshing.occludes(lookup, meshing.AIR)).toBe(false)
