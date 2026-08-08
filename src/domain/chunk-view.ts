@@ -1,10 +1,8 @@
 /**
  * The chunk as meshing sees it, and the hot-path block read.
  *
- * FIRST CUT (叩き台). `ChunkView` is a local structural type: mc-kernel owns the
- * real `Chunk` (plan.md §3.1) but nothing is published yet, so meshing declares
- * the minimum shape it needs. Replacing this with kernel's `Chunk` is a
- * one-line change once mc-kernel ships — see docs/porting.md.
+ * `ChunkView` is the renderer-facing fixed-height view. mc-kernel owns the
+ * source `Chunk`; use `chunkViewOf` from `kernel-adapter.ts` at that boundary.
  */
 
 /** Horizontal extent of a chunk, in blocks. */
@@ -109,6 +107,15 @@ export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
 export const emptyChunk = (): ChunkView => ({ blocks: new Uint8Array(BLOCKS_PER_CHUNK) })
 
+/** First valid index along any chunk-local axis (`lx`, `y`, or `lz`). */
+const FIRST_LOCAL_INDEX = 0
+
+/** `CHUNK_SIZE` is a count, so the last valid index is one less than it. */
+const LAST_INDEX_OFFSET = 1
+
+/** Last valid index along a horizontal chunk-local axis (`lx` or `lz`). */
+const LAST_LOCAL_INDEX = CHUNK_SIZE - LAST_INDEX_OFFSET
+
 /**
  * ---------------------------------------------------------------------------
  * HOT PATH. Bounds checks are INLINED and there is no `Option`. (plan.md §5.2)
@@ -134,7 +141,14 @@ export const emptyChunk = (): ChunkView => ({ blocks: new Uint8Array(BLOCKS_PER_
  * `meshing-get-block-is-allocation-free`.
  */
 export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number => {
-  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) {
+  if (
+    lx < FIRST_LOCAL_INDEX ||
+    lx >= CHUNK_SIZE ||
+    y < FIRST_LOCAL_INDEX ||
+    y >= CHUNK_HEIGHT ||
+    lz < FIRST_LOCAL_INDEX ||
+    lz >= CHUNK_SIZE
+  ) {
     return AIR
   }
   return blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE] ?? AIR
@@ -167,6 +181,72 @@ export type ChunkNeighbours = {
  * 2 * (16 * 256) * 2 cells rather than 16 * 256 * 16, so it is not on the same
  * hot path as `getBlock` and can afford the branch.
  */
+/**
+ * Read one block from a specific optional neighbour, or `AIR` when that
+ * neighbour is not loaded.
+ *
+ * Every branch of `getBlockAcrossBoundary` reduces to this same shape —
+ * "is there a chunk here, and if so what is at this local coordinate in it"
+ * — so it is factored out once rather than repeated per neighbour.
+ */
+const neighbourBlock = (neighbour: ChunkView | undefined, lx: number, y: number, lz: number): number => {
+  if (neighbour) {
+    return getBlock(neighbour.blocks, lx, y, lz)
+  }
+  return AIR
+}
+
+/**
+ * Resolve a coordinate that has crossed BOTH horizontal boundaries at once —
+ * one of the four diagonal neighbours.
+ *
+ * Returns `null`, not a `MeshLayer`-style sentinel, when `lx`/`lz` are not
+ * both out of range, so `getBlockAcrossBoundary` falls through to the
+ * single-axis cases. `null` rather than `undefined` because this file's
+ * `no-undefined` rule bans the latter identifier; the two are otherwise
+ * interchangeable here.
+ */
+const getBlockAtCorner = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): number | null => {
+  if (lx < FIRST_LOCAL_INDEX && lz < FIRST_LOCAL_INDEX) {
+    return neighbourBlock(neighbours.xNegZNeg, LAST_LOCAL_INDEX, y, LAST_LOCAL_INDEX)
+  }
+  if (lx < FIRST_LOCAL_INDEX && lz >= CHUNK_SIZE) {
+    return neighbourBlock(neighbours.xNegZPos, LAST_LOCAL_INDEX, y, FIRST_LOCAL_INDEX)
+  }
+  if (lx >= CHUNK_SIZE && lz < FIRST_LOCAL_INDEX) {
+    return neighbourBlock(neighbours.xPosZNeg, FIRST_LOCAL_INDEX, y, LAST_LOCAL_INDEX)
+  }
+  if (lx >= CHUNK_SIZE && lz >= CHUNK_SIZE) {
+    return neighbourBlock(neighbours.xPosZPos, FIRST_LOCAL_INDEX, y, FIRST_LOCAL_INDEX)
+  }
+  return null
+}
+
+/**
+ * Resolve a coordinate that has crossed exactly ONE horizontal boundary —
+ * one of the four direct (non-diagonal) neighbours.
+ *
+ * Returns `null` when `lx`/`lz` are both in range, so `getBlockAcrossBoundary`
+ * falls through to reading the chunk itself. Only reached after
+ * `getBlockAtCorner` has already ruled out both axes being out of range at
+ * once, so at most one of the four checks below can match.
+ */
+const getBlockAtEdge = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): number | null => {
+  if (lx < FIRST_LOCAL_INDEX) {
+    return neighbourBlock(neighbours.xNeg, LAST_LOCAL_INDEX, y, lz)
+  }
+  if (lx >= CHUNK_SIZE) {
+    return neighbourBlock(neighbours.xPos, FIRST_LOCAL_INDEX, y, lz)
+  }
+  if (lz < FIRST_LOCAL_INDEX) {
+    return neighbourBlock(neighbours.zNeg, lx, y, LAST_LOCAL_INDEX)
+  }
+  if (lz >= CHUNK_SIZE) {
+    return neighbourBlock(neighbours.zPos, lx, y, FIRST_LOCAL_INDEX)
+  }
+  return null
+}
+
 export const getBlockAcrossBoundary = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
@@ -174,34 +254,16 @@ export const getBlockAcrossBoundary = (
   y: number,
   lz: number,
 ): number => {
-  if (y < 0 || y >= CHUNK_HEIGHT) {
+  if (y < FIRST_LOCAL_INDEX || y >= CHUNK_HEIGHT) {
     return AIR
   }
-  if (lx < 0 && lz < 0) {
-    return neighbours.xNegZNeg === undefined
-      ? AIR
-      : getBlock(neighbours.xNegZNeg.blocks, CHUNK_SIZE - 1, y, CHUNK_SIZE - 1)
+  const corner = getBlockAtCorner(neighbours, lx, y, lz)
+  if (corner !== null) {
+    return corner
   }
-  if (lx < 0 && lz >= CHUNK_SIZE) {
-    return neighbours.xNegZPos === undefined ? AIR : getBlock(neighbours.xNegZPos.blocks, CHUNK_SIZE - 1, y, 0)
-  }
-  if (lx >= CHUNK_SIZE && lz < 0) {
-    return neighbours.xPosZNeg === undefined ? AIR : getBlock(neighbours.xPosZNeg.blocks, 0, y, CHUNK_SIZE - 1)
-  }
-  if (lx >= CHUNK_SIZE && lz >= CHUNK_SIZE) {
-    return neighbours.xPosZPos === undefined ? AIR : getBlock(neighbours.xPosZPos.blocks, 0, y, 0)
-  }
-  if (lx < 0) {
-    return neighbours.xNeg === undefined ? AIR : getBlock(neighbours.xNeg.blocks, CHUNK_SIZE - 1, y, lz)
-  }
-  if (lx >= CHUNK_SIZE) {
-    return neighbours.xPos === undefined ? AIR : getBlock(neighbours.xPos.blocks, 0, y, lz)
-  }
-  if (lz < 0) {
-    return neighbours.zNeg === undefined ? AIR : getBlock(neighbours.zNeg.blocks, lx, y, CHUNK_SIZE - 1)
-  }
-  if (lz >= CHUNK_SIZE) {
-    return neighbours.zPos === undefined ? AIR : getBlock(neighbours.zPos.blocks, lx, y, 0)
+  const edge = getBlockAtEdge(neighbours, lx, y, lz)
+  if (edge !== null) {
+    return edge
   }
   return getBlock(chunk.blocks, lx, y, lz)
 }

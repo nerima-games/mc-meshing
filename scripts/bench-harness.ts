@@ -1,5 +1,5 @@
 /**
- * bench-harness.ts — measurement, medians, and baseline comparison.
+ * Bench-harness.ts — measurement, medians, and baseline comparison.
  *
  * Ported from the reference implementation's `scripts/bench-meshing.ts`,
  * `bench-light.ts` and `bench-terrain.ts`, which were hand-rolled around
@@ -51,7 +51,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 
 /** The only raw clock read in this repository. See the header. */
-const now = (): number => performance.now() // mc-kernel-allow-time-source: benchmark harness
+const now = (): number => performance.now() // Mc-kernel-allow-time-source: benchmark harness
 
 /**
  * Chunks meshed on initial load at renderDistance=4, i.e. (2*4+1)^2.
@@ -210,13 +210,13 @@ export const checkGuards = (
     const recorded = baseline?.guards[guard.name]
     const applied = guard.tolerance ?? tolerance
     if (recorded === undefined) {
-      return { label: guard.name, kind: 'guard' as const, observed, baseline: undefined, status: 'new' as const }
+      return { baseline: undefined, kind: 'guard' as const, label: guard.name, observed, status: 'new' as const }
     }
     return {
-      label: guard.name,
-      kind: 'guard' as const,
-      observed,
       baseline: recorded,
+      kind: 'guard' as const,
+      label: guard.name,
+      observed,
       status: observed >= recorded / applied ? ('ok' as const) : ('regressed' as const),
     }
   })
@@ -231,13 +231,13 @@ export const checkWorkloads = (
     const observed = workload.msPerUnit / yardstickMs
     const recorded = baseline?.workloads[workload.name]
     if (recorded === undefined) {
-      return { label: workload.name, kind: 'workload' as const, observed, baseline: undefined, status: 'new' as const }
+      return { baseline: undefined, kind: 'workload' as const, label: workload.name, observed, status: 'new' as const }
     }
     return {
-      label: workload.name,
-      kind: 'workload' as const,
-      observed,
       baseline: recorded,
+      kind: 'workload' as const,
+      label: workload.name,
+      observed,
       status: observed <= recorded * tolerance ? ('ok' as const) : ('regressed' as const),
     }
   })
@@ -264,11 +264,10 @@ export const formatGuard = (guard: Guard): string =>
  * one-time cost multiplied by 81 would be a lie).
  */
 export const formatWorkload = (workload: Workload): string =>
-  `  ${pad(workload.name, 44)} ${workload.msPerUnit.toFixed(4)} ms/${workload.unit}` +
-  (workload.unit === 'chunk'
+  `  ${pad(workload.name, 44)} ${workload.msPerUnit.toFixed(4)} ms/${workload.unit}${workload.unit === 'chunk'
     ? `   x${String(CHUNKS_ON_LOAD)} = ${(workload.msPerUnit * CHUNKS_ON_LOAD).toFixed(1)} ms`
-    : '') +
-  (workload.detail === undefined ? '' : `   (${workload.detail})`)
+    : '' 
+  }${workload.detail === undefined ? '' : `   (${workload.detail})`}`
 
 export const formatCheck = (result: CheckResult): string => {
   const marker = result.status === 'ok' ? 'ok       ' : result.status === 'new' ? 'NEW      ' : 'REGRESSED'

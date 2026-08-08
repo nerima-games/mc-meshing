@@ -93,17 +93,17 @@
  */
 import {
   AIR,
-  blockIndex,
   CHUNK_SIZE,
-  getBlock,
-  getBlockAcrossBoundary,
   type ChunkNeighbours,
   type ChunkView,
   type FluidView,
+  blockIndex,
+  getBlock,
+  getBlockAcrossBoundary,
 } from './chunk-view'
+import { MAX_BLOCK_ID, type MeshConfig, occludes } from './opacity'
 import { type FaceDirection } from './faces'
 import { isCrossPlant } from './plant-mesh'
-import { MAX_BLOCK_ID, occludes, type MeshConfig } from './opacity'
 
 /**
  * How high a SOURCE cell's surface sits, as a fraction of the cell.
@@ -128,10 +128,52 @@ import { MAX_BLOCK_ID, occludes, type MeshConfig } from './opacity'
  * exactly — and for lava (`maxLevel` 3) it is a real 1/8-cell step. Nothing in
  * the reference remarks on it.
  */
-export const SOURCE_SURFACE_HEIGHT = 14 / 16
+/** Numerator of the `SOURCE_SURFACE_HEIGHT` fraction — see that constant. */
+const SOURCE_SURFACE_HEIGHT_NUMERATOR = 14
+/** Denominator of the `SOURCE_SURFACE_HEIGHT` fraction — sixteenths of a cell. */
+const SOURCE_SURFACE_HEIGHT_DENOMINATOR = 16
+export const SOURCE_SURFACE_HEIGHT = SOURCE_SURFACE_HEIGHT_NUMERATOR / SOURCE_SURFACE_HEIGHT_DENOMINATOR
 
 /** Returned instead of a height when a cell holds no fluid of the kind asked for. */
 const NO_FLUID = -1
+
+/**
+ * Converts a highest-valid-index quantity (`MAX_BLOCK_ID`, or a fluid's
+ * `maxLevel`) into a count, and back. The same "count = highest index + 1"
+ * arithmetic is reused three ways below: sizing the lookup table, encoding a
+ * `maxLevel` into its byte (so a raw `0` can mean "not a fluid" rather than
+ * colliding with a real `maxLevel` of 0), and decoding that byte back.
+ */
+const INDEX_TO_COUNT_OFFSET = 1
+
+/**
+ * The lookup table's "not a fluid" byte value, and the value an absent or
+ * zeroed simulation byte decodes as: no level, not a source, not falling.
+ */
+const FLUID_BYTE_UNSET = 0
+
+/** One full cell of fluid, as a fraction — the ceiling `heightForLevel` never drops below. */
+const FULL_HEIGHT = 1
+
+/** The lowest valid index along any chunk axis (x, y, or z). */
+const ZERO_INDEX = 0
+
+/** The offset from a cell's near edge to its far edge along one axis. */
+const CELL_SPAN = 1
+
+/** The per-iteration increment for every counting `for` loop in this file. */
+const LOOP_STEP = 1
+
+/**
+ * Corner averaging looks at the 2 columns spanning each side of a corner
+ * (`cornerHeight`); this is the back-offset that begins that span.
+ */
+const CORNER_WINDOW_START_OFFSET = 1
+
+/** The X or Z axis flag for the near (this cell's own) side of a top-patch corner. */
+const CORNER_NEAR = 0
+/** The X or Z axis flag for the far (next cell's) side of a top-patch corner. */
+const CORNER_FAR = 1
 
 /**
  * The one empty result, shared by every chunk that has no fluid configured.
@@ -208,18 +250,28 @@ export type FluidQuad = {
  * it as the resulting behaviour rather than defending a guard.
  */
 export const buildFluidLookup = (config: MeshConfig): Uint8Array => {
-  const lookup = new Uint8Array(MAX_BLOCK_ID + 1)
+  const lookup = new Uint8Array(MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET)
   for (const [blockId, maxLevel] of config.fluidMaxLevels ?? []) {
-    lookup[blockId] = maxLevel + 1
+    lookup[blockId] = maxLevel + INDEX_TO_COUNT_OFFSET
   }
   return lookup
 }
 
-/** Is this id meshed as a fluid volume rather than as a cube? */
-export const isFluidBlock = (lookup: Uint8Array, blockId: number): boolean => (lookup[blockId] ?? 0) !== 0
+/**
+ * Is this id meshed as a fluid volume rather than as a cube?
+ *
+ * NO `?? FALLBACK` ON THE READ. `lookup` is always `buildFluidLookup`'s
+ * `MAX_BLOCK_ID + 1`-entry table and, as at every other call site in this
+ * repository, `blockId` is a value that came out of a `Uint8Array`
+ * (`getBlock`/`getBlockAcrossBoundary`) or is itself a configured fluid id
+ * traced back to one — so it is always in `[0, MAX_BLOCK_ID]` and `lookup[blockId]`
+ * is never `undefined`. The asserted read is `noUncheckedIndexedAccess`
+ * satisfied by proof, the same move `domain/mesh.ts`'s `layerAt` makes.
+ */
+export const isFluidBlock = (lookup: Uint8Array, blockId: number): boolean => lookup[blockId]! !== FLUID_BYTE_UNSET
 
-/** The injected maximum level for a fluid id. Only meaningful when `isFluidBlock`. */
-const maxLevelOf = (lookup: Uint8Array, blockId: number): number => (lookup[blockId] ?? 1) - 1
+/** The injected maximum level for a fluid id. Only meaningful when `isFluidBlock`. See `isFluidBlock` for why the read is asserted rather than defaulted. */
+const maxLevelOf = (lookup: Uint8Array, blockId: number): number => lookup[blockId]! - INDEX_TO_COUNT_OFFSET
 
 /**
  * Surface height of one cell, as a fraction of the cell.
@@ -234,9 +286,13 @@ const heightForLevel = (level: number, maxLevel: number, source: boolean): numbe
   if (source) {
     return SOURCE_SURFACE_HEIGHT
   }
-  const steps = maxLevel + 1
-  const filled = 1 - level / steps
-  return filled < 1 / steps ? 1 / steps : filled
+  const steps = maxLevel + INDEX_TO_COUNT_OFFSET
+  const filled = FULL_HEIGHT - level / steps
+  const floor = FULL_HEIGHT / steps
+  if (filled < floor) {
+    return floor
+  }
+  return filled
 }
 
 /**
@@ -259,16 +315,28 @@ type FluidContext = {
 }
 
 /** Fluid level of one in-range cell. A missing `FluidView` reads as all zeroes. */
-const levelIn = (fluid: FluidView | undefined, index: number): number =>
-  fluid === undefined ? 0 : (fluid.levels[index] ?? 0)
+const levelIn = (fluid: FluidView | undefined, index: number): number => {
+  if (!fluid) {
+    return FLUID_BYTE_UNSET
+  }
+  return fluid.levels[index] ?? FLUID_BYTE_UNSET
+}
 
 /** Is one in-range cell a source? A missing `FluidView` reads as all zeroes. */
-const sourceIn = (fluid: FluidView | undefined, index: number): boolean =>
-  fluid !== undefined && (fluid.sources[index] ?? 0) !== 0
+const sourceIn = (fluid: FluidView | undefined, index: number): boolean => {
+  if (!fluid) {
+    return false
+  }
+  return (fluid.sources[index] ?? FLUID_BYTE_UNSET) !== FLUID_BYTE_UNSET
+}
 
 /** Is one in-range cell an explicitly falling stream? Missing legacy state is not falling. */
-const fallingIn = (fluid: FluidView | undefined, index: number): boolean =>
-  fluid !== undefined && (fluid.falling?.[index] ?? 0) !== 0
+const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
+  if (!fluid) {
+    return false
+  }
+  return (fluid.falling?.[index] ?? FLUID_BYTE_UNSET) !== FLUID_BYTE_UNSET
+}
 
 /**
  * Height of `wantId`'s fluid in one cell of one chunk, or `NO_FLUID`.
@@ -291,19 +359,19 @@ const heightIn = (
   wantId: number,
 ): number => {
   // NO SEPARATE Y-RANGE CHECK, and that is the third time this repository has
-  // reached this conclusion rather than a new opinion. `getBlock` already returns
-  // the `AIR` sentinel for a `y` outside the chunk, and `wantId` is a fluid id
-  // and therefore never `AIR`, so the comparison below answers the out-of-range
-  // case correctly on its own. The explicit `if (y < 0 || y >= CHUNK_HEIGHT)`
-  // guard was written, and the coverage report showed both its lines permanently
-  // unreached — `buildCrossPlantLookup` lost its bounds check to exactly this
+  // Reached this conclusion rather than a new opinion. `getBlock` already returns
+  // The `AIR` sentinel for a `y` outside the chunk, and `wantId` is a fluid id
+  // And therefore never `AIR`, so the comparison below answers the out-of-range
+  // Case correctly on its own. The explicit `if (y < 0 || y >= CHUNK_HEIGHT)`
+  // Guard was written, and the coverage report showed both its lines permanently
+  // Unreached — `buildCrossPlantLookup` lost its bounds check to exactly this
   // (M-11) and `domain/lod.ts` refused the reference's degenerate-span guard on
-  // the same grounds. An unreachable branch is an uncoverable line and a claim no
-  // test can support.
+  // The same grounds. An unreachable branch is an uncoverable line and a claim no
+  // Test can support.
   //
   // The caller relies on this: `surfaceHeightOfColumn` probes `y + 1`, which is
   // `CHUNK_HEIGHT` for fluid on the world's top row. `test/fluid-mesh.test.ts`
-  // pins that case rather than a guard.
+  // Pins that case rather than a guard.
   if (getBlock(view.blocks, lx, y, lz) !== wantId) {
     return NO_FLUID
   }
@@ -330,6 +398,81 @@ const heightIn = (
  * diagonal is not loaded, it contributes no fluid under the same open-boundary
  * rule as a missing direct neighbour.
  */
+/** The last valid local coordinate along either axis of a chunk. */
+const CHUNK_MAX_INDEX = CHUNK_SIZE - INDEX_TO_COUNT_OFFSET
+
+/** Height in one specific neighbour chunk, or `NO_FLUID` when that neighbour is not loaded. */
+const heightInNeighbour = (
+  neighbour: ChunkView | undefined,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  wantId: number,
+): number => {
+  if (!neighbour) {
+    return NO_FLUID
+  }
+  return heightIn(neighbour, context, lx, y, lz, wantId)
+}
+
+/**
+ * `heightAcross` when BOTH axes are out of range: picks the diagonal neighbour.
+ *
+ * Only called once the caller has confirmed both `lx` and `lz` are out of the
+ * chunk, so within each branch below the remaining possibilities have already
+ * been excluded by the branches above it — the same four-way split the
+ * original if-chain made, just narrowed one condition at a time instead of
+ * spelling both conditions out on every line.
+ */
+const heightAcrossCorner = (
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  wantId: number,
+): number => {
+  if (lx < ZERO_INDEX && lz < ZERO_INDEX) {
+    return heightInNeighbour(neighbours.xNegZNeg, context, CHUNK_MAX_INDEX, y, CHUNK_MAX_INDEX, wantId)
+  }
+  if (lx < ZERO_INDEX) {
+    return heightInNeighbour(neighbours.xNegZPos, context, CHUNK_MAX_INDEX, y, ZERO_INDEX, wantId)
+  }
+  if (lz < ZERO_INDEX) {
+    return heightInNeighbour(neighbours.xPosZNeg, context, ZERO_INDEX, y, CHUNK_MAX_INDEX, wantId)
+  }
+  return heightInNeighbour(neighbours.xPosZPos, context, ZERO_INDEX, y, ZERO_INDEX, wantId)
+}
+
+/**
+ * `heightAcross` when exactly ONE axis is out of range: picks the direct
+ * (non-diagonal) neighbour on that side.
+ *
+ * Only called once the caller has confirmed exactly one of `lx`/`lz` is out
+ * of the chunk, which is what lets the final branch fall through without
+ * re-checking `lz >= CHUNK_SIZE`: it is the only possibility left.
+ */
+const heightAcrossEdge = (
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  wantId: number,
+): number => {
+  if (lx < ZERO_INDEX) {
+    return heightInNeighbour(neighbours.xNeg, context, CHUNK_MAX_INDEX, y, lz, wantId)
+  }
+  if (lx >= CHUNK_SIZE) {
+    return heightInNeighbour(neighbours.xPos, context, ZERO_INDEX, y, lz, wantId)
+  }
+  if (lz < ZERO_INDEX) {
+    return heightInNeighbour(neighbours.zNeg, context, lx, y, CHUNK_MAX_INDEX, wantId)
+  }
+  return heightInNeighbour(neighbours.zPos, context, lx, y, ZERO_INDEX, wantId)
+}
+
 const heightAcross = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
@@ -339,45 +482,114 @@ const heightAcross = (
   lz: number,
   wantId: number,
 ): number => {
-  if (lx < 0 && lz < 0) {
-    return neighbours.xNegZNeg === undefined
-      ? NO_FLUID
-      : heightIn(neighbours.xNegZNeg, context, CHUNK_SIZE - 1, y, CHUNK_SIZE - 1, wantId)
+  const xOut = lx < ZERO_INDEX || lx >= CHUNK_SIZE
+  const zOut = lz < ZERO_INDEX || lz >= CHUNK_SIZE
+  if (xOut && zOut) {
+    return heightAcrossCorner(neighbours, context, lx, y, lz, wantId)
   }
-  if (lx < 0 && lz >= CHUNK_SIZE) {
-    return neighbours.xNegZPos === undefined
-      ? NO_FLUID
-      : heightIn(neighbours.xNegZPos, context, CHUNK_SIZE - 1, y, 0, wantId)
-  }
-  if (lx >= CHUNK_SIZE && lz < 0) {
-    return neighbours.xPosZNeg === undefined
-      ? NO_FLUID
-      : heightIn(neighbours.xPosZNeg, context, 0, y, CHUNK_SIZE - 1, wantId)
-  }
-  if (lx >= CHUNK_SIZE && lz >= CHUNK_SIZE) {
-    return neighbours.xPosZPos === undefined ? NO_FLUID : heightIn(neighbours.xPosZPos, context, 0, y, 0, wantId)
-  }
-  if (lx < 0) {
-    return neighbours.xNeg === undefined ? NO_FLUID : heightIn(neighbours.xNeg, context, CHUNK_SIZE - 1, y, lz, wantId)
-  }
-  if (lx >= CHUNK_SIZE) {
-    return neighbours.xPos === undefined ? NO_FLUID : heightIn(neighbours.xPos, context, 0, y, lz, wantId)
-  }
-  if (lz < 0) {
-    return neighbours.zNeg === undefined ? NO_FLUID : heightIn(neighbours.zNeg, context, lx, y, CHUNK_SIZE - 1, wantId)
-  }
-  if (lz >= CHUNK_SIZE) {
-    return neighbours.zPos === undefined ? NO_FLUID : heightIn(neighbours.zPos, context, lx, y, 0, wantId)
+  if (xOut || zOut) {
+    return heightAcrossEdge(neighbours, context, lx, y, lz, wantId)
   }
   return heightIn(chunk, context, lx, y, lz, wantId)
 }
 
+/** Unit step in the +X or +Z direction, for the offset tables below. */
+const AXIS_POSITIVE_STEP = 1
+/** Unit step in the -X or -Z direction, for the offset tables below. */
+const AXIS_NEGATIVE_STEP = -1
+/** No step along an axis, for the offset tables below. */
+const AXIS_NO_STEP = 0
+
 const FLOW_OFFSETS: ReadonlyArray<readonly [dx: number, dz: number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
+  [AXIS_POSITIVE_STEP, AXIS_NO_STEP],
+  [AXIS_NEGATIVE_STEP, AXIS_NO_STEP],
+  [AXIS_NO_STEP, AXIS_POSITIVE_STEP],
+  [AXIS_NO_STEP, AXIS_NEGATIVE_STEP],
 ]
+
+/** One full cell of vertical step, for probing and comparing against the cell below a neighbour. */
+const CELL_BELOW_STEP = 1
+/** No horizontal push at all — what a neighbour offset contributes when it is neither fluid nor an open ledge. */
+const NO_FLOW_CONTRIBUTION: readonly [number, number] = [AXIS_NO_STEP, AXIS_NO_STEP]
+
+/**
+ * The horizontal push one neighbour offset contributes to the current, or
+ * `NO_FLOW_CONTRIBUTION`.
+ *
+ * One iteration of the reference's flow accumulation loop, pulled out so the
+ * loop itself has nothing left to do but sum. A same-fluid neighbour
+ * contributes in proportion to how much lower its surface sits. A neighbour
+ * with no fluid of this kind only contributes when it is open air with the
+ * same fluid one cell below it — flow crossing a ledge rather than an
+ * unloaded or open boundary.
+ */
+/** Contribution when the neighbour itself holds the same fluid, in proportion to the surface drop. */
+const flowContributionFromNeighbour = (
+  here: number,
+  neighbourHeight: number,
+  dx: number,
+  dz: number,
+): readonly [number, number] => {
+  const drop = here - neighbourHeight
+  return [dx * drop, dz * drop]
+}
+
+/** Contribution when the neighbour is open air with the same fluid one cell below it — flow crossing a ledge. */
+const flowContributionFromLedge = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+  here: number,
+  dx: number,
+  dz: number,
+): readonly [number, number] => {
+  const neighbourId = getBlockAcrossBoundary(chunk, neighbours, lx + dx, y, lz + dz)
+  if (neighbourId !== AIR) {
+    return NO_FLOW_CONTRIBUTION
+  }
+  const belowHeight = heightAcross(chunk, neighbours, context, lx + dx, y - CELL_BELOW_STEP, lz + dz, blockId)
+  if (belowHeight === NO_FLUID) {
+    return NO_FLOW_CONTRIBUTION
+  }
+  const drop = here + CELL_BELOW_STEP - belowHeight
+  return [dx * drop, dz * drop]
+}
+
+const flowContributionAt = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+  here: number,
+  dx: number,
+  dz: number,
+): readonly [number, number] => {
+  const neighbourHeight = heightAcross(chunk, neighbours, context, lx + dx, y, lz + dz, blockId)
+  if (neighbourHeight !== NO_FLUID) {
+    return flowContributionFromNeighbour(here, neighbourHeight, dx, dz)
+  }
+  return flowContributionFromLedge(chunk, neighbours, context, lx, y, lz, blockId, here, dx, dz)
+}
+
+/** The flow length below which `flowAt` reports a horizontally still surface. */
+const ZERO_FLOW_LENGTH = AXIS_NO_STEP
+/** No horizontal current: what `flowAt` returns for a flat or symmetric surface. */
+const NO_FLOW_DIRECTION: readonly [number, number] = [AXIS_NO_STEP, AXIS_NO_STEP]
+
+/** Normalize an accumulated flow vector, or report it still when its length is zero. */
+const flowDirectionOf = (flowX: number, flowZ: number, length: number): readonly [number, number] => {
+  if (length === ZERO_FLOW_LENGTH) {
+    return NO_FLOW_DIRECTION
+  }
+  return [flowX / length, flowZ / length]
+}
 
 /**
  * Derive a deterministic horizontal current from the decoded simulation state.
@@ -385,8 +597,8 @@ const FLOW_OFFSETS: ReadonlyArray<readonly [dx: number, dz: number]> = [
  * Each same-fluid neighbour attracts the current in proportion to its surface
  * drop. A horizontally empty neighbour only contributes when the same fluid is
  * one cell below it, which represents flow crossing a ledge rather than an
- * unloaded/open boundary. Opposite contributions cancel, leaving `[0, 0]` on a
- * flat or symmetric surface.
+ * unloaded/open boundary. Opposite contributions cancel, leaving
+ * `NO_FLOW_DIRECTION` on a flat or symmetric surface.
  */
 const flowAt = (
   chunk: ChunkView,
@@ -401,29 +613,14 @@ const flowAt = (
   let flowX = 0
   let flowZ = 0
   for (const [dx, dz] of FLOW_OFFSETS) {
-    const neighbourHeight = heightAcross(chunk, neighbours, context, lx + dx, y, lz + dz, blockId)
-    if (neighbourHeight !== NO_FLUID) {
-      const drop = here - neighbourHeight
-      flowX += dx * drop
-      flowZ += dz * drop
-      continue
-    }
-
-    const neighbourId = getBlockAcrossBoundary(chunk, neighbours, lx + dx, y, lz + dz)
-    if (neighbourId !== AIR) {
-      continue
-    }
-    const belowHeight = heightAcross(chunk, neighbours, context, lx + dx, y - 1, lz + dz, blockId)
-    if (belowHeight !== NO_FLUID) {
-      const drop = here + 1 - belowHeight
-      flowX += dx * drop
-      flowZ += dz * drop
-    }
+    const [contributionX, contributionZ] = flowContributionAt(chunk, neighbours, context, lx, y, lz, blockId, here, dx, dz)
+    flowX += contributionX
+    flowZ += contributionZ
   }
 
   const length = Math.hypot(flowX, flowZ)
   return {
-    direction: length === 0 ? [0, 0] : [flowX / length, flowZ / length],
+    direction: flowDirectionOf(flowX, flowZ, length),
     falling: fallingIn(chunk.fluid, blockIndex(lx, y, lz)),
   }
 }
@@ -451,7 +648,10 @@ const surfaceHeightOfColumn = (
   if (here === NO_FLUID) {
     return NO_FLUID
   }
-  return heightAcross(chunk, neighbours, context, lx, y + 1, lz, wantId) === NO_FLUID ? here : 1
+  if (heightAcross(chunk, neighbours, context, lx, y + CELL_BELOW_STEP, lz, wantId) === NO_FLUID) {
+    return here
+  }
+  return FULL_HEIGHT
 }
 
 /**
@@ -483,12 +683,12 @@ const cornerHeight = (
 ): number => {
   let heightSum = 0
   let sampleCount = 0
-  for (let sx = lx + cornerX - 1; sx <= lx + cornerX; sx += 1) {
-    for (let sz = lz + cornerZ - 1; sz <= lz + cornerZ; sz += 1) {
+  for (let sx = lx + cornerX - CORNER_WINDOW_START_OFFSET; sx <= lx + cornerX; sx += LOOP_STEP) {
+    for (let sz = lz + cornerZ - CORNER_WINDOW_START_OFFSET; sz <= lz + cornerZ; sz += LOOP_STEP) {
       const height = surfaceHeightOfColumn(chunk, neighbours, context, sx, y, sz, wantId)
       if (height !== NO_FLUID) {
         heightSum += height
-        sampleCount += 1
+        sampleCount += LOOP_STEP
       }
     }
   }
@@ -543,96 +743,6 @@ const hidesFluidFace = (context: FluidContext, blockId: number): boolean =>
  * docs/design-notes.md M-12 as the one place this port left a visible gap rather
  * than invent geometry the reference does not have.
  */
-export const meshFluidSurfaces = (
-  chunk: ChunkView,
-  neighbours: ChunkNeighbours,
-  fluids: Uint8Array,
-  layers: Uint8Array,
-  plants: Uint8Array,
-  yLimit: number,
-  bounds: {
-    readonly min: readonly [number, number, number]
-    readonly max: readonly [number, number, number]
-  } = { min: [0, 0, 0], max: [CHUNK_SIZE, yLimit, CHUNK_SIZE] },
-): ReadonlyArray<FluidQuad> => {
-  // A 256-BYTE SCAN TO SKIP A 16 x yLimit x 16 WALK. Without it a config that
-  // declares no fluid still pays for a whole extra traversal of the chunk that
-  // can only ever find nothing — measured at 1.05-1.17x of `meshChunk` on the
-  // four fluid-free bench fixtures, which is most of what fluid meshing appeared
-  // to cost before this early exit existed. The table is at most 256 bytes and
-  // the walk is 16,384 cells on the `flat` fixture alone, so the trade is not
-  // close. See docs/design-notes.md M-12.
-  //
-  // Scanning the TABLE rather than testing the config keeps this correct for the
-  // truncation `buildFluidLookup` documents: a max level of 255 stores 0 and is
-  // not a fluid, so a non-empty config can still declare no usable fluid.
-  let anyFluid = false
-  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += 1) {
-    if ((fluids[blockId] ?? 0) !== 0) {
-      anyFluid = true
-      break
-    }
-  }
-  if (!anyFluid) {
-    return NO_FLUID_QUADS
-  }
-
-  const quads: Array<FluidQuad> = []
-  const context: FluidContext = { fluids, layers, plants }
-
-  for (let lx = bounds.min[0]; lx < bounds.max[0]; lx += 1) {
-    for (let y = bounds.min[1]; y < Math.min(yLimit, bounds.max[1]); y += 1) {
-      for (let lz = bounds.min[2]; lz < bounds.max[2]; lz += 1) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
-        if (!isFluidBlock(fluids, blockId)) {
-          continue
-        }
-        const here = heightIn(chunk, context, lx, y, lz, blockId)
-
-        // The four corners, named for the (cornerX, cornerZ) pair each averages
-        // over, and emitted in the reference's winding order (:82-85).
-        const y00 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, 0, 0, blockId)
-        const y01 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, 0, 1, blockId)
-        const y11 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, 1, 1, blockId)
-        const y10 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, 1, 0, blockId)
-
-        // TOP. Emitted only when nothing opaque sits above AND the cell above
-        // holds no fluid AT ALL — a submerged cell has no surface, and drawing
-        // one would put a sheet inside the lake at every level (:68-70).
-        //
-        // ANY fluid, not just this one. The reference tests `aboveFluid === null`
-        // (:69-70), which is false for a fluid of the OTHER kind too, so water
-        // with lava directly above it draws no top there. It has to be that way
-        // round: a fluid is never an occluder (`hidesFluidFace`), so if this test
-        // only looked for the same kind, the first clause would not catch the
-        // other kind either and the surface would be drawn inside the lava.
-        const aboveId = getBlockAcrossBoundary(chunk, neighbours, lx, y + 1, lz)
-        if (!hidesFluidFace(context, aboveId) && !isFluidBlock(fluids, aboveId)) {
-          quads.push({
-            blockId,
-            direction: 'yPos',
-            vertices: [
-              [lx, y00, lz],
-              [lx, y01, lz + 1],
-              [lx + 1, y11, lz + 1],
-              [lx + 1, y10, lz],
-            ],
-            flow: flowAt(chunk, neighbours, context, lx, y, lz, blockId, here),
-            ao: 0,
-          })
-        }
-
-        pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'xPos', y10, y11)
-        pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'xNeg', y01, y00)
-        pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'zPos', y11, y01)
-        pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'zNeg', y00, y10)
-      }
-    }
-  }
-
-  return quads
-}
-
 /**
  * One side skirt, if the neighbour on that side leaves a step to cover.
  *
@@ -653,6 +763,45 @@ export const meshFluidSurfaces = (
  * cells at equal height share a surface and need nothing between them; a taller
  * neighbour covers this cell's step from its own side.
  */
+/** The (dx, dz) neighbour step for each side direction `pushSide` can be called with. */
+const SIDE_STEP: Readonly<Record<'xPos' | 'xNeg' | 'zPos' | 'zNeg', readonly [dx: number, dz: number]>> = {
+  xNeg: [AXIS_NEGATIVE_STEP, AXIS_NO_STEP],
+  xPos: [AXIS_POSITIVE_STEP, AXIS_NO_STEP],
+  zNeg: [AXIS_NO_STEP, AXIS_NEGATIVE_STEP],
+  zPos: [AXIS_NO_STEP, AXIS_POSITIVE_STEP],
+}
+
+/**
+ * The two corners a side skirt hangs between, in the reference's winding for
+ * that direction. Matches the `topNear`/`topFar` pair the caller already
+ * computed, so the skirt's top edge is exactly the top patch's edge and the
+ * two never separate.
+ */
+const sideEnds = (
+  direction: 'xPos' | 'xNeg' | 'zPos' | 'zNeg',
+  lx: number,
+  lz: number,
+): readonly [number, number, number, number] => {
+  if (direction === 'xPos') {
+    return [lx + CELL_SPAN, lz, lx + CELL_SPAN, lz + CELL_SPAN]
+  }
+  if (direction === 'xNeg') {
+    return [lx, lz + CELL_SPAN, lx, lz]
+  }
+  if (direction === 'zPos') {
+    return [lx + CELL_SPAN, lz + CELL_SPAN, lx, lz + CELL_SPAN]
+  }
+  return [lx, lz, lx + CELL_SPAN, lz]
+}
+
+/** The bottom edge of a side skirt: the neighbour's surface, or the whole cell when it holds no fluid of this kind. */
+const bottomOf = (y: number, neighbourHeight: number): number => {
+  if (neighbourHeight === NO_FLUID) {
+    return y
+  }
+  return y + neighbourHeight
+}
+
 const pushSide = (
   quads: Array<FluidQuad>,
   chunk: ChunkView,
@@ -667,8 +816,7 @@ const pushSide = (
   topNear: number,
   topFar: number,
 ): void => {
-  const dx = direction === 'xPos' ? 1 : direction === 'xNeg' ? -1 : 0
-  const dz = direction === 'zPos' ? 1 : direction === 'zNeg' ? -1 : 0
+  const [dx, dz] = SIDE_STEP[direction]
 
   if (hidesFluidFace(context, getBlockAcrossBoundary(chunk, neighbours, lx + dx, y, lz + dz))) {
     return
@@ -677,23 +825,15 @@ const pushSide = (
   if (neighbourHeight !== NO_FLUID && neighbourHeight >= here) {
     return
   }
-  const bottom = neighbourHeight === NO_FLUID ? y : y + neighbourHeight
+  const bottom = bottomOf(y, neighbourHeight)
 
-  // The two ends of the wall on this side, in the reference's winding. `near`
-  // and `far` name the two corners the caller already computed for this side;
-  // taking them from the caller is what keeps the top of the skirt EXACTLY the
-  // edge of the top patch, so the two never separate and no crack appears.
-  const ends: readonly [number, number, number, number] =
-    direction === 'xPos'
-      ? [lx + 1, lz, lx + 1, lz + 1]
-      : direction === 'xNeg'
-        ? [lx, lz + 1, lx, lz]
-        : direction === 'zPos'
-          ? [lx + 1, lz + 1, lx, lz + 1]
-          : [lx, lz, lx + 1, lz]
-  const [nearX, nearZ, farX, farZ] = ends
+  // `near` and `far` name the two corners the caller already computed for
+  // This side; taking them from the caller is what keeps the top of the
+  // Skirt EXACTLY the edge of the top patch, so the two never separate.
+  const [nearX, nearZ, farX, farZ] = sideEnds(direction, lx, lz)
 
   quads.push({
+    ao: 0,
     blockId,
     direction,
     vertices: [
@@ -702,8 +842,180 @@ const pushSide = (
       [farX, topFar, farZ],
       [farX, bottom, farZ],
     ],
-    ao: 0,
   })
+}
+
+/**
+ * Does the injected fluid table declare any fluid at all?
+ *
+ * A 256-BYTE SCAN TO SKIP A 16 x yLimit x 16 WALK. Without it a config that
+ * declares no fluid still pays for a whole extra traversal of the chunk that
+ * can only ever find nothing — measured at 1.05-1.17x of `meshChunk` on the
+ * four fluid-free bench fixtures, which is most of what fluid meshing appeared
+ * to cost before this early exit existed. The table is at most 256 bytes and
+ * the walk is 16,384 cells on the `flat` fixture alone, so the trade is not
+ * close. See docs/design-notes.md M-12.
+ *
+ * Scanning the TABLE rather than testing the config keeps this correct for the
+ * truncation `buildFluidLookup` documents: a max level of 255 stores 0 and is
+ * not a fluid, so a non-empty config can still declare no usable fluid.
+ */
+const anyFluidConfigured = (fluids: Uint8Array): boolean => {
+  // `blockId` is the loop counter itself, bounded to `[0, MAX_BLOCK_ID]` by the
+  // `for` condition, and `fluids` is always a `MAX_BLOCK_ID + 1`-entry table —
+  // So `fluids[blockId]` is never `undefined` and the read is asserted rather
+  // Than defaulted, as `isFluidBlock` above does for the same table.
+  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += LOOP_STEP) {
+    if (fluids[blockId]! !== FLUID_BYTE_UNSET) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Push the top patch for one fluid cell, unless something hides it.
+ *
+ * TOP. Emitted only when nothing opaque sits above AND the cell above holds
+ * no fluid AT ALL — a submerged cell has no surface, and drawing one would
+ * put a sheet inside the lake at every level (:68-70).
+ *
+ * ANY fluid, not just this one. The reference tests `aboveFluid === null`
+ * (:69-70), which is false for a fluid of the OTHER kind too, so water with
+ * lava directly above it draws no top there. It has to be that way round: a
+ * fluid is never an occluder (`hidesFluidFace`), so if this test only looked
+ * for the same kind, the first clause would not catch the other kind either
+ * and the surface would be drawn inside the lava.
+ */
+const pushTopFace = (
+  quads: Array<FluidQuad>,
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+  here: number,
+  corners: readonly [number, number, number, number],
+): void => {
+  const aboveId = getBlockAcrossBoundary(chunk, neighbours, lx, y + CELL_SPAN, lz)
+  if (hidesFluidFace(context, aboveId) || isFluidBlock(context.fluids, aboveId)) {
+    return
+  }
+  const [y00, y01, y11, y10] = corners
+  quads.push({
+    ao: 0,
+    blockId,
+    direction: 'yPos',
+    flow: flowAt(chunk, neighbours, context, lx, y, lz, blockId, here),
+    vertices: [
+      [lx, y00, lz],
+      [lx, y01, lz + CELL_SPAN],
+      [lx + CELL_SPAN, y11, lz + CELL_SPAN],
+      [lx + CELL_SPAN, y10, lz],
+    ],
+  })
+}
+
+/**
+ * The four corners of one cell's top patch, named for the (cornerX, cornerZ)
+ * pair each averages over, and returned in the reference's winding order
+ * (:82-85): near-near, near-far, far-far, far-near.
+ */
+const topPatchCorners = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+): readonly [number, number, number, number] => {
+  const y00 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, CORNER_NEAR, CORNER_NEAR, blockId)
+  const y01 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, CORNER_NEAR, CORNER_FAR, blockId)
+  const y11 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, CORNER_FAR, CORNER_FAR, blockId)
+  const y10 = y + cornerHeight(chunk, neighbours, context, lx, y, lz, CORNER_FAR, CORNER_NEAR, blockId)
+  return [y00, y01, y11, y10]
+}
+
+/**
+ * Every fluid face for one cell already known to hold `blockId`'s fluid: the
+ * top patch (if visible) and the four side skirts.
+ */
+const meshFluidCell = (
+  quads: Array<FluidQuad>,
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  context: FluidContext,
+  lx: number,
+  y: number,
+  lz: number,
+  blockId: number,
+): void => {
+  const here = heightIn(chunk, context, lx, y, lz, blockId)
+
+  const corners = topPatchCorners(chunk, neighbours, context, lx, y, lz, blockId)
+  const [y00, y01, y11, y10] = corners
+
+  pushTopFace(quads, chunk, neighbours, context, lx, y, lz, blockId, here, corners)
+
+  pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'xPos', y10, y11)
+  pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'xNeg', y01, y00)
+  pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'zPos', y11, y01)
+  pushSide(quads, chunk, neighbours, context, lx, y, lz, blockId, here, 'zNeg', y00, y10)
+}
+
+/**
+ * Every fluid face in the chunk, in `lx` then `y` then `lz` order — see
+ * `meshFluidSurfaces`'s own comment for why that order and why `yLimit`.
+ */
+const meshFluidCellsInBounds = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  fluids: Uint8Array,
+  layers: Uint8Array,
+  plants: Uint8Array,
+  yLimit: number,
+  bounds: {
+    readonly min: readonly [number, number, number]
+    readonly max: readonly [number, number, number]
+  },
+): ReadonlyArray<FluidQuad> => {
+  const quads: Array<FluidQuad> = []
+  const context: FluidContext = { fluids, layers, plants }
+  const [[minX, minY, minZ], [maxX, maxY, maxZ]] = [bounds.min, bounds.max]
+
+  for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
+    for (let y = minY; y < Math.min(yLimit, maxY); y += LOOP_STEP) {
+      for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
+        const blockId = getBlock(chunk.blocks, lx, y, lz)
+        if (isFluidBlock(fluids, blockId)) {
+          meshFluidCell(quads, chunk, neighbours, context, lx, y, lz, blockId)
+        }
+      }
+    }
+  }
+
+  return quads
+}
+
+export const meshFluidSurfaces = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  fluids: Uint8Array,
+  layers: Uint8Array,
+  plants: Uint8Array,
+  yLimit: number,
+  bounds: {
+    readonly min: readonly [number, number, number]
+    readonly max: readonly [number, number, number]
+  } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: [ZERO_INDEX, ZERO_INDEX, ZERO_INDEX] },
+): ReadonlyArray<FluidQuad> => {
+  if (!anyFluidConfigured(fluids)) {
+    return NO_FLUID_QUADS
+  }
+  return meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds)
 }
 
 /*

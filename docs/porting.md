@@ -75,7 +75,7 @@
 | 参照実装 | 本リポジトリ | 備考 |
 | --- | --- | --- |
 | `worker/.../meshing-worker-config.ts:7-13`（2 つの透過集合） | `domain/opacity.ts` の `MeshConfig` | boolean ではなく三値の `MeshLayer` としてモデル化（`design-notes.md` M-3） |
-| `rendering/.../greedy-meshing.ts:41-57`（`buildLookup` + `WeakMap`） | `domain/opacity.ts` の `buildLayerLookup` | `WeakMap` メモ化は未実装。config は呼び出し側が保持する想定 |
+| `rendering/.../greedy-meshing.ts:41-57`（`buildLookup` + `WeakMap`） | `domain/opacity.ts` の `buildLayerLookup` と `domain/mesh.ts` | `meshChunk*` は2つの Set identity でメモ化。公開 `buildLayerLookup` は単独利用向けに毎回新規生成し、config の集合は呼び出し側が保持・不変扱いする |
 | `rendering/.../greedy-meshing-passes.ts:148-152`（振り分け優先度） | `domain/opacity.ts` の `layerOfBlockId` | 入れ子三項 → 値としての `MESH_LAYER_PRIORITY` |
 | `rendering/.../greedy-meshing.ts:122-128`（面パスの呼び出し順） | `domain/faces.ts` の `FACES` | 順序を値として固定 |
 | `rendering/.../greedy-meshing-algorithms.ts` の各法線・role | `domain/faces.ts` の `FACES` | 表は `public-api.md` §3 |
@@ -88,11 +88,11 @@
 | `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光とワールドオフセットを外した。側面 4 本は 1 つの関数に畳んだ |
 | `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植していない** | 符号化は所有者のもの。§3.2 |
 
-## 3. `ChunkView` と `FluidView` について —— 2 つの差し替え予定
+## 3. `ChunkView` と `FluidView` について —— 2 つの境界
 
 ### 3.1 `ChunkView`
 
-`domain/chunk-view.ts` の `ChunkView` は**ローカルな構造型**である:
+`domain/chunk-view.ts` の `ChunkView` は**メッシング専用の固定高さビュー**である:
 
 ```typescript
 export type ChunkView = {
@@ -101,11 +101,9 @@ export type ChunkView = {
 }
 ```
 
-本来 `Chunk` を所有するのは mc-kernel（plan.md §3.1: 「`Chunk` データ構造とコーデック」）だが、
-まだ publish されていないので、メッシングが必要とする最小の形だけを宣言してある。
-
-mc-kernel が publish されたら、この型を kernel の `Chunk` に差し替える。
-構造型なので、kernel の `Chunk` が `blocks: Uint8Array` を持つ限り互換である。
+`Chunk` を所有するのは mc-kernel（plan.md §3.1: 「`Chunk` データ構造とコーデック」）であり、
+mc-meshing は `@nerima-games/mc-kernel` に依存する。`chunkViewOf` が kernel の可変高さ
+チャンクを検証して変換するため、異なる高さを暗黙に切り詰めたりゼロ埋めしたりしない。
 
 ### 3.2 `FluidView` —— **バイトではなく復号済みの状態**を受け取る
 
@@ -131,8 +129,8 @@ export type FluidView = {
 | | `ChunkView.blocks` | `FluidView` |
 | --- | --- | --- |
 | 参照実装の形 | 同一 | **意図的に別** |
-| 差し替え時に起きること | kernel の `Chunk` に置換して終わり | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
-| その層の置き場所 | — | mc-render（両方に依存する側）。責務表 §3.6 (c) |
+| 差し替え時に起きること | `kernel-adapter.ts` で高さを検証して変換 | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
+| その層の置き場所 | mc-meshing（kernelのChunkを消費する境界） | mc-render（両方に依存する側）。責務表 §3.6 (c) |
 
 **mc-meshing 側は差し替え時も変わらない。** ここが要求しているのは
 「セルごとの level / source / optional falling」であって「どう詰められていたか」ではないので、

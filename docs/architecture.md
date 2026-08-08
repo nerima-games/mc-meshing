@@ -172,13 +172,13 @@ mc-meshing は stage を登録しない。メッシュ生成は毎フレーム�
 
 org 標準では、リポジトリ間依存の許可グラフの実効機構は各リポジトリの `.oxlintrc.json` の
 `no-restricted-imports` であり、`pnpm lint`(ひいては `pnpm verify`)がそのままハードゲートになる。
-`mc-meshing` は Tier1(安定ライブラリ、org 内依存ゼロ)なので、`.oxlintrc.json` は
-`mc-kernel` を除くあらゆる `@nerima-games/*` import を禁止するパターンを持つ。
+`mc-meshing` は Tier1(安定ライブラリ)なので、`.oxlintrc.json` は
+普遍的な例外である `mc-kernel` を除くあらゆる `@nerima-games/*` import を禁止するパターンを持つ。
 
 | ルール | 内容 |
 | --- | --- |
 | ハード失敗 | 違反があれば `pnpm lint`(`--deny-warnings`)が必ず非ゼロ終了する |
-| 循環禁止・推移閉包禁止・kernel 例外・宣言と実体の一致・kit の devDependency 専用 | いずれも `DEPENDENCY_POLICY.md` §2 が定める org 共通ルール(本リポジトリは Tier1 なので、そもそも `@nerima-games/*` への依存を一切持たない) |
+| 循環禁止・推移閉包禁止・kernel 例外・宣言と実体の一致・kit の devDependency 専用 | いずれも `DEPENDENCY_POLICY.md` §2 が定める org 共通ルール(本リポジトリは Tier1 なので、`mc-kernel` 以外の `@nerima-games/*` への依存を持たない) |
 
 かつては 16 リポジトリ共通のテンプレートスクリプト(`scripts/check-dependency-whitelist.ts` +
 専用テスト + `pnpm check:deps`)がこの役割を担っていたが、org 標準の策定に伴い撤去された
@@ -188,16 +188,15 @@ org 標準では、リポジトリ間依存の許可グラフの実効機構は�
 org 標準としては個別リポジトリの裁量に委ねられており、本リポジトリでは現在専用の代替スクリプトを
 持たない。
 
-## 7. スケルトン段階の依存宣言について
+## 7. 依存宣言とkernel境界
 
-**現時点で `package.json` の `dependencies` は `effect` だけである。**
-`@nerima-games/mc-kernel` は入っていない。理由は 2 つ:
+`@nerima-games/mc-kernel` は `dependencies` に固定され、メッシュ入力の
+`Chunk` 型を直接消費する。mc-meshing固有の `ChunkView` はレンダラー向けの固定高さ
+ビューとして残し、`chunkViewOf` がkernelの可変高さチャンクを検証しながら変換する。
+高さが一致しない場合は暗黙の切り詰め・パディングをせず、明示的に失敗する。
 
-1. まだ何も publish されていない（bottom-up に publish してから pin する方式）。
-2. スケルトンには import すべき兄弟コードがまだ存在しない。
-
-意図されたグラフは `DEPENDENCY_POLICY.md` の roster と本ドキュメントに記録されている。
-グラフは仕様であり、最初の publish より前に循環検出を意味あるものにしているのはこの記録である。
+この依存境界により、共有語彙はmc-kernel、チャンク表現の変換と面生成はmc-meshingが
+所有する。依存グラフの制約は `DEPENDENCY_POLICY.md` の roster に従う。
 
 ## 参照
 

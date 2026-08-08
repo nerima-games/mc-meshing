@@ -113,30 +113,30 @@
  * fast path behind an explicit opt-in once there is a benchmark to justify it.
  * See docs/design-notes.md, regression `meshing-result-is-owned-not-aliased`.
  */
-import { ambientOcclusionAt } from './ambient-occlusion'
 import {
   AIR,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
-  getBlock,
-  getBlockAcrossBoundary,
   type ChunkNeighbours,
   type ChunkView,
+  getBlock,
+  getBlockAcrossBoundary,
 } from './chunk-view'
-import { FACES, type Face, type FaceDirection, type FaceRole } from './faces'
 import {
-  buildFluidLookup,
-  isFluidBlock,
-  meshFluidSurfaces,
-  type FluidQuad,
-} from './fluid-mesh'
-import { buildLayerLookup, MAX_BLOCK_ID, MESH_LAYERS, type MeshConfig, type MeshLayer } from './opacity'
-import {
+  type CrossPlantQuad,
   buildCrossPlantLookup,
   isCrossPlant,
   meshCrossPlants,
-  type CrossPlantQuad,
 } from './plant-mesh'
+import { FACES, type Face, type FaceDirection, type FaceRole } from './faces'
+import {
+  type FluidQuad,
+  buildFluidLookup,
+  isFluidBlock,
+  meshFluidSurfaces,
+} from './fluid-mesh'
+import { MAX_BLOCK_ID, MESH_LAYERS, type MeshConfig, type MeshLayer, buildLayerLookup } from './opacity'
+import { ambientOcclusionAt } from './ambient-occlusion'
 
 /**
  * One emitted quad. Positions are chunk-local; mc-render applies the offset.
@@ -260,15 +260,87 @@ export const totalQuadArea = (layers: MeshLayers): number => {
 /** Index into `MESH_LAYERS`, i.e. the value `buildLayerLookup` stores. */
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
 
+// Same convention as `kernel-adapter.ts`'s `FIRST_INDEX`/`STEP`: every bounded
+// Scan in this file starts at the lowest valid coordinate and advances one
+// Cell at a time, so both are named once and reused rather than re-spelled.
+/** The lowest valid coordinate, array index, or lookup-table lower bound on any axis. */
+const FIRST_INDEX = 0
+/** The amount every bounded scan in this file advances or retreats by, per step. */
+const STEP = 1
+
+// MeshConfig's readonly Set references are retained by callers, so cache only
+// The two identities that affect the layer table and keep the public builder fresh.
+const LAYER_LOOKUP_CACHE = new WeakMap<object, WeakMap<object, Uint8Array>>()
+
+const layerLookupForMesh = (config: MeshConfig): Uint8Array => {
+  let byWater = LAYER_LOOKUP_CACHE.get(config.waterBlockIds)
+  if (!byWater) {
+    byWater = new WeakMap<object, Uint8Array>()
+    LAYER_LOOKUP_CACHE.set(config.waterBlockIds, byWater)
+  }
+  const cached = byWater.get(config.transparentSolidBlockIds)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildLayerLookup(config)
+  byWater.set(config.transparentSolidBlockIds, lookup)
+  return lookup
+}
+
+// Optional shape tables are derived from readonly collection identities too;
+// Mesh code only reads these private tables, so the empty tables can be shared.
+/** Entries in a table indexed by block id: ids run 0..MAX_BLOCK_ID inclusive. */
+const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + STEP
+const CROSS_PLANT_LOOKUP_CACHE = new WeakMap<object, Uint8Array>()
+const EMPTY_CROSS_PLANT_LOOKUP = new Uint8Array(BLOCK_ID_TABLE_SIZE)
+
+const crossPlantLookupForMesh = (config: MeshConfig): Uint8Array => {
+  const blockIds = config.crossPlantBlockIds
+  // `blockIds` is `ReadonlySet<number> | undefined`; a `Set`, even an empty
+  // One, is always truthy, so this is exactly the `=== undefined` check
+  // Without spelling the banned `undefined` identifier.
+  if (!blockIds) {
+    return EMPTY_CROSS_PLANT_LOOKUP
+  }
+  const cached = CROSS_PLANT_LOOKUP_CACHE.get(blockIds)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildCrossPlantLookup(config)
+  CROSS_PLANT_LOOKUP_CACHE.set(blockIds, lookup)
+  return lookup
+}
+
+const FLUID_LOOKUP_CACHE = new WeakMap<object, Uint8Array>()
+const EMPTY_FLUID_LOOKUP = new Uint8Array(BLOCK_ID_TABLE_SIZE)
+
+const fluidLookupForMesh = (config: MeshConfig): Uint8Array => {
+  const maxLevels = config.fluidMaxLevels
+  // `maxLevels` is `ReadonlyMap<number, number> | undefined`; a `Map`, even an
+  // Empty one, is always truthy, so this is exactly the `=== undefined` check
+  // Without spelling the banned `undefined` identifier.
+  if (!maxLevels) {
+    return EMPTY_FLUID_LOOKUP
+  }
+  const cached = FLUID_LOOKUP_CACHE.get(maxLevels)
+  if (cached) {
+    return cached
+  }
+  const lookup = buildFluidLookup(config)
+  FLUID_LOOKUP_CACHE.set(maxLevels, lookup)
+  return lookup
+}
+
 /**
  * The layer a block id belongs to, read from the flattened table.
  *
- * Defaults to `opaque` for an id outside the table, which cannot happen — ids
- * come out of a `Uint8Array` and the table has `MAX_BLOCK_ID + 1` entries — but
- * `noUncheckedIndexedAccess` requires an answer and `opaque` is the one that
- * fails closed: an unknown id occludes rather than opening a hole in the world.
+ * ASSERTED, not defaulted: an id outside the table cannot happen — ids come out
+ * of a `Uint8Array` and the table has `MAX_BLOCK_ID + 1` entries — so
+ * `lookup[blockId]` is never `undefined`. `noUncheckedIndexedAccess` still
+ * requires the assertion to typecheck; `domain/fluid-mesh.ts`'s `isFluidBlock`
+ * makes the identical proof over the identically-shaped table.
  */
-const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId] ?? OPAQUE_LAYER
+const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId]!
 
 /**
  * Is the face of `blockId` pointing at `neighbourId` visible?
@@ -296,15 +368,15 @@ const isFaceExposed = (
   neighbourId: number,
 ): boolean => {
   // A cross-plant neighbour is treated exactly as air. Two diagonal panes
-  // occupying a tenth of a cell cannot hide a face, so this is the correct
-  // answer rather than a preference — and it is a DEVIATION: the reference's
+  // Occupying a tenth of a cell cannot hide a face, so this is the correct
+  // Answer rather than a preference — and it is a DEVIATION: the reference's
   // `isSolidFaceExposed` (`greedy-meshing-fluid-state.ts:145-157`) exposes a
-  // face only through air or a transparent solid, and plants are in neither
-  // set, so a flower beside a stone block culls that block's face there. See
+  // Face only through air or a transparent solid, and plants are in neither
+  // Set, so a flower beside a stone block culls that block's face there. See
   // `domain/plant-mesh.ts` and docs/design-notes.md M-11.
   //
   // A byte-indexed table read, not a `Set.has`: this is the ~400k calls/chunk
-  // path that plan.md §3.3 measures and `domain/opacity.ts` prices at 6.5x.
+  // Path that plan.md §3.3 measures and `domain/opacity.ts` prices at 6.5x.
   if (neighbourId === AIR || isCrossPlant(plants, neighbourId)) {
     return true
   }
@@ -330,10 +402,10 @@ const isFaceExposed = (
  */
 const solidCeiling = (blocks: Readonly<Uint8Array>): number => {
   let highest = -1
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
+  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+    for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
       const columnBase = lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
-      for (let y = CHUNK_HEIGHT - 1; y > highest; y -= 1) {
+      for (let y = CHUNK_HEIGHT - STEP; y > highest; y -= STEP) {
         if ((blocks[columnBase + y] ?? AIR) !== AIR) {
           highest = y
           break
@@ -341,7 +413,9 @@ const solidCeiling = (blocks: Readonly<Uint8Array>): number => {
       }
     }
   }
-  return highest + 1
+  // `highest` is the top solid index, or -1 for an all-air chunk; +STEP turns
+  // That index into the exclusive upper bound the six passes scan up to.
+  return highest + STEP
 }
 
 /**
@@ -397,7 +471,7 @@ type EmitQuad = (
 
 /** Do `length` cells starting at `start` all hold `cell`? */
 const rowMatches = (mask: Uint16Array, start: number, length: number, cell: number): boolean => {
-  for (let offset = 0; offset < length; offset += 1) {
+  for (let offset = FIRST_INDEX; offset < length; offset += STEP) {
     if (mask[start + offset] !== cell) {
       return false
     }
@@ -432,6 +506,57 @@ const rowMatches = (mask: Uint16Array, start: number, length: number, cell: numb
  * reference uses (`runGreedyExpansion`, `greedy-meshing-passes.ts:64-97`),
  * ported with the corner-light packing removed.
  */
+/**
+ * Grow the inner run starting at `base` as far as contiguous cells keep
+ * matching `cell`. Returns the run length, at least 1 for the starting cell.
+ */
+const growInnerRun = (mask: Uint16Array, base: number, inner: number, innerSize: number, cell: number): number => {
+  let innerRun = 1
+  while (inner + innerRun < innerSize && mask[base + innerRun] === cell) {
+    innerRun += STEP
+  }
+  return innerRun
+}
+
+/**
+ * Grow the outer run starting at `outer`, one whole matching row of
+ * `innerRun` cells at a time. Returns the run length, at least 1 for the
+ * starting row.
+ */
+const growOuterRun = (
+  mask: Uint16Array,
+  outer: number,
+  inner: number,
+  outerSize: number,
+  innerSize: number,
+  innerRun: number,
+  cell: number,
+): number => {
+  let outerRun = 1
+  while (
+    outer + outerRun < outerSize &&
+    rowMatches(mask, (outer + outerRun) * innerSize + inner, innerRun, cell)
+  ) {
+    outerRun += STEP
+  }
+  return outerRun
+}
+
+/** Mark every cell of the just-claimed `outerRun` x `innerRun` rectangle as consumed. */
+const clearRectangle = (
+  mask: Uint16Array,
+  outer: number,
+  inner: number,
+  outerRun: number,
+  innerRun: number,
+  innerSize: number,
+): void => {
+  for (let row = FIRST_INDEX; row < outerRun; row += STEP) {
+    const rowStart = (outer + row) * innerSize + inner
+    mask.fill(NO_FACE, rowStart, rowStart + innerRun)
+  }
+}
+
 const expandGreedy = (
   mask: Uint16Array,
   outerSize: number,
@@ -439,33 +564,148 @@ const expandGreedy = (
   emit: EmitQuad,
   depth: number,
 ): void => {
-  for (let outer = 0; outer < outerSize; outer += 1) {
-    for (let inner = 0; inner < innerSize; inner += 1) {
+  for (let outer = FIRST_INDEX; outer < outerSize; outer += STEP) {
+    for (let inner = FIRST_INDEX; inner < innerSize; inner += STEP) {
       const base = outer * innerSize + inner
-      const cell = mask[base] ?? NO_FACE
-      if (cell === NO_FACE) {
-        continue
+      // ASSERTED: `mask` is always allocated at least `outerSize * innerSize`
+      // Entries (see the three `expandGreedy` call sites), and `outer < outerSize`,
+      // `inner < innerSize` by the loops above, so `base` is always in range.
+      const cell = mask[base]!
+      if (cell !== NO_FACE) {
+        const innerRun = growInnerRun(mask, base, inner, innerSize, cell)
+        const outerRun = growOuterRun(mask, outer, inner, outerSize, innerSize, innerRun, cell)
+        clearRectangle(mask, outer, inner, outerRun, innerRun, innerSize)
+        emit(outer, inner, outerRun, innerRun, cell, depth)
       }
+    }
+  }
+}
 
-      let innerRun = 1
-      while (inner + innerRun < innerSize && mask[base + innerRun] === cell) {
-        innerRun += 1
+/**
+ * Everything a single X/Y/Z pass needs that stays constant across its whole
+ * scan, bundled so the per-cell and per-slice helpers below stay within this
+ * file's `max-params` budget instead of re-threading eight separate values.
+ */
+type ColumnPassContext = {
+  readonly chunk: ChunkView
+  readonly neighbours: ChunkNeighbours
+  readonly lookup: Uint8Array
+  readonly plants: Uint8Array
+  readonly fluids: Uint8Array
+  readonly face: Face
+  readonly mask: Uint16Array
+  readonly push: (quad: Quad) => void
+}
+
+/**
+ * Resolve exposure and AO for one candidate cell already known to be a
+ * paintable (non-air, non-plant, non-fluid) block, and route it: an opaque
+ * face is merged into `mask` at `maskIndex` for `expandGreedy` to pick up
+ * later, anything else is pushed immediately as a unit quad. Shared by all
+ * three axis passes — each computes its own `neighbourId` and `maskIndex`
+ * because those two differ per axis.
+ */
+const resolveExposedCell = (
+  ctx: ColumnPassContext,
+  blockId: number,
+  lx: number,
+  y: number,
+  lz: number,
+  neighbourId: number,
+  maskIndex: number,
+): void => {
+  if (isFaceExposed(ctx.lookup, ctx.plants, blockId, neighbourId)) {
+    const ao = ambientOcclusionAt(ctx.chunk, ctx.neighbours, ctx.face.direction, lx, y, lz)
+    if (layerAt(ctx.lookup, blockId) === OPAQUE_LAYER) {
+      ctx.mask[maskIndex] = packFaceCell(blockId, ao)
+    } else {
+      ctx.push({ ao, blockId, direction: ctx.face.direction, height: 1, lx, lz, role: ctx.face.role, width: 1, y })
+    }
+  }
+}
+
+// A plant emits no cube faces at all — it is drawn as two diagonal panes by
+// `meshCrossPlants`. The reference guards all six passes the same way
+// (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`); without it a
+// Flower is drawn as a solid cube AND as a cross.
+//
+// A FLUID is skipped for the same reason and it is the stronger case: its
+// Surface sits at a fractional height, so without this guard a lake is drawn
+// Twice — flat at `y + 1` by this pass and again at `y + 0.875` by
+// `meshFluidSurfaces` — and the two z-fight along every shoreline.
+/** Is `blockId` neither air, a cross plant, nor a fluid — i.e. does it own cube faces? */
+const isPaintableCell = (ctx: ColumnPassContext, blockId: number): boolean =>
+  blockId !== AIR && !isCrossPlant(ctx.plants, blockId) && !isFluidBlock(ctx.fluids, blockId)
+
+/** Fill `ctx.mask` for one +X/-X slice (`lx` fixed): mask is (`lz` outer, `y` inner). */
+const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): void => {
+  const { blocks } = ctx.chunk
+  const xBase = lx * CHUNK_HEIGHT * CHUNK_SIZE
+  ctx.mask.fill(NO_FACE, FIRST_INDEX, CHUNK_SIZE * yLimit)
+  for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+    const columnBase = xBase + lz * CHUNK_HEIGHT
+    const rowBase = lz * yLimit
+    for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
+      const blockId = blocks[columnBase + y] ?? AIR
+      if (isPaintableCell(ctx, blockId)) {
+        resolveExposedCell(
+          ctx,
+          blockId,
+          lx,
+          y,
+          lz,
+          getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx + ctx.face.nx, y, lz),
+          rowBase + y,
+        )
       }
+    }
+  }
+}
 
-      let outerRun = 1
-      while (
-        outer + outerRun < outerSize &&
-        rowMatches(mask, (outer + outerRun) * innerSize + inner, innerRun, cell)
-      ) {
-        outerRun += 1
+/** Fill `ctx.mask` for one +Y/-Y slice (`y` fixed): mask is (`lx` outer, `lz` inner). */
+const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
+  const { blocks } = ctx.chunk
+  ctx.mask.fill(NO_FACE, FIRST_INDEX, CHUNK_SIZE * CHUNK_SIZE)
+  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+    const columnBase = lx * CHUNK_HEIGHT * CHUNK_SIZE + y
+    const rowBase = lx * CHUNK_SIZE
+    for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+      const blockId = blocks[columnBase + lz * CHUNK_HEIGHT] ?? AIR
+      if (isPaintableCell(ctx, blockId)) {
+        resolveExposedCell(
+          ctx,
+          blockId,
+          lx,
+          y,
+          lz,
+          getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx, y + ctx.face.ny, lz),
+          rowBase + lz,
+        )
       }
+    }
+  }
+}
 
-      for (let row = 0; row < outerRun; row += 1) {
-        const rowStart = (outer + row) * innerSize + inner
-        mask.fill(NO_FACE, rowStart, rowStart + innerRun)
+/** Fill `ctx.mask` for one +Z/-Z slice (`lz` fixed): mask is (`lx` outer, `y` inner). */
+const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): void => {
+  const { blocks } = ctx.chunk
+  ctx.mask.fill(NO_FACE, FIRST_INDEX, CHUNK_SIZE * yLimit)
+  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+    const columnBase = lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
+    const rowBase = lx * yLimit
+    for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
+      const blockId = blocks[columnBase + y] ?? AIR
+      if (isPaintableCell(ctx, blockId)) {
+        resolveExposedCell(
+          ctx,
+          blockId,
+          lx,
+          y,
+          lz,
+          getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx, y, lz + ctx.face.nz),
+          rowBase + y,
+        )
       }
-
-      emit(outer, inner, outerRun, innerRun, cell, depth)
     }
   }
 }
@@ -490,51 +730,23 @@ const meshXPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const blocks = chunk.blocks
+  const ctx: ColumnPassContext = { chunk, face, fluids, lookup, mask, neighbours, plants, push }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
+      ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
       direction: face.direction,
-      role: face.role,
-      lx: depth,
-      y: inner,
-      lz: outer,
-      width: innerRun,
       height: outerRun,
-      ao: faceCellAo(cell),
+      lx: depth,
+      lz: outer,
+      role: face.role,
+      width: innerRun,
+      y: inner,
     })
   }
 
-  for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-    const xBase = lx * CHUNK_HEIGHT * CHUNK_SIZE
-    mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
-    for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-      const columnBase = xBase + lz * CHUNK_HEIGHT
-      const rowBase = lz * yLimit
-      for (let y = 0; y < yLimit; y += 1) {
-        const blockId = blocks[columnBase + y] ?? AIR
-        // A plant emits no cube faces at all — it is drawn as two diagonal
-        // panes by `meshCrossPlants`. The reference guards all six passes the
-        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
-        // without it a flower is drawn as a solid cube AND as a cross.
-        //
-        // A FLUID is skipped for the same reason and it is the stronger case:
-        // its surface sits at a fractional height, so without this guard a lake
-        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
-        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
-        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
-          continue
-        }
-        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx + face.nx, y, lz))) {
-          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
-          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
-            mask[rowBase + y] = packFaceCell(blockId, ao)
-          } else {
-            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
-          }
-        }
-      }
-    }
+  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+    fillXSliceMask(ctx, lx, yLimit)
     expandGreedy(mask, CHUNK_SIZE, yLimit, emit, lx)
   }
 }
@@ -560,50 +772,23 @@ const meshYPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const blocks = chunk.blocks
+  const ctx: ColumnPassContext = { chunk, face, fluids, lookup, mask, neighbours, plants, push }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
+      ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
       direction: face.direction,
-      role: face.role,
-      lx: outer,
-      y: depth,
-      lz: inner,
-      width: outerRun,
       height: innerRun,
-      ao: faceCellAo(cell),
+      lx: outer,
+      lz: inner,
+      role: face.role,
+      width: outerRun,
+      y: depth,
     })
   }
 
-  for (let y = 0; y < yLimit; y += 1) {
-    mask.fill(NO_FACE, 0, CHUNK_SIZE * CHUNK_SIZE)
-    for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-      const columnBase = lx * CHUNK_HEIGHT * CHUNK_SIZE + y
-      const rowBase = lx * CHUNK_SIZE
-      for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        const blockId = blocks[columnBase + lz * CHUNK_HEIGHT] ?? AIR
-        // A plant emits no cube faces at all — it is drawn as two diagonal
-        // panes by `meshCrossPlants`. The reference guards all six passes the
-        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
-        // without it a flower is drawn as a solid cube AND as a cross.
-        //
-        // A FLUID is skipped for the same reason and it is the stronger case:
-        // its surface sits at a fractional height, so without this guard a lake
-        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
-        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
-        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
-          continue
-        }
-        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y + face.ny, lz))) {
-          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
-          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
-            mask[rowBase + lz] = packFaceCell(blockId, ao)
-          } else {
-            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
-          }
-        }
-      }
-    }
+  for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
+    fillYSliceMask(ctx, y)
     expandGreedy(mask, CHUNK_SIZE, CHUNK_SIZE, emit, y)
   }
 }
@@ -625,50 +810,23 @@ const meshZPass = (
   mask: Uint16Array,
   push: (quad: Quad) => void,
 ): void => {
-  const blocks = chunk.blocks
+  const ctx: ColumnPassContext = { chunk, face, fluids, lookup, mask, neighbours, plants, push }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, depth) => {
     push({
+      ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
       direction: face.direction,
-      role: face.role,
-      lx: outer,
-      y: inner,
-      lz: depth,
-      width: outerRun,
       height: innerRun,
-      ao: faceCellAo(cell),
+      lx: outer,
+      lz: depth,
+      role: face.role,
+      width: outerRun,
+      y: inner,
     })
   }
 
-  for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-    mask.fill(NO_FACE, 0, CHUNK_SIZE * yLimit)
-    for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-      const columnBase = lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
-      const rowBase = lx * yLimit
-      for (let y = 0; y < yLimit; y += 1) {
-        const blockId = blocks[columnBase + y] ?? AIR
-        // A plant emits no cube faces at all — it is drawn as two diagonal
-        // panes by `meshCrossPlants`. The reference guards all six passes the
-        // same way (`greedy-meshing-algorithms.ts:40, 79, 118, 157, 196, 235`);
-        // without it a flower is drawn as a solid cube AND as a cross.
-        //
-        // A FLUID is skipped for the same reason and it is the stronger case:
-        // its surface sits at a fractional height, so without this guard a lake
-        // is drawn twice — flat at `y + 1` by this pass and again at `y + 0.875`
-        // by `meshFluidSurfaces` — and the two z-fight along every shoreline.
-        if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
-          continue
-        }
-        if (isFaceExposed(lookup, plants, blockId, getBlockAcrossBoundary(chunk, neighbours, lx, y, lz + face.nz))) {
-          const ao = ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz)
-          if (layerAt(lookup, blockId) === OPAQUE_LAYER) {
-            mask[rowBase + y] = packFaceCell(blockId, ao)
-          } else {
-            push({ blockId, direction: face.direction, role: face.role, lx, y, lz, width: 1, height: 1, ao })
-          }
-        }
-      }
-    }
+  for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+    fillZSliceMask(ctx, lz, yLimit)
     expandGreedy(mask, CHUNK_SIZE, yLimit, emit, lz)
   }
 }
@@ -687,14 +845,61 @@ const makeSink = (
   const transparentSolid: Array<Quad> = []
   const buckets = [opaque, water, transparentSolid]
   return {
-    layers: { opaque, water, transparentSolid, crossPlants, fluids },
+    layers: { crossPlants, fluids, opaque, transparentSolid, water },
     // MESH_LAYERS is ['opaque', 'water', 'transparentSolid'] and the lookup
-    // stores an index into it, so the routing is the index — no re-spelling of
-    // the priority order, which lives in `opacity.ts` and is tested there.
+    // Stores an index into it, so the routing is the index — no re-spelling of
+    // The priority order, which lives in `opacity.ts` and is tested there.
     push: (quad: Quad): void => {
-      const bucket = buckets[layerAt(lookup, quad.blockId)] ?? opaque
+      // ASSERTED: `layerAt` returns an index into `MESH_LAYERS` (`buildLayerLookup`
+      // Only ever writes `MESH_LAYERS.indexOf(...)`), and `buckets` has exactly
+      // `MESH_LAYERS.length` entries in the same order, so the index is always
+      // In range.
+      const bucket = buckets[layerAt(lookup, quad.blockId)]!
       bucket.push(quad)
     },
+  }
+}
+
+/** `solidCeiling`'s return value for a chunk that is entirely air. */
+const EMPTY_CHUNK_CEILING = 0
+
+/** A face normal component of this value means "no offset on this axis". */
+const NO_OFFSET = 0
+
+/** Route one face to whichever of the three axis passes its normal lies on. */
+const meshFace = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  lookup: Uint8Array,
+  plants: Uint8Array,
+  fluids: Uint8Array,
+  face: Face,
+  yLimit: number,
+  mask: Uint16Array,
+  push: (quad: Quad) => void,
+): void => {
+  if (face.nx !== NO_OFFSET) {
+    meshXPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
+  } else if (face.ny !== NO_OFFSET) {
+    meshYPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
+  } else {
+    meshZPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
+  }
+}
+
+/** Mesh every face direction into `mask`/`push`, for one chunk. */
+const meshAllFaces = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  lookup: Uint8Array,
+  plants: Uint8Array,
+  fluids: Uint8Array,
+  yLimit: number,
+  mask: Uint16Array,
+  push: (quad: Quad) => void,
+): void => {
+  for (const face of FACES) {
+    meshFace(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
   }
 }
 
@@ -714,40 +919,90 @@ export const meshChunk = (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
 ): MeshLayers => {
-  const lookup = buildLayerLookup(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
+  const lookup = layerLookupForMesh(config)
+  const plants = crossPlantLookupForMesh(config)
+  const fluids = fluidLookupForMesh(config)
   const yLimit = solidCeiling(chunk.blocks)
   // Plants and fluid surfaces are meshed BEFORE the sink is built, because the
-  // sink owns the result object and both are part of it. Both are bounded by the
-  // same `yLimit`: a plant and a fluid are non-air blocks, so neither can exist
-  // above the highest one.
+  // Sink owns the result object and both are part of it. Both are bounded by the
+  // Same `yLimit`: a plant and a fluid are non-air blocks, so neither can exist
+  // Above the highest one.
   const { layers, push } = makeSink(
     lookup,
     meshCrossPlants(chunk, plants, yLimit),
     meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, yLimit),
   )
-  if (yLimit === 0) {
+  if (yLimit === EMPTY_CHUNK_CEILING) {
     return layers
   }
 
   // One scratch mask, sized for the largest of the three shapes and reused by
-  // every slice of every pass. Allocating per slice would be 576 typed arrays
-  // per chunk; `expandGreedy` consumes what it reads, and each pass refills the
-  // region it is about to use, so sharing is safe.
+  // Every slice of every pass. Allocating per slice would be 576 typed arrays
+  // Per chunk; `expandGreedy` consumes what it reads, and each pass refills the
+  // Region it is about to use, so sharing is safe.
   const mask = new Uint16Array(CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE))
-
-  for (const face of FACES) {
-    if (face.nx !== 0) {
-      meshXPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
-    } else if (face.ny !== 0) {
-      meshYPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
-    } else {
-      meshZPass(chunk, neighbours, lookup, plants, fluids, face, yLimit, mask, push)
-    }
-  }
+  meshAllFaces(chunk, neighbours, lookup, plants, fluids, yLimit, mask, push)
 
   return layers
+}
+
+/**
+ * Everything the two UNMERGED meshers — `meshChunkNaive` (whole chunk) and
+ * `meshChunkRegion` (one dirty region) — need to test and emit one candidate
+ * cell for one face direction. Bundled for the same `max-params` reason as
+ * `ColumnPassContext`; there is no `mask` here because neither mesher merges.
+ */
+type FaceScanContext = {
+  readonly chunk: ChunkView
+  readonly neighbours: ChunkNeighbours
+  readonly lookup: Uint8Array
+  readonly plants: Uint8Array
+  readonly fluids: Uint8Array
+  readonly face: Face
+  readonly push: (quad: Quad) => void
+}
+
+/**
+ * Push one unit quad for `(lx, y, lz)` if it holds a paintable
+ * (non-air/plant/fluid), exposed block face. Shared by both unmerged
+ * meshers: they differ only in which cells they visit, never in what happens
+ * once a cell is visited.
+ */
+const emitUnitFace = (ctx: FaceScanContext, lx: number, y: number, lz: number): void => {
+  const blockId = getBlock(ctx.chunk.blocks, lx, y, lz)
+  if (blockId !== AIR && !isCrossPlant(ctx.plants, blockId) && !isFluidBlock(ctx.fluids, blockId)) {
+    const neighbourId = getBlockAcrossBoundary(
+      ctx.chunk,
+      ctx.neighbours,
+      lx + ctx.face.nx,
+      y + ctx.face.ny,
+      lz + ctx.face.nz,
+    )
+    if (isFaceExposed(ctx.lookup, ctx.plants, blockId, neighbourId)) {
+      ctx.push({
+        ao: ambientOcclusionAt(ctx.chunk, ctx.neighbours, ctx.face.direction, lx, y, lz),
+        blockId,
+        direction: ctx.face.direction,
+        height: 1,
+        lx,
+        lz,
+        role: ctx.face.role,
+        width: 1,
+        y,
+      })
+    }
+  }
+}
+
+/** Visit every `(lx, y, lz)` cell in the whole chunk, for one face direction. */
+const scanChunkFace = (ctx: FaceScanContext): void => {
+  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+    for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+      for (let y = FIRST_INDEX; y < CHUNK_HEIGHT; y += STEP) {
+        emitUnitFace(ctx, lx, y, lz)
+      }
+    }
+  }
 }
 
 /**
@@ -780,13 +1035,13 @@ export const meshChunkNaive = (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
 ): MeshLayers => {
-  const lookup = buildLayerLookup(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
+  const lookup = layerLookupForMesh(config)
+  const plants = crossPlantLookupForMesh(config)
+  const fluids = fluidLookupForMesh(config)
   // CHUNK_HEIGHT, not `solidCeiling`: the oracle deliberately does no such
-  // optimisation, so that `solidCeiling` itself is something the property tests
-  // can catch being wrong. The plates and the fluid surfaces are identical
-  // either way, which is exactly what makes that comparison worth making.
+  // Optimisation, so that `solidCeiling` itself is something the property tests
+  // Can catch being wrong. The plates and the fluid surfaces are identical
+  // Either way, which is exactly what makes that comparison worth making.
   const { layers, push } = makeSink(
     lookup,
     meshCrossPlants(chunk, plants, CHUNK_HEIGHT),
@@ -794,56 +1049,93 @@ export const meshChunkNaive = (
   )
 
   for (const face of FACES) {
-    for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
-      for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          const blockId = getBlock(chunk.blocks, lx, y, lz)
-          if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) {
-            continue
-          }
-          const neighbourId = getBlockAcrossBoundary(
-            chunk,
-            neighbours,
-            lx + face.nx,
-            y + face.ny,
-            lz + face.nz,
-          )
-          if (!isFaceExposed(lookup, plants, blockId, neighbourId)) {
-            continue
-          }
-          push({
-            blockId,
-            direction: face.direction,
-            role: face.role,
-            lx,
-            y,
-            lz,
-            width: 1,
-            height: 1,
-            ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-          })
-        }
-      }
-    }
+    scanChunkFace({ chunk, face, fluids, lookup, neighbours, plants, push })
   }
 
   return layers
 }
 
-const clampInteger = (value: number, lower: number, upper: number): number =>
-  Math.min(upper, Math.max(lower, Math.trunc(Number.isFinite(value) ? value : lower)))
+const clampInteger = (value: number, lower: number, upper: number): number => {
+  // Was `Number.isFinite(value) ? value : lower`. A non-finite input (NaN,
+  // +/-Infinity) has no valid position in the range, so it clamps to `lower`
+  // Exactly as it did as a ternary — this is an if/else standing in for a
+  // Two-armed value choice, not a change in which value wins.
+  let finiteValue = lower
+  if (Number.isFinite(value)) {
+    finiteValue = value
+  }
+  return Math.min(upper, Math.max(lower, Math.trunc(finiteValue)))
+}
 
 const normalizeRegion = (region: MeshRegion): MeshRegion => {
-  const minX = clampInteger(region.min[0], 0, CHUNK_SIZE)
-  const minY = clampInteger(region.min[1], 0, CHUNK_HEIGHT)
-  const minZ = clampInteger(region.min[2], 0, CHUNK_SIZE)
+  const [regionMinLx, regionMinY, regionMinLz] = region.min
+  const [regionMaxLx, regionMaxY, regionMaxLz] = region.max
+  const minX = clampInteger(regionMinLx, FIRST_INDEX, CHUNK_SIZE)
+  const minY = clampInteger(regionMinY, FIRST_INDEX, CHUNK_HEIGHT)
+  const minZ = clampInteger(regionMinLz, FIRST_INDEX, CHUNK_SIZE)
   return {
-    min: [minX, minY, minZ],
     max: [
-      clampInteger(region.max[0], minX, CHUNK_SIZE),
-      clampInteger(region.max[1], minY, CHUNK_HEIGHT),
-      clampInteger(region.max[2], minZ, CHUNK_SIZE),
+      clampInteger(regionMaxLx, minX, CHUNK_SIZE),
+      clampInteger(regionMaxY, minY, CHUNK_HEIGHT),
+      clampInteger(regionMaxLz, minZ, CHUNK_SIZE),
     ],
+    min: [minX, minY, minZ],
+  }
+}
+
+/** Cells on every side of the dirty region that face-exposure/AO/fluid-corner reads can still reach. */
+const HALO_CELLS = 1
+
+/** Expand `dirty` by `HALO_CELLS` on every axis, clamped to the chunk. */
+const haloRegion = (dirty: MeshRegion): MeshRegion => {
+  const [dirtyMinLx, dirtyMinY, dirtyMinLz] = dirty.min
+  const [dirtyMaxLx, dirtyMaxY, dirtyMaxLz] = dirty.max
+  return {
+    max: [
+      Math.min(CHUNK_SIZE, dirtyMaxLx + HALO_CELLS),
+      Math.min(CHUNK_HEIGHT, dirtyMaxY + HALO_CELLS),
+      Math.min(CHUNK_SIZE, dirtyMaxLz + HALO_CELLS),
+    ],
+    min: [
+      Math.max(FIRST_INDEX, dirtyMinLx - HALO_CELLS),
+      Math.max(FIRST_INDEX, dirtyMinY - HALO_CELLS),
+      Math.max(FIRST_INDEX, dirtyMinLz - HALO_CELLS),
+    ],
+  }
+}
+
+/** The three block-id lookup tables every mesher in this file needs, fetched together. */
+const meshLookupsFor = (config: MeshConfig): { lookup: Uint8Array; plants: Uint8Array; fluids: Uint8Array } => ({
+  fluids: fluidLookupForMesh(config),
+  lookup: layerLookupForMesh(config),
+  plants: crossPlantLookupForMesh(config),
+})
+
+/** Visit every `(lx, y, lz)` cell inside `owned`, for one face direction. */
+const scanRegionFace = (ctx: FaceScanContext, owned: MeshRegion): void => {
+  const [minLx, minY, minLz] = owned.min
+  const [maxLx, maxY, maxLz] = owned.max
+  for (let lx = minLx; lx < maxLx; lx += STEP) {
+    for (let lz = minLz; lz < maxLz; lz += STEP) {
+      for (let y = minY; y < maxY; y += STEP) {
+        emitUnitFace(ctx, lx, y, lz)
+      }
+    }
+  }
+}
+
+/** Mesh every face direction into `push`, for the `owned` region of one chunk. */
+const meshAllRegionFaces = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  lookup: Uint8Array,
+  plants: Uint8Array,
+  fluids: Uint8Array,
+  owned: MeshRegion,
+  push: (quad: Quad) => void,
+): void => {
+  for (const face of FACES) {
+    scanRegionFace({ chunk, face, fluids, lookup, neighbours, plants, push }, owned)
   }
 }
 
@@ -862,60 +1154,39 @@ export const meshChunkRegion = (
   dirtyRegion: MeshRegion,
 ): RegionMesh => {
   const dirty = normalizeRegion(dirtyRegion)
-  const empty = dirty.min.some((value, axis) => value >= (dirty.max[axis] ?? value))
-  const owned: MeshRegion = empty
-    ? dirty
-    : {
-        min: [Math.max(0, dirty.min[0] - 1), Math.max(0, dirty.min[1] - 1), Math.max(0, dirty.min[2] - 1)],
-        max: [
-          Math.min(CHUNK_SIZE, dirty.max[0] + 1),
-          Math.min(CHUNK_HEIGHT, dirty.max[1] + 1),
-          Math.min(CHUNK_SIZE, dirty.max[2] + 1),
-        ],
-      }
-  const lookup = buildLayerLookup(config)
-  const plants = buildCrossPlantLookup(config)
-  const fluids = buildFluidLookup(config)
-  const { layers, push } = makeSink(
-    lookup,
-    empty ? [] : meshCrossPlants(chunk, plants, CHUNK_HEIGHT, owned),
-    empty ? [] : meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, CHUNK_HEIGHT, owned),
-  )
-
-  if (!empty) {
-    for (const face of FACES) {
-      for (let lx = owned.min[0]; lx < owned.max[0]; lx += 1) {
-        for (let lz = owned.min[2]; lz < owned.max[2]; lz += 1) {
-          for (let y = owned.min[1]; y < owned.max[1]; y += 1) {
-            const blockId = getBlock(chunk.blocks, lx, y, lz)
-            if (blockId === AIR || isCrossPlant(plants, blockId) || isFluidBlock(fluids, blockId)) continue
-            const neighbourId = getBlockAcrossBoundary(
-              chunk,
-              neighbours,
-              lx + face.nx,
-              y + face.ny,
-              lz + face.nz,
-            )
-            if (!isFaceExposed(lookup, plants, blockId, neighbourId)) continue
-            push({
-              blockId,
-              direction: face.direction,
-              role: face.role,
-              lx,
-              y,
-              lz,
-              width: 1,
-              height: 1,
-              ao: ambientOcclusionAt(chunk, neighbours, face.direction, lx, y, lz),
-            })
-          }
-        }
-      }
+  // ASSERTED: `MeshRegion.min`/`.max` are typed as exact 3-tuples, and `axis`
+  // Comes from `.some`'s index over `dirty.min`, itself a 3-tuple — so
+  // `dirty.max[axis]` is always in range. The `!` satisfies
+  // `noUncheckedIndexedAccess`, which cannot see the tuple length through a
+  // Computed index.
+  const empty = dirty.min.some((value, axis) => value >= dirty.max[axis]!)
+  if (empty) {
+    return {
+      dirtyRegion: dirty,
+      layers: {
+        crossPlants: [],
+        fluids: [],
+        opaque: [],
+        transparentSolid: [],
+        water: [],
+      },
+      ownedRegion: dirty,
     }
   }
+  const owned = haloRegion(dirty)
+  const [, maxY] = owned.max
+  const { lookup, plants, fluids } = meshLookupsFor(config)
+  const { layers, push } = makeSink(
+    lookup,
+    meshCrossPlants(chunk, plants, maxY, owned),
+    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, maxY, owned),
+  )
+
+  meshAllRegionFaces(chunk, neighbours, lookup, plants, fluids, owned, push)
+
   return {
     dirtyRegion: dirty,
-    ownedRegion: owned,
     layers,
+    ownedRegion: owned,
   }
 }

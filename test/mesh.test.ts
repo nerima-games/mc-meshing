@@ -25,23 +25,23 @@ import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
+  type ChunkNeighbours,
+  type ChunkView,
   blockIndex,
   emptyChunk,
   getBlock,
   getBlockAcrossBoundary,
-  type ChunkNeighbours,
-  type ChunkView,
 } from '../src/domain/chunk-view'
 import {
   FACES,
   FACE_DIRECTIONS,
+  type FaceDirection,
   INDICES_PER_QUAD,
+  type QuadAxis,
   VERTICES_PER_QUAD,
   tangentAxes,
-  type FaceDirection,
-  type QuadAxis,
 } from '../src/domain/faces'
-import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../src/domain/mesh'
+import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
@@ -106,8 +106,8 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
 }
 
 const CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
   transparentSolidBlockIds: new Set([GLASS]),
+  waterBlockIds: new Set([WATER]),
 }
 
 const positionOf = (quad: Quad): string => `${quad.lx},${quad.y},${quad.lz}`
@@ -177,16 +177,16 @@ describe('face count', () => {
   it.effect('two adjacent blocks cover ten block-faces, not twelve: the shared face is culled from both sides', () =>
     Effect.sync(() => {
       // This is THE invariant of face culling. 12 means neither side was
-      // culled; 11 means only one was, which is the asymmetry bug that shows up
-      // as a one-sided invisible wall.
+      // Culled; 11 means only one was, which is the asymmetry bug that shows up
+      // As a one-sided invisible wall.
       //
       // CHANGED WITH THE MERGE, and not weakened: this used to read
       // `totalQuadCount(...) === 10`, which was the same number only because
-      // every quad was 1x1. The quantity the culling rule is about has always
-      // been the covered AREA — ten block-faces of surface — and that is what is
-      // asserted now, at the same value. The merged COUNT is pinned alongside it
-      // at 6, which the old assertion could not have said at all: the two blocks
-      // share four L-shaped pairs of coplanar faces and each pair merges.
+      // Every quad was 1x1. The quantity the culling rule is about has always
+      // Been the covered AREA — ten block-faces of surface — and that is what is
+      // Asserted now, at the same value. The merged COUNT is pinned alongside it
+      // At 6, which the old assertion could not have said at all: the two blocks
+      // Share four L-shaped pairs of coplanar faces and each pair merges.
       for (const face of FACES) {
         const first: readonly [number, number, number, number] = [8, 64, 8, STONE]
         const second: readonly [number, number, number, number] = [
@@ -199,8 +199,8 @@ describe('face count', () => {
         expect(totalQuadArea(layers)).toBe(10)
         expect(totalQuadCount(layers)).toBe(6)
         // The naive mesher still emits one quad per face, so the area it covers
-        // is also its count — and it agrees. That agreement is the whole reason
-        // the oracle is worth keeping.
+        // Is also its count — and it agrees. That agreement is the whole reason
+        // The oracle is worth keeping.
         const naive = meshChunkNaive(chunkWith([first, second]), {}, EMPTY_MESH_CONFIG)
         expect(totalQuadCount(naive)).toBe(10)
         expect(totalQuadArea(naive)).toBe(10)
@@ -214,19 +214,19 @@ describe('face count', () => {
       // 4*N side faces around the rim.
       //
       // CHANGED WITH THE MERGE, and strictly stronger than before. The old
-      // assertion was `totalQuadCount === 2*N*N + 4*N` and its own comment said
+      // Assertion was `totalQuadCount === 2*N*N + 4*N` and its own comment said
       // "a correct greedy merge must cover the same surface with fewer quads,
-      // never with different coverage" — so it was already written as a claim
-      // about coverage that happened to be spelled as a count. It is now spelled
-      // as coverage, at the identical value, PLUS the merged count, which is the
-      // part that was previously unsayable.
+      // Never with different coverage" — so it was already written as a claim
+      // About coverage that happened to be spelled as a count. It is now spelled
+      // As coverage, at the identical value, PLUS the merged count, which is the
+      // Part that was previously unsayable.
       //
       // Six is exact and worth pinning: the top merges to one quad, the bottom
-      // to one, and each of the four rims is a 1xN strip of coplanar faces that
-      // merges to one. It is six for EVERY N, which is the clearest statement
-      // this file makes of what merging is for.
+      // To one, and each of the four rims is a 1xN strip of coplanar faces that
+      // Merges to one. It is six for EVERY N, which is the clearest statement
+      // This file makes of what merging is for.
       FastCheck.assert(
-        FastCheck.property(FastCheck.integer({ min: 1, max: CHUNK_SIZE }), (side) => {
+        FastCheck.property(FastCheck.integer({ max: CHUNK_SIZE, min: 1 }), (side) => {
           const cells: Array<readonly [number, number, number, number]> = []
           for (let lx = 0; lx < side; lx += 1) {
             for (let lz = 0; lz < side; lz += 1) {
@@ -256,12 +256,12 @@ describe('face count', () => {
         FastCheck.property(
           FastCheck.array(
             FastCheck.tuple(
-              FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-              FastCheck.integer({ min: 0, max: CHUNK_HEIGHT - 1 }),
-              FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
+              FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+              FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+              FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
               FastCheck.constantFrom(STONE, WATER, GLASS),
             ),
-            { minLength: 0, maxLength: 40 },
+            { maxLength: 40, minLength: 0 },
           ),
           (cells) => {
             const chunk = chunkWith(cells.map(([lx, y, lz, id]) => [lx, y, lz, id] as const))
@@ -273,11 +273,11 @@ describe('face count', () => {
               }
             }
             // Stated on the AREA, which is where the six-per-cell bound actually
-            // lives: a cell has six faces however they are grouped into quads.
+            // Lives: a cell has six faces however they are grouped into quads.
             // The count is then bounded by the area, because no quad covers less
-            // than one face. Both directions of that chain matter — a merge that
-            // emitted a zero-extent quad would satisfy the old count bound and
-            // break the second half of this one.
+            // Than one face. Both directions of that chain matter — a merge that
+            // Emitted a zero-extent quad would satisfy the old count bound and
+            // Break the second half of this one.
             return (
               totalQuadArea(layers) <= solidCells * FACES.length && totalQuadCount(layers) <= totalQuadArea(layers)
             )
@@ -314,45 +314,45 @@ describe('face ordering', () => {
   it.effect('emits, WITHIN one direction, in the order that direction’s slice axis forces', () =>
     Effect.sync(() => {
       // The test above pins the order of the six GROUPS. This one pins the order
-      // inside a group, which domain/mesh.ts declares load-bearing and which
-      // nothing else asserts.
+      // Inside a group, which domain/mesh.ts declares load-bearing and which
+      // Nothing else asserts.
       //
       // CHANGED WITH THE MERGE. It used to assert `lx -> lz -> y` for all six
-      // directions. That is no longer true for four of them, and it could not
-      // be: merging finds maximal rectangles within a plane, so the axis normal
-      // to the face has to be the OUTERMOST loop. For +Y/-Y that axis is `y`,
-      // which the old order had innermost. There is no implementation of greedy
-      // meshing that keeps the old sequence, so the assertion had to move.
+      // Directions. That is no longer true for four of them, and it could not
+      // Be: merging finds maximal rectangles within a plane, so the axis normal
+      // To the face has to be the OUTERMOST loop. For +Y/-Y that axis is `y`,
+      // Which the old order had innermost. There is no implementation of greedy
+      // Meshing that keeps the old sequence, so the assertion had to move.
       //
       // THIS IS NOT A WEAKER ASSERTION. It pins an exact sequence for every one
-      // of the six directions, as before; there are now three sequences instead
-      // of one because the code has three shapes instead of one. What it costs
-      // is real and is recorded in docs/testing.md: a full-buffer golden hash
-      // taken before the merge does not match one taken after.
+      // Of the six directions, as before; there are now three sequences instead
+      // Of one because the code has three shapes instead of one. What it costs
+      // Is real and is recorded in docs/testing.md: a full-buffer golden hash
+      // Taken before the merge does not match one taken after.
       const layers = meshChunk(chunkWith(SCATTERED), {}, EMPTY_MESH_CONFIG)
       const emitted = (direction: FaceDirection): ReadonlyArray<string> =>
         layers.opaque.filter((quad) => quad.direction === direction).map(positionOf)
 
       // Slice axis first, then the two tangent axes in the order the passes
-      // scan them. Spelled out per direction rather than derived, so that an
-      // edit to the passes cannot make this table agree with it.
+      // Scan them. Spelled out per direction rather than derived, so that an
+      // Edit to the passes cannot make this table agree with it.
       const expected: Readonly<Record<FaceDirection, ReadonlyArray<string>>> = {
-        xPos: scatteredSortedBy('lx', 'lz', 'y'),
         xNeg: scatteredSortedBy('lx', 'lz', 'y'),
-        yPos: scatteredSortedBy('y', 'lx', 'lz'),
+        xPos: scatteredSortedBy('lx', 'lz', 'y'),
         yNeg: scatteredSortedBy('y', 'lx', 'lz'),
-        zPos: scatteredSortedBy('lz', 'lx', 'y'),
+        yPos: scatteredSortedBy('y', 'lx', 'lz'),
         zNeg: scatteredSortedBy('lz', 'lx', 'y'),
+        zPos: scatteredSortedBy('lz', 'lx', 'y'),
       }
       for (const direction of FACE_DIRECTIONS) {
         expect(emitted(direction)).toStrictEqual(expected[direction])
       }
 
       // The fixture has to be able to TELL each declared nesting from its
-      // transpositions, or the assertions above are satisfied by the very bug
-      // they exist to catch. Three checks per declared order: swap the first two
-      // keys, swap the last two, and reverse. All nine must differ from their
-      // declared sequence, which is what forces the ties documented on
+      // Transpositions, or the assertions above are satisfied by the very bug
+      // They exist to catch. Three checks per declared order: swap the first two
+      // Keys, swap the last two, and reverse. All nine must differ from their
+      // Declared sequence, which is what forces the ties documented on
       // SCATTERED to be there.
       const distinguishes = (first: CellAxis, second: CellAxis, third: CellAxis): void => {
         const declared = scatteredSortedBy(first, second, third)
@@ -365,7 +365,7 @@ describe('face ordering', () => {
       distinguishes('lz', 'lx', 'y')
 
       // And the three declared orders must differ from EACH OTHER, or a pass
-      // that used the wrong family's nesting would still be green.
+      // That used the wrong family's nesting would still be green.
       expect(scatteredSortedBy('lx', 'lz', 'y')).not.toStrictEqual(scatteredSortedBy('y', 'lx', 'lz'))
       expect(scatteredSortedBy('lx', 'lz', 'y')).not.toStrictEqual(scatteredSortedBy('lz', 'lx', 'y'))
       expect(scatteredSortedBy('y', 'lx', 'lz')).not.toStrictEqual(scatteredSortedBy('lz', 'lx', 'y'))
@@ -402,29 +402,29 @@ describe('quad extent and role', () => {
   it.effect('an unmerged quad still covers exactly one block, and a merged one covers its whole rectangle', () =>
     Effect.sync(() => {
       // REPLACES `a naive quad covers exactly one block: width and height are
-      // both 1`, which was written to be the thing that failed when merging
-      // landed. IT DID NOT FAIL. Its fixture — MIXED, below — is five ISOLATED
-      // blocks, no two of them face-adjacent, so nothing in it merges and every
-      // quad really is still 1x1. The assertion went on passing while the
-      // sentence it encoded ("a quad covers exactly one block") became false
-      // everywhere else in the repository.
+      // Both 1`, which was written to be the thing that failed when merging
+      // Landed. IT DID NOT FAIL. Its fixture — MIXED, below — is five ISOLATED
+      // Blocks, no two of them face-adjacent, so nothing in it merges and every
+      // Quad really is still 1x1. The assertion went on passing while the
+      // Sentence it encoded ("a quad covers exactly one block") became false
+      // Everywhere else in the repository.
       //
       // That is worth stating plainly, because it is the more dangerous outcome
-      // of the two: a test written as a tripwire that does not trip teaches the
-      // next reader that nothing changed. What it needed was a fixture with two
-      // blocks touching, and it did not have one.
+      // Of the two: a test written as a tripwire that does not trip teaches the
+      // Next reader that nothing changed. What it needed was a fixture with two
+      // Blocks touching, and it did not have one.
       //
       // So the replacement keeps the isolated case at full strength — merging
-      // must NOT invent extent where there is no neighbour to merge with — and
-      // adds the case the old fixture was missing.
+      // Must NOT invent extent where there is no neighbour to merge with — and
+      // Adds the case the old fixture was missing.
       const isolated = everyQuad(meshChunk(MIXED, {}, CONFIG))
       expect(isolated.length).toBeGreaterThan(0)
       expect(isolated.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
 
       // A 1x4 run of stone along Z. Its two Z-end caps stay 1x1; its top, bottom
-      // and two long sides each merge into a single 4-long quad. Extents are
-      // asserted against `tangentAxes`, so a width written where a height
-      // belongs is caught here and not only in the property tests.
+      // And two long sides each merge into a single 4-long quad. Extents are
+      // Asserted against `tangentAxes`, so a width written where a height
+      // Belongs is caught here and not only in the property tests.
       const run = meshChunk(
         chunkWith([
           [8, 64, 4, STONE],
@@ -438,13 +438,13 @@ describe('quad extent and role', () => {
       const only = (direction: FaceDirection): Quad | undefined =>
         run.opaque.filter((quad) => quad.direction === direction)[0]
 
-      // yPos spans (x, z): one cell wide on X, four long on Z.
+      // YPos spans (x, z): one cell wide on X, four long on Z.
       expect([only('yPos')?.width, only('yPos')?.height]).toStrictEqual([1, 4])
       expect([only('yNeg')?.width, only('yNeg')?.height]).toStrictEqual([1, 4])
-      // xPos spans (y, z): one cell tall on Y, four long on Z.
+      // XPos spans (y, z): one cell tall on Y, four long on Z.
       expect([only('xPos')?.width, only('xPos')?.height]).toStrictEqual([1, 4])
       expect([only('xNeg')?.width, only('xNeg')?.height]).toStrictEqual([1, 4])
-      // zPos/zNeg are the end caps, normal to the run, so they cannot merge.
+      // ZPos/zNeg are the end caps, normal to the run, so they cannot merge.
       expect([only('zPos')?.width, only('zPos')?.height]).toStrictEqual([1, 1])
       expect([only('zNeg')?.width, only('zNeg')?.height]).toStrictEqual([1, 1])
 
@@ -456,11 +456,11 @@ describe('quad extent and role', () => {
   it.effect('carries the role its direction implies: yPos is top, yNeg is bottom, the rest are sides', () =>
     Effect.sync(() => {
       // `role` picks the texture. A grass block with its top role on the -Y
-      // face is grass-side-up underground and dirt on the surface, which is a
-      // rendering bug with no crash and no failing count anywhere.
+      // Face is grass-side-up underground and dirt on the surface, which is a
+      // Rendering bug with no crash and no failing count anywhere.
       //
       // The expected pairs are spelled out rather than read back out of FACES,
-      // so that an edit to the FACES table cannot make this test agree with it.
+      // So that an edit to the FACES table cannot make this test agree with it.
       const pairs = new Set(everyQuad(meshChunk(MIXED, {}, CONFIG)).map((quad) => `${quad.direction}:${quad.role}`))
       expect([...pairs].sort()).toStrictEqual([
         'xNeg:side',
@@ -476,8 +476,8 @@ describe('quad extent and role', () => {
   it.effect('reports the cell it was emitted for, not the cell across the face', () =>
     Effect.sync(() => {
       // A quad addressed at the NEIGHBOUR's coordinates renders one block away
-      // from its block — the whole surface shifted by one in six directions at
-      // once, which reads as a mesh that no longer lines up with the world.
+      // From its block — the whole surface shifted by one in six directions at
+      // Once, which reads as a mesh that no longer lines up with the world.
       const layers = meshChunk(chunkWith([[7, 100, 4, STONE]]), {}, EMPTY_MESH_CONFIG)
       expect(layers.opaque.length).toBe(6)
       expect(new Set(layers.opaque.map(positionOf))).toStrictEqual(new Set(['7,100,4']))
@@ -516,11 +516,11 @@ describe('layer routing', () => {
 
   it.effect('transparentSolid beats water when a block id is claimed by both sets', () =>
     Effect.sync(() => {
-      // plan.md §3.3 fixes this priority. Making the classification total means
-      // a config mistake degrades an appearance instead of crashing a worker.
+      // Plan.md §3.3 fixes this priority. Making the classification total means
+      // A config mistake degrades an appearance instead of crashing a worker.
       const contested: MeshConfig = {
-        waterBlockIds: new Set([WATER]),
         transparentSolidBlockIds: new Set([WATER]),
+        waterBlockIds: new Set([WATER]),
       }
       const layers = meshChunk(chunkWith([[3, 64, 3, WATER]]), {}, contested)
       expect(layers.transparentSolid.length).toBe(6)
@@ -539,13 +539,13 @@ describe('layer routing', () => {
         CONFIG,
       )
       // The stone keeps all six faces: glass does not occlude, so you can see
-      // the stone through it. That is the whole point of the three-valued model.
+      // The stone through it. That is the whole point of the three-valued model.
       expect(layers.opaque.length).toBe(6)
       // The glass loses exactly one: its inward face is pressed against opaque
-      // stone and can never be seen. Occlusion is asymmetric here, and correctly
-      // so — the culling rule is about the NEIGHBOUR's opacity, not the
-      // emitter's. If this ever reads 6, transparent solids have started
-      // treating opaque neighbours as see-through.
+      // Stone and can never be seen. Occlusion is asymmetric here, and correctly
+      // So — the culling rule is about the NEIGHBOUR's opacity, not the
+      // Emitter's. If this ever reads 6, transparent solids have started
+      // Treating opaque neighbours as see-through.
       expect(layers.transparentSolid.length).toBe(5)
       expect(layers.transparentSolid.some((quad) => quad.direction === 'xNeg')).toBe(false)
     }),
@@ -556,9 +556,9 @@ describe('layer routing', () => {
       // Without the same-layer cull the interior of a lake is a wall of quads.
       //
       // Ten is the covered AREA and always was. Water stays deliberately
-      // unmerged, so the count is ten too: twelve would mean no interior cull,
-      // while any non-unit extent would mean transparent geometry entered the
-      // opaque-only greedy mask.
+      // Unmerged, so the count is ten too: twelve would mean no interior cull,
+      // While any non-unit extent would mean transparent geometry entered the
+      // Opaque-only greedy mask.
       const layers = meshChunk(
         chunkWith([
           [8, 64, 8, WATER],
@@ -608,28 +608,28 @@ describe('chunk boundaries', () => {
    */
   const SEAMS = [
     {
-      direction: 'xNeg',
       cell: [0, 64, 5],
-      touching: [CHUNK_SIZE - 1, 64, 5],
+      direction: 'xNeg',
       elsewhere: [0, 64, 5],
+      touching: [CHUNK_SIZE - 1, 64, 5],
     },
     {
-      direction: 'xPos',
       cell: [CHUNK_SIZE - 1, 64, 5],
-      touching: [0, 64, 5],
+      direction: 'xPos',
       elsewhere: [CHUNK_SIZE - 1, 64, 5],
+      touching: [0, 64, 5],
     },
     {
-      direction: 'zNeg',
       cell: [5, 64, 0],
-      touching: [5, 64, CHUNK_SIZE - 1],
+      direction: 'zNeg',
       elsewhere: [5, 64, 0],
+      touching: [5, 64, CHUNK_SIZE - 1],
     },
     {
-      direction: 'zPos',
       cell: [5, 64, CHUNK_SIZE - 1],
-      touching: [5, 64, 0],
+      direction: 'zPos',
       elsewhere: [5, 64, CHUNK_SIZE - 1],
+      touching: [5, 64, 0],
     },
   ] as const satisfies ReadonlyArray<{
     readonly direction: FaceDirection
@@ -641,11 +641,11 @@ describe('chunk boundaries', () => {
   it.effect('occludes across ALL FOUR horizontal seams, not only xNeg', () =>
     Effect.sync(() => {
       // Until this test the xPos, zPos and zNeg arms of getBlockAcrossBoundary
-      // were never executed by the suite at all. A transposed or off-by-one
-      // index in any of them produces a seam that renders a wall of duplicate
-      // faces between two loaded chunks — visible, expensive, and invisible to
-      // every count-based test, because the counts are per chunk and each chunk
-      // is individually correct.
+      // Were never executed by the suite at all. A transposed or off-by-one
+      // Index in any of them produces a seam that renders a wall of duplicate
+      // Faces between two loaded chunks — visible, expensive, and invisible to
+      // Every count-based test, because the counts are per chunk and each chunk
+      // Is individually correct.
       for (const seam of SEAMS) {
         const layers = meshChunk(
           chunkWith([[...seam.cell, STONE]]),
@@ -661,9 +661,9 @@ describe('chunk boundaries', () => {
   it.effect('reads the cell that touches the seam, not merely some cell in the neighbour', () =>
     Effect.sync(() => {
       // The companion to the test above, and the one that actually pins the
-      // index. Occlusion across a seam is satisfied by reading ANY solid cell
-      // in the neighbouring chunk; only its absence here shows that the mesher
-      // read the one facing column rather than the far side of the neighbour.
+      // Index. Occlusion across a seam is satisfied by reading ANY solid cell
+      // In the neighbouring chunk; only its absence here shows that the mesher
+      // Read the one facing column rather than the far side of the neighbour.
       for (const seam of SEAMS) {
         const layers = meshChunk(
           chunkWith([[...seam.cell, STONE]]),
@@ -678,8 +678,8 @@ describe('chunk boundaries', () => {
   it.effect('consults the neighbour on the side the face points at, and no other', () =>
     Effect.sync(() => {
       // Cross-wiring xNeg to xPos is symmetric enough to survive a test that
-      // supplies all four neighbours at once. Supplying exactly one at a time
-      // is what makes the wiring observable.
+      // Supplies all four neighbours at once. Supplying exactly one at a time
+      // Is what makes the wiring observable.
       for (const seam of SEAMS) {
         for (const other of SEAMS) {
           const layers = meshChunk(
@@ -696,9 +696,9 @@ describe('chunk boundaries', () => {
 
 describe('getBlockAcrossBoundary', () => {
   // One neighbour per side, each holding a single block with a DISTINCT id at
-  // a DISTINCT height and tangent offset. Any mix-up — wrong neighbour, wrong
-  // face of the neighbour, transposed tangent — therefore reads an empty cell
-  // and returns AIR rather than coincidentally returning the right answer.
+  // A DISTINCT height and tangent offset. Any mix-up — wrong neighbour, wrong
+  // Face of the neighbour, transposed tangent — therefore reads an empty cell
+  // And returns AIR rather than coincidentally returning the right answer.
   const XNEG = 11
   const XPOS = 12
   const ZNEG = 13
@@ -710,13 +710,13 @@ describe('getBlockAcrossBoundary', () => {
 
   const NEIGHBOURS: ChunkNeighbours = {
     xNeg: chunkWith([[CHUNK_SIZE - 1, 40, 5, XNEG]]),
-    xPos: chunkWith([[0, 41, 6, XPOS]]),
-    zNeg: chunkWith([[7, 42, CHUNK_SIZE - 1, ZNEG]]),
-    zPos: chunkWith([[8, 43, 0, ZPOS]]),
     xNegZNeg: chunkWith([[CHUNK_SIZE - 1, 45, CHUNK_SIZE - 1, XNEG_ZNEG]]),
     xNegZPos: chunkWith([[CHUNK_SIZE - 1, 46, 0, XNEG_ZPOS]]),
+    xPos: chunkWith([[0, 41, 6, XPOS]]),
     xPosZNeg: chunkWith([[0, 47, CHUNK_SIZE - 1, XPOS_ZNEG]]),
     xPosZPos: chunkWith([[0, 48, 0, XPOS_ZPOS]]),
+    zNeg: chunkWith([[7, 42, CHUNK_SIZE - 1, ZNEG]]),
+    zPos: chunkWith([[8, 43, 0, ZPOS]]),
   }
 
   const CHUNK = chunkWith([[9, 44, 9, STONE]])
@@ -742,8 +742,8 @@ describe('getBlockAcrossBoundary', () => {
   it.effect('carries the tangent coordinate across unchanged, so a seam does not shear', () =>
     Effect.sync(() => {
       // The lz of an x-side read, and the lx of a z-side read, must survive the
-      // hop. If either is dropped or swapped the neighbour is sampled along the
-      // wrong line and the seam is stitched to the wrong column of blocks.
+      // Hop. If either is dropped or swapped the neighbour is sampled along the
+      // Wrong line and the seam is stitched to the wrong column of blocks.
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, -1, 40, 6)).toBe(AIR)
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, CHUNK_SIZE, 41, 5)).toBe(AIR)
       expect(getBlockAcrossBoundary(CHUNK, NEIGHBOURS, 8, 42, -1)).toBe(AIR)
@@ -779,16 +779,16 @@ describe('getBlockAcrossBoundary', () => {
 describe('result ownership', () => {
   it.effect('REGRESSION: a later call cannot disturb the result of an earlier one', () =>
     Effect.sync(() => {
-      // meshing-result-is-owned-not-aliased. The reference returns zero-copy
-      // subarray VIEWS into one shared accumulator, valid only until the next
-      // greedyMeshChunk call; a caller who keeps a result sees the next chunk's
-      // data appear inside it. This repository returns owned arrays instead,
-      // and docs/design-notes.md M-5 says the pooled fast path is still to come.
+      // Meshing-result-is-owned-not-aliased. The reference returns zero-copy
+      // Subarray VIEWS into one shared accumulator, valid only until the next
+      // GreedyMeshChunk call; a caller who keeps a result sees the next chunk's
+      // Data appear inside it. This repository returns owned arrays instead,
+      // And docs/design-notes.md M-5 says the pooled fast path is still to come.
       //
       // That is precisely why this test exists NOW. Today it cannot fail; the
-      // day someone lands the pool it becomes the thing that stops the change
-      // from being invisible, and whoever writes that pool has to come here and
-      // argue with this comment rather than silently invalidate every caller.
+      // Day someone lands the pool it becomes the thing that stops the change
+      // From being invisible, and whoever writes that pool has to come here and
+      // Argue with this comment rather than silently invalidate every caller.
       const first = meshChunk(chunkWith([[2, 64, 2, STONE]]), {}, EMPTY_MESH_CONFIG)
       const heldOpaque = first.opaque
       const snapshot = first.opaque.map(positionOf)
@@ -808,13 +808,13 @@ describe('result ownership', () => {
       expect(first.opaque.map(positionOf)).toStrictEqual(snapshot)
       expect(first.opaque.length).toBe(6)
       // The second result is the one that is actually different, so a pool that
-      // merely copied the first result forward would not pass either.
+      // Merely copied the first result forward would not pass either.
       //
       // CHANGED WITH THE MERGE: the two stacked stone cells merge, so this is
-      // six quads over ten block-faces where it used to be ten over ten. The
-      // aliasing question this test exists for is untouched by that, and the
-      // area is asserted alongside so the fixture is still doing the work of
-      // being visibly DIFFERENT from `first` rather than merely the same size.
+      // Six quads over ten block-faces where it used to be ten over ten. The
+      // Aliasing question this test exists for is untouched by that, and the
+      // Area is asserted alongside so the fixture is still doing the work of
+      // Being visibly DIFFERENT from `first` rather than merely the same size.
       expect(second.opaque.length).toBe(6)
       expect(totalQuadArea(second)).toBe(10 + 6)
       expect(second.water.length).toBe(6)
@@ -837,7 +837,7 @@ describe('result ownership', () => {
       expect(layers.water).not.toBe(layers.transparentSolid)
       expect(layers.opaque).not.toBe(layers.transparentSolid)
       // An empty layer must be its own empty array too, not one shared constant
-      // that a future pooled implementation could hand out and then fill in.
+      // That a future pooled implementation could hand out and then fill in.
       const empty = meshChunk(emptyChunk(), {}, CONFIG)
       expect(empty.opaque).not.toBe(empty.water)
     }),
@@ -862,15 +862,15 @@ const STONE_B = 4
 
 const arbitraryChunkOfBoxes = FastCheck.array(
   FastCheck.tuple(
-    FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-    FastCheck.integer({ min: 0, max: 40 }),
-    FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-    FastCheck.integer({ min: 1, max: 6 }),
-    FastCheck.integer({ min: 1, max: 6 }),
-    FastCheck.integer({ min: 1, max: 6 }),
+    FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+    FastCheck.integer({ max: 40, min: 0 }),
+    FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+    FastCheck.integer({ max: 6, min: 1 }),
+    FastCheck.integer({ max: 6, min: 1 }),
+    FastCheck.integer({ max: 6, min: 1 }),
     FastCheck.constantFrom(STONE, STONE_B, WATER, GLASS),
   ),
-  { minLength: 1, maxLength: 10 },
+  { maxLength: 10, minLength: 1 },
 ).map((boxes) => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, dx, dy, dz, blockId] of boxes) {
@@ -926,16 +926,16 @@ describe('the greedy merge against the naive oracle', () => {
 
   it.effect('REGRESSION: merged output covers exactly the same block-faces as unmerged output', () =>
     Effect.sync(() => {
-      // meshing-merge-covers-the-same-surface. THE property this whole exercise
-      // rests on, and the one that makes it legitimate to let the emission order
-      // move: the merge is correct precisely when expanding its quads back into
-      // unit faces reproduces the naive mesher's output exactly — same faces,
-      // same block ids, no face lost, no face claimed twice.
+      // Meshing-merge-covers-the-same-surface. THE property this whole exercise
+      // Rests on, and the one that makes it legitimate to let the emission order
+      // Move: the merge is correct precisely when expanding its quads back into
+      // Unit faces reproduces the naive mesher's output exactly — same faces,
+      // Same block ids, no face lost, no face claimed twice.
       //
       // Multiset equality, not set equality, and the difference is the point. A
-      // merge with an off-by-one that made two quads overlap by a row would
-      // produce the same SET of faces and a larger multiset. Comparing sorted
-      // arrays catches that; comparing `new Set(...)` would not.
+      // Merge with an off-by-one that made two quads overlap by a row would
+      // Produce the same SET of faces and a larger multiset. Comparing sorted
+      // Arrays catches that; comparing `new Set(...)` would not.
       FastCheck.assert(
         FastCheck.property(arbitraryChunkOfBoxes, arbitraryNeighbours, (chunk, neighbours) => {
           const merged = allUnitFaces(meshChunk(chunk, neighbours, CONFIG))
@@ -951,9 +951,9 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('REGRESSION: no two merged quads claim the same block-face', () =>
     Effect.sync(() => {
       // The half of the property above that a coverage-only check would miss,
-      // stated on its own so that a failure says which of the two went wrong.
+      // Stated on its own so that a failure says which of the two went wrong.
       // Overlapping quads are z-fighting in the renderer: two coplanar surfaces
-      // at the same depth, flickering as the camera moves.
+      // At the same depth, flickering as the camera moves.
       FastCheck.assert(
         FastCheck.property(arbitraryChunkOfBoxes, arbitraryNeighbours, (chunk, neighbours) => {
           const faces = allUnitFaces(meshChunk(chunk, neighbours, CONFIG))
@@ -968,8 +968,8 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('never emits more quads than the naive mesher, and usually far fewer', () =>
     Effect.sync(() => {
       // Merging that grows the mesh is not merging. The second half is not
-      // decoration: on box terrain the reduction has to be real, or the property
-      // above is being satisfied by a `meshChunk` that merged nothing.
+      // Decoration: on box terrain the reduction has to be real, or the property
+      // Above is being satisfied by a `meshChunk` that merged nothing.
       let sawRealReduction = false
       FastCheck.assert(
         FastCheck.property(arbitraryChunkOfBoxes, (chunk) => {
@@ -991,12 +991,12 @@ describe('the greedy merge against the naive oracle', () => {
 
   it.effect('REGRESSION: never merges two different block ids, however they are arranged', () =>
     Effect.sync(() => {
-      // meshing-merge-never-crosses-a-block-boundary. Two opaque blocks side by
-      // side present one continuous surface, and a merge keyed on "is a face
-      // exposed here" would happily cover both with one quad carrying one of the
-      // two ids. The result is a stripe of the wrong texture — geometrically
-      // perfect, visibly wrong, and invisible to any test that counts faces or
-      // measures area, because both are unchanged.
+      // Meshing-merge-never-crosses-a-block-boundary. Two opaque blocks side by
+      // Side present one continuous surface, and a merge keyed on "is a face
+      // Exposed here" would happily cover both with one quad carrying one of the
+      // Two ids. The result is a stripe of the wrong texture — geometrically
+      // Perfect, visibly wrong, and invisible to any test that counts faces or
+      // Measures area, because both are unchanged.
       const layers = meshChunk(
         chunkWith([
           [4, 64, 4, STONE],
@@ -1011,7 +1011,7 @@ describe('the greedy merge against the naive oracle', () => {
       expect(tops.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
 
       // Stated as a property too: every unit face a merged quad covers must
-      // really hold that quad's block id in the chunk it came from.
+      // Really hold that quad's block id in the chunk it came from.
       FastCheck.assert(
         FastCheck.property(arbitraryChunkOfBoxes, (chunk) => {
           const merged = meshChunk(chunk, {}, CONFIG)
@@ -1031,12 +1031,12 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('REGRESSION: greedily merges opaque faces but keeps transparent faces as unit quads', () =>
     Effect.sync(() => {
       // The layer is a function of the block id, so this follows from the test
-      // above — but it follows only as long as that stays true, and the priority
-      // rule (transparentSolid > water > opaque) is exactly the kind of thing a
-      // future edit could make depend on something else. Pinned directly.
+      // Above — but it follows only as long as that stays true, and the priority
+      // Rule (transparentSolid > water > opaque) is exactly the kind of thing a
+      // Future edit could make depend on something else. Pinned directly.
       //
       // A glass sheet laid over water: the two surfaces touch, are coplanar in
-      // four of six directions, and belong to different layers.
+      // Four of six directions, and belong to different layers.
       const cells: Array<readonly [number, number, number, number]> = []
       for (let lx = 0; lx < 4; lx += 1) {
         for (let lz = 0; lz < 4; lz += 1) {
@@ -1049,7 +1049,7 @@ describe('the greedy merge against the naive oracle', () => {
       expect(layers.water.every((quad) => quad.blockId === WATER)).toBe(true)
       expect(layers.transparentSolid.every((quad) => quad.blockId === GLASS)).toBe(true)
       // Transparent geometry is intentionally conservative: alpha sorting and
-      // future per-cell material state must not be hidden inside a merged quad.
+      // Future per-cell material state must not be hidden inside a merged quad.
       const glassTop = layers.transparentSolid.filter((quad) => quad.direction === 'yPos')
       expect(glassTop.length).toBe(16)
       expect(glassTop.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
@@ -1065,22 +1065,22 @@ describe('the greedy merge against the naive oracle', () => {
 
   it.effect('REGRESSION: does not merge two faces whose ambient occlusion differs', () =>
     Effect.sync(() => {
-      // meshing-merge-splits-on-ambient-occlusion. The half of AO that lives in
-      // this file rather than in test/ambient-occlusion.test.ts: not what the
-      // value is, but that the merge is keyed on it.
+      // Meshing-merge-splits-on-ambient-occlusion. The half of AO that lives in
+      // This file rather than in test/ambient-occlusion.test.ts: not what the
+      // Value is, but that the merge is keyed on it.
       //
       // A 1x2 run of stone along X at y=64, and an OVERHANG one block up and one
-      // block out in +Z. The +Z faces of (8,64,8) and (9,64,8) are coplanar,
-      // adjacent along X — the first tangent axis of a +Z face — the same block
-      // and the same direction: every condition the pre-AO merge needed. The
-      // overhang at (8,65,9) is a sampled neighbour of the first face's air cell
-      // and not of the second's, so it darkens one and not the other.
+      // Block out in +Z. The +Z faces of (8,64,8) and (9,64,8) are coplanar,
+      // Adjacent along X — the first tangent axis of a +Z face — the same block
+      // And the same direction: every condition the pre-AO merge needed. The
+      // Overhang at (8,65,9) is a sampled neighbour of the first face's air cell
+      // And not of the second's, so it darkens one and not the other.
       //
       // The overhang is DIAGONAL to both blocks, which is the point of choosing
-      // it: it changes the shading without touching the culling, so the split
-      // below can only be AO. (The obvious fixture — an L, with the third block
-      // at (8,64,9) — does not work at all: it is face-adjacent, so it culls the
-      // very face the test wants to compare.)
+      // It: it changes the shading without touching the culling, so the split
+      // Below can only be AO. (The obvious fixture — an L, with the third block
+      // At (8,64,9) — does not work at all: it is face-adjacent, so it culls the
+      // Very face the test wants to compare.)
       const chunk = chunkWith([
         [8, 64, 8, STONE],
         [9, 64, 8, STONE],
@@ -1098,8 +1098,8 @@ describe('the greedy merge against the naive oracle', () => {
 
       // And the pair really would have merged without the shading difference.
       // Stated by removing the overhang and showing the SAME two faces become
-      // one quad, so the split above is not a claim about some other
-      // obstruction — the fixtures differ in exactly one diagonal block.
+      // One quad, so the split above is not a claim about some other
+      // Obstruction — the fixtures differ in exactly one diagonal block.
       const withoutTheCorner = meshChunk(
         chunkWith([
           [8, 64, 8, STONE],
@@ -1112,7 +1112,7 @@ describe('the greedy merge against the naive oracle', () => {
       expect(mergedPair.map((quad) => [quad.lx, quad.width, quad.height, quad.ao])).toStrictEqual([[8, 2, 1, 0]])
 
       // THE POINT: splitting costs quads and must not cost SURFACE. Both meshes
-      // cover exactly what the naive mesher covers.
+      // Cover exactly what the naive mesher covers.
       expect(totalQuadArea(layers)).toBe(totalQuadArea(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG)))
     }),
   )
@@ -1120,14 +1120,14 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, id 255 included', () =>
     Effect.sync(() => {
       // The mask packs `blockId | (ao << 8)` into one cell and merges on the
-      // whole cell, so this is also the round-trip test for that packing. Id 255
-      // is the largest a `Uint8Array` holds: were the shift 7 rather than 8, its
-      // top bit would land in the AO field and every quad of block 255 would
-      // report a shade it does not have — and no other id in this file would
-      // notice.
+      // Whole cell, so this is also the round-trip test for that packing. Id 255
+      // Is the largest a `Uint8Array` holds: were the shift 7 rather than 8, its
+      // Top bit would land in the AO field and every quad of block 255 would
+      // Report a shade it does not have — and no other id in this file would
+      // Notice.
       //
       // A 4x4 plate of id 255 with a wall along one side, so the plate's top
-      // face carries two AO values and both are non-zero somewhere.
+      // Face carries two AO values and both are non-zero somewhere.
       const cells: Array<readonly [number, number, number, number]> = []
       for (let lx = 4; lx < 8; lx += 1) {
         for (let lz = 4; lz < 8; lz += 1) {
@@ -1143,7 +1143,7 @@ describe('the greedy merge against the naive oracle', () => {
       expect(layers.opaque.every((quad) => quad.blockId === 255)).toBe(true)
       expect(layers.opaque.every((quad) => quad.ao >= 0 && quad.ao <= AO_MAX)).toBe(true)
       // The wall at lx=3, y=65 darkens the lx=4 column of the plate's top face
-      // and nothing further in, so the top splits into exactly two quads.
+      // And nothing further in, so the top splits into exactly two quads.
       const tops = layers.opaque.filter((quad) => quad.direction === 'yPos' && quad.y === 64)
       expect(tops.map((quad) => [quad.lx, quad.width, quad.height, quad.ao])).toStrictEqual([
         [4, 1, 4, 1],
@@ -1151,7 +1151,7 @@ describe('the greedy merge against the naive oracle', () => {
       ])
 
       // Expanded back into unit faces, the merged mesh agrees with the oracle
-      // shade for shade — `unitFacesOf` now carries `ao`.
+      // Shade for shade — `unitFacesOf` now carries `ao`.
       expect([...allUnitFaces(layers)].sort()).toStrictEqual(
         [...allUnitFaces(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))].sort(),
       )
@@ -1162,8 +1162,8 @@ describe('the greedy merge against the naive oracle', () => {
     Effect.sync(() => {
       // The flat-terrain case the benchmark reports on, at chunk scale. A solid
       // 16x16 layer spanning the whole chunk footprint has no side faces at all
-      // when no neighbour is present — the rim faces the chunk boundary, which
-      // reads as air, so they ARE emitted. 16x16 top, 16x16 bottom, and four
+      // When no neighbour is present — the rim faces the chunk boundary, which
+      // Reads as air, so they ARE emitted. 16x16 top, 16x16 bottom, and four
       // 16x1 rims: six quads over 4 * 16 + 2 * 256 block-faces.
       const cells: Array<readonly [number, number, number, number]> = []
       for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
@@ -1183,8 +1183,8 @@ describe('the Y scan ceiling', () => {
   it.effect('REGRESSION: a block at the very top of the chunk is still meshed', () =>
     Effect.sync(() => {
       // `solidCeiling` exists to skip the empty air column above the terrain,
-      // and an off-by-one in it removes the topmost layer of the world silently:
-      // every other test in this file uses y=64 or below and would stay green.
+      // And an off-by-one in it removes the topmost layer of the world silently:
+      // Every other test in this file uses y=64 or below and would stay green.
       const layers = meshChunk(chunkWith([[3, CHUNK_HEIGHT - 1, 3, STONE]]), {}, EMPTY_MESH_CONFIG)
       expect(layers.opaque.length).toBe(6)
       expect(new Set(layers.opaque.map(positionOf))).toStrictEqual(new Set([`3,${CHUNK_HEIGHT - 1},3`]))
@@ -1194,9 +1194,9 @@ describe('the Y scan ceiling', () => {
   it.effect('does not let a high block change what is emitted for a low one', () =>
     Effect.sync(() => {
       // The ceiling is chunk-wide, so a single tall pillar raises it for every
-      // column. If the ceiling were ever applied per column instead, this is the
-      // case that would notice: the low block's faces must be identical either
-      // way.
+      // Column. If the ceiling were ever applied per column instead, this is the
+      // Case that would notice: the low block's faces must be identical either
+      // Way.
       const low = meshChunk(chunkWith([[8, 4, 8, STONE]]), {}, EMPTY_MESH_CONFIG)
       const withTower = meshChunk(
         chunkWith([
@@ -1221,7 +1221,7 @@ describe('the Y scan ceiling', () => {
       expect(totalQuadCount(layers)).toBe(0)
       expect(totalQuadArea(layers)).toBe(0)
       // The early return for an empty chunk must not start handing out one
-      // shared empty array; `result ownership` below relies on it not doing so.
+      // Shared empty array; `result ownership` below relies on it not doing so.
       expect(layers.opaque).not.toBe(layers.water)
       expect(layers.water).not.toBe(layers.transparentSolid)
     }),
@@ -1230,8 +1230,8 @@ describe('the Y scan ceiling', () => {
   it.effect('REGRESSION: short block storage treats missing in-bounds cells as AIR in canonical order', () =>
     Effect.sync(() => {
       // ChunkView is structural, so a producer can temporarily expose a short
-      // typed array. The hot passes may read directly only if they retain
-      // getBlock's missing-cell-as-AIR behavior and the emitted sequence.
+      // Typed array. The hot passes may read directly only if they retain
+      // GetBlock's missing-cell-as-AIR behavior and the emitted sequence.
       const blocks = new Uint8Array(1)
       blocks[0] = STONE
       const chunk: ChunkView = { blocks }
@@ -1263,9 +1263,9 @@ describe('getBlock', () => {
     Effect.sync(() => {
       FastCheck.assert(
         FastCheck.property(
-          FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-          FastCheck.integer({ min: 0, max: CHUNK_HEIGHT - 1 }),
-          FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
+          FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+          FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+          FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
           (lx, y, lz) => {
             const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
             blocks[blockIndex(lx, y, lz)] = STONE

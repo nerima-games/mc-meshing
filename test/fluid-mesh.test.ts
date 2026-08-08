@@ -19,19 +19,19 @@ import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
-  blockIndex,
   type ChunkNeighbours,
   type ChunkView,
+  blockIndex,
 } from '../src/domain/chunk-view'
-import { tangentAxes, type QuadAxis } from '../src/domain/faces'
+import { type QuadAxis, tangentAxes } from '../src/domain/faces'
 import {
+  type FluidQuad,
   SOURCE_SURFACE_HEIGHT,
   buildFluidLookup,
   isFluidBlock,
-  type FluidQuad,
 } from '../src/domain/fluid-mesh'
 import { simplifyMesh } from '../src/domain/lod'
-import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount, type MeshLayers, type Quad } from '../src/domain/mesh'
+import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
@@ -55,20 +55,20 @@ const WATER_MAX_LEVEL = 7
 const LAVA_MAX_LEVEL = 3
 
 const CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
-  transparentSolidBlockIds: new Set([GLASS]),
   crossPlantBlockIds: new Set([FLOWER]),
   fluidMaxLevels: new Map([
     [WATER, WATER_MAX_LEVEL],
     [LAVA, LAVA_MAX_LEVEL],
   ]),
+  transparentSolidBlockIds: new Set([GLASS]),
+  waterBlockIds: new Set([WATER]),
 }
 
 /** The same config with the fluid table removed: water goes back to being a cube. */
 const CUBE_WATER_CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
-  transparentSolidBlockIds: new Set([GLASS]),
   crossPlantBlockIds: new Set([FLOWER]),
+  transparentSolidBlockIds: new Set([GLASS]),
+  waterBlockIds: new Set([WATER]),
 }
 
 type BlockCell = readonly [number, number, number, number]
@@ -91,7 +91,7 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     sources[blockIndex(lx, y, lz)] = source
     falling[blockIndex(lx, y, lz)] = isFalling
   }
-  return { blocks, fluid: { levels, sources, falling } }
+  return { blocks, fluid: { falling, levels, sources } }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -110,10 +110,10 @@ const topAt = (quads: ReadonlyArray<FluidQuad>, lx: number, lz: number): FluidQu
 describe('the height of one cell', () => {
   it.effect('a source sits at the reference’s 14/16, not flush with the cell top', () =>
     Effect.sync(() => {
-      // meshing-fluid-height-comes-from-injected-max-level.
+      // Meshing-fluid-height-comes-from-injected-max-level.
       // `greedy-meshing-fluid-state.ts:37`, and the reason is in its comment
       // (:32-36): a source flush with the top of its cell meets the grass beside
-      // it at the grass's own height and the shoreline reads as a glass wall.
+      // It at the grass's own height and the shoreline reads as a glass wall.
       expect(SOURCE_SURFACE_HEIGHT).toBe(14 / 16)
 
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]]), {}, CONFIG)
@@ -126,8 +126,8 @@ describe('the height of one cell', () => {
     Effect.sync(() => {
       // `1 - level / (maxLevel + 1)` (`greedy-meshing-fluid-state.ts:39-43`).
       // Water's step is 1/8 and lava's is 1/4, and they are different on purpose:
-      // a max level hard-coded on either side of the seam gives one of the two
-      // fluids the other's steps, and every assertion in this test notices.
+      // A max level hard-coded on either side of the seam gives one of the two
+      // Fluids the other's steps, and every assertion in this test notices.
       const heightOf = (blockId: number, level: number): number => {
         const chunk = chunkWith([[8, 64, 8, blockId]], [[8, 64, 8, level, 0]])
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
@@ -148,8 +148,8 @@ describe('the height of one cell', () => {
   it.effect('the height has a FLOOR of one step, so the emptiest cell is still visible', () =>
     Effect.sync(() => {
       // The `max` in `greedy-meshing-fluid-state.ts:42`. Without it a level past
-      // the maximum gives height 0 — a zero-height sheet lying exactly on the
-      // ground, which z-fights with it and vanishes at grazing angles.
+      // The maximum gives height 0 — a zero-height sheet lying exactly on the
+      // Ground, which z-fights with it and vanishes at grazing angles.
       const heightOf = (blockId: number, level: number): number => {
         const chunk = chunkWith([[8, 64, 8, blockId]], [[8, 64, 8, level, 0]])
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
@@ -167,9 +167,9 @@ describe('the height of one cell', () => {
   it.effect('a submerged cell is FULL, so a deep lake is one surface and not a stack of sheets', () =>
     Effect.sync(() => {
       // `fluidSurfaceHeightForColumn` (`greedy-meshing-fluid-state.ts:74-87`):
-      // same fluid directly above means height 1, whatever this cell's own level
-      // says. Without it the 14/16 inset appears at every depth and a lake
-      // renders as separated sheets with gaps a player can see through.
+      // Same fluid directly above means height 1, whatever this cell's own level
+      // Says. Without it the 14/16 inset appears at every depth and a lake
+      // Renders as separated sheets with gaps a player can see through.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -188,8 +188,8 @@ describe('the height of one cell', () => {
       expect(ysOf(tops[0] as FluidQuad)).toStrictEqual([65.875, 65.875, 65.875, 65.875])
 
       // And the LOWER cell's own sides run to a full 65, not to 64.875: the
-      // submerged rule feeds the corner averaging too, so the wall of the lake
-      // has no notch at every cell boundary.
+      // Submerged rule feeds the corner averaging too, so the wall of the lake
+      // Has no notch at every cell boundary.
       const lowerSides = layers.fluids.filter((quad) => quad.direction === 'xPos' && quad.vertices[1][1] <= 65)
       expect(lowerSides.length).toBe(1)
       expect(ysOf(lowerSides[0] as FluidQuad)).toStrictEqual([64, 65, 65, 64])
@@ -201,12 +201,12 @@ describe('the height of one cell', () => {
       // Two things at once, and both are load-bearing.
       //
       // 1. `solidCeiling`'s off-by-one. Every other test here sits around y=64,
-      //    so a scan ceiling that stopped one row short would leave them all
-      //    green and silently delete the top row of the world —— the same fault
+      //    So a scan ceiling that stopped one row short would leave them all
+      //    Green and silently delete the top row of the world —— the same fault
       //    `test/mesh.test.ts`'s `the Y scan ceiling` group exists for.
       // 2. `heightIn` carries NO y-range check, because `getBlock` already
-      //    answers out-of-range with `AIR`. This is the case that exercises it:
-      //    the corner averaging probes `y + 1`, which is `CHUNK_HEIGHT` here.
+      //    Answers out-of-range with `AIR`. This is the case that exercises it:
+      //    The corner averaging probes `y + 1`, which is `CHUNK_HEIGHT` here.
       //    A statement of the behaviour, not a guard being defended.
       const top = CHUNK_HEIGHT - 1
       const chunk = chunkWith([[8, top, 8, WATER]], [[8, top, 8, 0, 1]])
@@ -227,14 +227,38 @@ describe('the height of one cell', () => {
   it.effect('a missing FluidView reads as full, non-source cells rather than as no fluid', () =>
     Effect.sync(() => {
       // A caller holding block ids but no simulation state yet gets flat
-      // full-height fluid. The alternative — treating absent state as absent
-      // fluid — makes every lake INVISIBLE, because the cube passes have already
-      // skipped it. Same instinct as `getBlock` returning AIR for an absent
-      // neighbour: degrade to the answer that still shows the player a world.
+      // Full-height fluid. The alternative — treating absent state as absent
+      // Fluid — makes every lake INVISIBLE, because the cube passes have already
+      // Skipped it. Same instinct as `getBlock` returning AIR for an absent
+      // Neighbour: degrade to the answer that still shows the player a world.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]]), {}, CONFIG)
       const top = faceOfDirection(layers.fluids, 'yPos')
       expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
     }),
+  )
+
+  it.effect(
+    'a FluidView present but shorter than the chunk reads its missing cells the same way a missing FluidView does',
+    () =>
+      Effect.sync(() => {
+        // `levels`/`sources` arrive from outside meshing — `domain/chunk-view.ts`'s
+        // `FluidView` doc spells out why meshing does not own their encoding — so
+        // Nothing here can prove their length matches the chunk the way the
+        // Internally-built lookup tables do. An index past a too-short array reads
+        // Back `undefined`, and `levelIn`/`sourceIn` default that the same way the
+        // Wholly-missing-`FluidView` case above does: `FLUID_BYTE_UNSET`, i.e. full
+        // And not a source. This is that default, witnessed with the `FluidView`
+        // Present but truncated to one entry instead of absent entirely.
+        const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+        blocks[blockIndex(8, 64, 8)] = WATER
+        const chunk: ChunkView = {
+          blocks,
+          fluid: { levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        }
+
+        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
+        expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
+      }),
   )
 })
 
@@ -242,12 +266,12 @@ describe('the corner averaging', () => {
   it.effect('REGRESSION: the surface TILTS toward the emptier neighbour', () =>
     Effect.sync(() => {
       // The top patch's SLOPE is independent of its renderer-facing flow
-      // descriptor. It exists because each corner is the mean of the up-to-four
-      // columns touching it
+      // Descriptor. It exists because each corner is the mean of the up-to-four
+      // Columns touching it
       // (`greedy-meshing-fluid-state.ts:89-113`). Replace that average with the
-      // cell's own height and every quad is still emitted, in the right order,
-      // with the right winding and the right block id — and every lake in the
-      // world is a flat plate with a stair-step edge.
+      // Cell's own height and every quad is still emitted, in the right order,
+      // With the right winding and the right block id — and every lake in the
+      // World is a flat plate with a stair-step edge.
       //
       // Full cell at lx=8 (height 1), half-full at lx=9 (level 4 -> 1/2).
       const chunk = chunkWith(
@@ -264,13 +288,13 @@ describe('the corner averaging', () => {
       const top = layers.fluids.find((quad) => quad.direction === 'yPos' && quad.vertices[0][0] === 8)
 
       // Winding is (0,0), (0,1), (1,1), (1,0) — the reference's, at :82-85. The
-      // two corners on the lx=8 side see only the full cell; the two on the lx=9
-      // side average the full cell with the half-full one.
+      // Two corners on the lx=8 side see only the full cell; the two on the lx=9
+      // Side average the full cell with the half-full one.
       expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 64.75, 64.75])
 
       // Stated independently of the literals above: whatever the numbers, the
       // +X edge must sit LOWER than the -X edge. An edit that "fixes" both
-      // literals at once still has to face this.
+      // Literals at once still has to face this.
       const ys = ysOf(top as FluidQuad)
       expect(Math.max(ys[2] as number, ys[3] as number)).toBeLessThan(Math.min(ys[0] as number, ys[1] as number))
     }),
@@ -287,11 +311,11 @@ describe('the corner averaging', () => {
   it.effect('the cell is always one of its own corner samples, so no corner is ever NaN', () =>
     Effect.sync(() => {
       // `cornerHeight` divides by `sampleCount` and carries NO guard against
-      // zero, because the cell that reached it resolved to the fluid being asked
-      // about and is one of the four samples of all four of its own corners. A
-      // guard would be the unreachable branch M-11 removed from
+      // Zero, because the cell that reached it resolved to the fluid being asked
+      // About and is one of the four samples of all four of its own corners. A
+      // Guard would be the unreachable branch M-11 removed from
       // `buildCrossPlantLookup` after no mutation could make it fail. This test
-      // is the statement that the reasoning holds, at every corner of the chunk
+      // Is the statement that the reasoning holds, at every corner of the chunk
       // — which is where a sampler that walked off the edge would divide by 0.
       for (const [lx, lz] of [
         [0, 0],
@@ -375,7 +399,7 @@ describe('the renderer flow descriptor', () => {
       const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 0, 1]])
       const quads = meshChunk(chunk, {}, CONFIG).fluids
       expect(topAt(quads, 8, 8)?.flow).toStrictEqual({ direction: [0, 0], falling: true })
-      expect(quads.filter((quad) => quad.direction !== 'yPos').every((quad) => quad.flow === undefined)).toBe(true)
+      expect(quads.filter((quad) => quad.direction !== 'yPos').every((quad) => !quad.flow)).toBe(true)
     }),
   )
 
@@ -412,11 +436,11 @@ describe('which fluid faces exist', () => {
     Effect.sync(() => {
       // FIVE, NOT SIX. The reference's fluid pass has no `yNeg` case at all
       // (`greedy-meshing-fluids.ts:70, 92, 120, 148, 176` and nothing else), so
-      // the underside of a lake is not drawn and a swimmer below one sees
-      // through it. Transcribed rather than endorsed — docs/design-notes.md M-12
-      // records it as the one visible gap this port did not invent geometry to
-      // close. This test exists so that the gap is a decision on the record and
-      // not something a later reader discovers in a renderer.
+      // The underside of a lake is not drawn and a swimmer below one sees
+      // Through it. Transcribed rather than endorsed — docs/design-notes.md M-12
+      // Records it as the one visible gap this port did not invent geometry to
+      // Close. This test exists so that the gap is a decision on the record and
+      // Not something a later reader discovers in a renderer.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]]), {}, CONFIG)
       expect(layers.fluids.length).toBe(5)
       expect(layers.fluids.map((quad) => quad.direction).sort()).toStrictEqual([
@@ -434,7 +458,7 @@ describe('which fluid faces exist', () => {
     Effect.sync(() => {
       // `isFluidFaceOccluder` (`greedy-meshing-fluid-state.ts:129-134`): only a
       // TRULY opaque neighbour occludes. Water behind glass must still show its
-      // surface or the tank renders empty.
+      // Surface or the tank renders empty.
       const under = (lidId: number): ReadonlyArray<FluidQuad> =>
         meshChunk(
           chunkWith(
@@ -456,10 +480,10 @@ describe('which fluid faces exist', () => {
   it.effect('fluid ABOVE hides the top even when it is the other fluid', () =>
     Effect.sync(() => {
       // The reference tests `aboveFluid === null` (`greedy-meshing-fluids.ts:69`)
-      // and that is false for the other kind too. It has to be that way round: a
-      // fluid is never an occluder, so if this test only looked for the SAME
-      // fluid, neither clause would catch lava and the water's surface would be
-      // drawn inside it.
+      // And that is false for the other kind too. It has to be that way round: a
+      // Fluid is never an occluder, so if this test only looked for the SAME
+      // Fluid, neither clause would catch lava and the water's surface would be
+      // Drawn inside it.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -480,12 +504,12 @@ describe('which fluid faces exist', () => {
       // Two separate rules meeting in one place.
       //
       // LAVA is not in `waterBlockIds`, so `occludes` classifies it OPAQUE. Only
-      // the fluid table stops it hiding the water beside it — take that clause
-      // out and the shore of every lava lake eats the water's edge.
+      // The fluid table stops it hiding the water beside it — take that clause
+      // Out and the shore of every lava lake eats the water's edge.
       //
       // A CROSS PLANT is M-11's rule, applied here for consistency rather than
-      // decided again: two diagonal panes filling a tenth of a cell cannot hide
-      // a lake's edge.
+      // Decided again: two diagonal panes filling a tenth of a cell cannot hide
+      // A lake's edge.
       const besideWater = (neighbourId: number): ReadonlyArray<FluidQuad> =>
         meshChunk(
           chunkWith(
@@ -502,7 +526,7 @@ describe('which fluid faces exist', () => {
       expect(besideWater(LAVA).some((quad) => quad.direction === 'xPos')).toBe(true)
       expect(besideWater(FLOWER).some((quad) => quad.direction === 'xPos')).toBe(true)
       // The control: a genuinely opaque neighbour DOES hide it. Without this an
-      // implementation that occludes nothing at all would pass the two above.
+      // Implementation that occludes nothing at all would pass the two above.
       expect(besideWater(STONE).some((quad) => quad.direction === 'xPos')).toBe(false)
     }),
   )
@@ -510,8 +534,8 @@ describe('which fluid faces exist', () => {
   it.effect('two cells of equal height share no wall, from either side', () =>
     Effect.sync(() => {
       // The fluid analogue of M-6. `greedy-meshing-fluids.ts:97` skips the skirt
-      // when the neighbour is at least as high; without it the inside of a lake
-      // is a grid of walls, which is both wrong and ruinously expensive.
+      // When the neighbour is at least as high; without it the inside of a lake
+      // Is a grid of walls, which is both wrong and ruinously expensive.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -533,10 +557,10 @@ describe('which fluid faces exist', () => {
   it.effect('REGRESSION: a skirt starts at the NEIGHBOUR’s surface, not at the floor', () =>
     Effect.sync(() => {
       // `greedy-meshing-fluids.ts:94-97`. The skirt covers only the STEP between
-      // the two surfaces. Running it to `y` instead buries a wall of fluid inside
-      // the lake wherever two cells of different height meet — invisible from
-      // above, and exactly the sort of fault a face count cannot see, because
-      // the face count is identical either way.
+      // The two surfaces. Running it to `y` instead buries a wall of fluid inside
+      // The lake wherever two cells of different height meet — invisible from
+      // Above, and exactly the sort of fault a face count cannot see, because
+      // The face count is identical either way.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -562,8 +586,8 @@ describe('which fluid faces exist', () => {
   it.effect('every fluid face carries zero ambient occlusion', () =>
     Effect.sync(() => {
       // `ZERO_AO` (`greedy-meshing-fluids.ts:13`, used at :52). A fluid surface
-      // is shaded by the water shader, and `domain/ambient-occlusion.ts` samples
-      // the tangent neighbours of an axis-aligned UNIT face, which a patch at
+      // Is shaded by the water shader, and `domain/ambient-occlusion.ts` samples
+      // The tangent neighbours of an axis-aligned UNIT face, which a patch at
       // 0.875 is not. Boxed in on all sides, where a cube face would darken.
       const chunk = chunkWith(
         [
@@ -582,11 +606,11 @@ describe('which fluid faces exist', () => {
 describe('what a fluid does to the six cube passes', () => {
   it.effect('REGRESSION: a fluid block emits no cube faces at all', () =>
     Effect.sync(() => {
-      // meshing-fluid-blocks-emit-no-cube-faces. Without the guard a lake is
-      // drawn TWICE — flat at y+1 by the cube passes and again at y+0.875 by the
-      // fluid pass — and the two z-fight along every shoreline. The same failure
+      // Meshing-fluid-blocks-emit-no-cube-faces. Without the guard a lake is
+      // Drawn TWICE — flat at y+1 by the cube passes and again at y+0.875 by the
+      // Fluid pass — and the two z-fight along every shoreline. The same failure
       // M-11's plant guard exists to prevent, one step worse because the two
-      // copies are at different heights and so the artefact moves as the camera does.
+      // Copies are at different heights and so the artefact moves as the camera does.
       const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]])
 
       const withFluid = meshChunk(chunk, {}, CONFIG)
@@ -594,7 +618,7 @@ describe('what a fluid does to the six cube passes', () => {
       expect(withFluid.fluids.length).toBe(5)
 
       // And the control, which is what fixes that it is the CONFIG deciding this
-      // and not the block id: the same chunk, the same id, no fluid table.
+      // And not the block id: the same chunk, the same id, no fluid table.
       const asCube = meshChunk(chunk, {}, CUBE_WATER_CONFIG)
       expect(asCube.water.length).toBe(6)
       expect(asCube.fluids).toStrictEqual([])
@@ -604,9 +628,9 @@ describe('what a fluid does to the six cube passes', () => {
   it.effect('an absent fluid table changes nothing whatsoever', () =>
     Effect.sync(() => {
       // The compatibility claim `domain/opacity.ts` makes for `fluidMaxLevels`,
-      // and the reason docs/design-notes.md M-9 and M-10 keep their recorded
+      // And the reason docs/design-notes.md M-9 and M-10 keep their recorded
       // `layered-water-glass` figures unamended. A config written before this
-      // file existed must produce byte-identical output.
+      // File existed must produce byte-identical output.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -616,8 +640,8 @@ describe('what a fluid does to the six cube passes', () => {
         [[8, 64, 8, 0, 1]],
       )
       const before: MeshConfig = {
-        waterBlockIds: new Set([WATER]),
         transparentSolidBlockIds: new Set([GLASS]),
+        waterBlockIds: new Set([WATER]),
       }
       const after: MeshConfig = { ...before, fluidMaxLevels: new Map<number, number>() }
 
@@ -629,9 +653,9 @@ describe('what a fluid does to the six cube passes', () => {
   it.effect('fluid surfaces are outside totalQuadArea and totalQuadCount', () =>
     Effect.sync(() => {
       // Those two measure the block-face area the merge must conserve and the
-      // count it must reduce. A surface at 0.875 covers no block face, so
-      // counting it would make the merge's central invariant read as violated by
-      // a puddle — exactly the argument M-11 made for cross plates.
+      // Count it must reduce. A surface at 0.875 covers no block face, so
+      // Counting it would make the merge's central invariant read as violated by
+      // A puddle — exactly the argument M-11 made for cross plates.
       const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]])
       const layers = meshChunk(chunk, {}, CONFIG)
       expect(layers.fluids.length).toBe(5)
@@ -643,13 +667,13 @@ describe('what a fluid does to the six cube passes', () => {
   it.effect('a solid block beside water still shows its face — the lake bed renders', () =>
     Effect.sync(() => {
       // A DELIBERATE DIVERGENCE from the reference, and an EXISTING one this
-      // change does not touch. The reference's `isSolidFaceExposed`
+      // Change does not touch. The reference's `isSolidFaceExposed`
       // (`greedy-meshing-fluid-state.ts:145-157`) exposes a solid face only
-      // through air or a transparent solid, so a stone block underwater has no
-      // faces at all there. `domain/mesh.ts` has always used its own layer rule
-      // instead, and the fluid port deliberately left it alone: this row is
-      // about fluid geometry, not about re-deciding solid exposure. Pinned here
-      // so that the divergence is visible from the fluid side too.
+      // Through air or a transparent solid, so a stone block underwater has no
+      // Faces at all there. `domain/mesh.ts` has always used its own layer rule
+      // Instead, and the fluid port deliberately left it alone: this row is
+      // About fluid geometry, not about re-deciding solid exposure. Pinned here
+      // So that the divergence is visible from the fluid side too.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -679,20 +703,20 @@ describe('across a chunk boundary', () => {
    * along three of its four edges with the suite still green.
    */
   const SEAMS = [
-    { side: 'xPos' as const, here: [LAST, 8] as const, there: [0, 8] as const, key: 'xPos' as const },
-    { side: 'xNeg' as const, here: [0, 8] as const, there: [LAST, 8] as const, key: 'xNeg' as const },
-    { side: 'zPos' as const, here: [8, LAST] as const, there: [8, 0] as const, key: 'zPos' as const },
-    { side: 'zNeg' as const, here: [8, 0] as const, there: [8, LAST] as const, key: 'zNeg' as const },
+    { here: [LAST, 8] as const, key: 'xPos' as const, side: 'xPos' as const, there: [0, 8] as const },
+    { here: [0, 8] as const, key: 'xNeg' as const, side: 'xNeg' as const, there: [LAST, 8] as const },
+    { here: [8, LAST] as const, key: 'zPos' as const, side: 'zPos' as const, there: [8, 0] as const },
+    { here: [8, 0] as const, key: 'zNeg' as const, side: 'zNeg' as const, there: [8, LAST] as const },
   ]
 
   it.effect('REGRESSION: a lake continuing into the neighbour grows no wall at the seam', () =>
     Effect.sync(() => {
       // A DELIBERATE DEVIATION from the reference, whose `resolveFluidState`
-      // returns null for anything outside the chunk
+      // Returns null for anything outside the chunk
       // (`greedy-meshing-fluid-state.ts:52-54`) and which therefore puts a wall
-      // of water inside every lake every 16 blocks, in both axes. M-10 made the
-      // same deviation for ambient occlusion and recorded it; this applies that
-      // decision rather than making a new one.
+      // Of water inside every lake every 16 blocks, in both axes. M-10 made the
+      // Same deviation for ambient occlusion and recorded it; this applies that
+      // Decision rather than making a new one.
       for (const seam of SEAMS) {
         const chunk = waterAt(seam.here[0], seam.here[1], 0, 1)
         const neighbour = waterAt(seam.there[0], seam.there[1], 0, 1)
@@ -702,10 +726,10 @@ describe('across a chunk boundary', () => {
         expect(joined.some((quad) => quad.direction === seam.key)).toBe(false)
 
         // The control, per seam: with no neighbour loaded the seam IS a wall,
-        // which is the correct answer there — the lake genuinely ends as far as
-        // this chunk can tell, and drawing nothing would open a hole in the
-        // world. Without it, an implementation that emitted no side faces at all
-        // would pass the assertion above four times over.
+        // Which is the correct answer there — the lake genuinely ends as far as
+        // This chunk can tell, and drawing nothing would open a hole in the
+        // World. Without it, an implementation that emitted no side faces at all
+        // Would pass the assertion above four times over.
         const alone = meshChunk(chunk, {}, CONFIG).fluids
         expect(alone.some((quad) => quad.direction === seam.key)).toBe(true)
       }
@@ -715,19 +739,19 @@ describe('across a chunk boundary', () => {
   it.effect('the neighbour’s LEVELS reach the corner averaging, not just its block ids', () =>
     Effect.sync(() => {
       // The half of the boundary read that a presence-only implementation would
-      // silently skip: it is not enough to know the neighbour has water, the
-      // corner mean needs how MUCH. Half-full water across each seam must tilt
-      // this chunk's edge column toward it — checked on all four, for the reason
-      // the table above gives.
+      // Silently skip: it is not enough to know the neighbour has water, the
+      // Corner mean needs how MUCH. Half-full water across each seam must tilt
+      // This chunk's edge column toward it — checked on all four, for the reason
+      // The table above gives.
       //
       // `yOnSide` picks the two corners lying ON the seam. The winding is
       // (0,0), (0,1), (1,1), (1,0) in (x, z), so +X is corners 2 and 3, -X is 0
-      // and 1, +Z is 1 and 2, and -Z is 0 and 3.
+      // And 1, +Z is 1 and 2, and -Z is 0 and 3.
       const cornersOnSide: Record<string, readonly [number, number]> = {
-        xPos: [2, 3],
         xNeg: [0, 1],
-        zPos: [1, 2],
+        xPos: [2, 3],
         zNeg: [0, 3],
+        zPos: [1, 2],
       }
 
       for (const seam of SEAMS) {
@@ -781,8 +805,8 @@ describe('the injected fluid table', () => {
   it.effect('an absent map means no id is a fluid', () =>
     Effect.sync(() => {
       const lookup = buildFluidLookup({
-        waterBlockIds: new Set([WATER]),
         transparentSolidBlockIds: new Set(),
+        waterBlockIds: new Set([WATER]),
       })
       for (let blockId = 0; blockId <= 255; blockId += 1) {
         expect(isFluidBlock(lookup, blockId)).toBe(false)
@@ -793,19 +817,19 @@ describe('the injected fluid table', () => {
   it.effect('an out-of-byte id and an out-of-byte max level are DESCRIBED, not guarded', () =>
     Effect.sync(() => {
       // The M-11 position, restated. A write past the end of a `Uint8Array` is
-      // dropped by the array itself, by specification, so a bounds guard is
-      // unreachable and permanently uncoverable. A max level of 255 stores
+      // Dropped by the array itself, by specification, so a bounds guard is
+      // Unreachable and permanently uncoverable. A max level of 255 stores
       // 256, which truncates to 0 and reads back as "not a fluid".
       //
       // This test defends no guard. It records what the code does, so that a
-      // future reader meeting invisible lava has somewhere to land.
+      // Future reader meeting invisible lava has somewhere to land.
       const lookup = buildFluidLookup({
-        waterBlockIds: new Set(),
-        transparentSolidBlockIds: new Set(),
         fluidMaxLevels: new Map([
           [300, 7],
           [WATER, 255],
         ]),
+        transparentSolidBlockIds: new Set(),
+        waterBlockIds: new Set(),
       })
       expect(isFluidBlock(lookup, WATER)).toBe(false)
       expect(lookup.length).toBe(256)
@@ -821,27 +845,27 @@ describe('the injected fluid table', () => {
  */
 const arbitraryFluidChunk = FastCheck.array(
   FastCheck.record({
+    blockId: FastCheck.constantFrom(STONE, GLASS, WATER, LAVA, FLOWER),
+    falling: FastCheck.integer({ min: 0, max: 1 }),
+    level: FastCheck.integer({ min: 0, max: 8 }),
     lx: FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-    y: FastCheck.integer({ min: 0, max: 6 }),
     lz: FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
+    source: FastCheck.integer({ min: 0, max: 1 }),
     sx: FastCheck.integer({ min: 1, max: 4 }),
     sy: FastCheck.integer({ min: 1, max: 3 }),
     sz: FastCheck.integer({ min: 1, max: 4 }),
-    blockId: FastCheck.constantFrom(STONE, GLASS, WATER, LAVA, FLOWER),
-    level: FastCheck.integer({ min: 0, max: 8 }),
-    source: FastCheck.integer({ min: 0, max: 1 }),
-    falling: FastCheck.integer({ min: 0, max: 1 }),
+    y: FastCheck.integer({ min: 0, max: 6 }),
   }),
-  { minLength: 1, maxLength: 8 },
+  { maxLength: 8, minLength: 1 },
 ).map((boxes): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const box of boxes) {
-    for (let lx = box.lx; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
-      for (let y = box.y; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
-        for (let lz = box.lz; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
+    for (let {lx} = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
+      for (let {y} = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
+        for (let {lz} = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
           const index = blockIndex(lx, y, lz)
           blocks[index] = box.blockId
           levels[index] = box.level
@@ -851,13 +875,13 @@ const arbitraryFluidChunk = FastCheck.array(
       }
     }
   }
-  return { blocks, fluid: { levels, sources, falling } }
+  return { blocks, fluid: { falling, levels, sources } }
 })
 
 /** A fluid quad as a string, for multiset comparison. */
 const keyOfFluid = (quad: FluidQuad): string =>
   `${quad.blockId}:${quad.direction}:${quad.ao}:${quad.vertices.map((vertex) => vertex.join(',')).join('|')}:` +
-  `${quad.flow === undefined ? '-' : `${quad.flow.direction.join(',')}:${Number(quad.flow.falling)}`}`
+  `${quad.flow ? `${quad.flow.direction.join(',')}:${Number(quad.flow.falling)}` : '-'}`
 
 /** Every unit block-face a `Quad` covers — the same translation `test/mesh.test.ts` rests on. */
 const unitFacesOf = (quad: Quad): ReadonlyArray<string> => {
@@ -902,12 +926,12 @@ describe('the two meshers, and the merge, with fluids configured', () => {
     () =>
       Effect.sync(() => {
         // `meshing-merge-covers-the-same-surface`, restated under fluids. The
-        // property is unchanged IN FORM and that is the point: it compares
+        // Property is unchanged IN FORM and that is the point: it compares
         // `meshChunk` against `meshChunkNaive`, and both exclude fluid ids from
-        // the cube passes, so both see the same reduced set of block faces. A
-        // fluid surface is not a block face and never was one, so "the same
-        // surface" means what it always meant. What WOULD break it is excluding
-        // fluids from one mesher and not the other.
+        // The cube passes, so both see the same reduced set of block faces. A
+        // Fluid surface is not a block face and never was one, so "the same
+        // Surface" means what it always meant. What WOULD break it is excluding
+        // Fluids from one mesher and not the other.
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
             const merged = allUnitFaces(meshChunk(chunk, {}, CONFIG))
@@ -926,12 +950,12 @@ describe('the two meshers, and the merge, with fluids configured', () => {
     'REGRESSION: no two fluid quads are identical, and none merges',
     () =>
       Effect.sync(() => {
-        // meshing-fluid-surfaces-never-merge. Two identical fluid quads are two
-        // coplanar surfaces at the same depth, i.e. z-fighting; and because a
-        // merged run of N cells has N+1 corner heights per edge and `Quad` has
-        // room for two, a fluid quad that HAD merged could only have done so by
-        // discarding the intermediate heights — flattening the very slope that
-        // is the feature. Every quad here must therefore describe exactly one cell.
+        // Meshing-fluid-surfaces-never-merge. Two identical fluid quads are two
+        // Coplanar surfaces at the same depth, i.e. z-fighting; and because a
+        // Merged run of N cells has N+1 corner heights per edge and `Quad` has
+        // Room for two, a fluid quad that HAD merged could only have done so by
+        // Discarding the intermediate heights — flattening the very slope that
+        // Is the feature. Every quad here must therefore describe exactly one cell.
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
             const quads = meshChunk(chunk, {}, CONFIG).fluids
@@ -952,9 +976,9 @@ describe('the two meshers, and the merge, with fluids configured', () => {
   it.effect('emits in lx, then y, then lz order', () =>
     Effect.sync(() => {
       // `greedy-meshing-fluids.ts:61-63`. Ties on purpose in every key: two
-      // cells share lx=2, two share y=5, two share lz=2, so each of the three
-      // positions actually decides something. `test/plant-mesh.test.ts` records
-      // at length why a fixture without ties accepts any nesting.
+      // Cells share lx=2, two share y=5, two share lz=2, so each of the three
+      // Positions actually decides something. `test/plant-mesh.test.ts` records
+      // At length why a fixture without ties accepts any nesting.
       const cells: ReadonlyArray<BlockCell> = [
         [2, 5, 2, WATER],
         [2, 5, 9, WATER],
@@ -974,9 +998,9 @@ describe('LOD simplification', () => {
   it.effect('passes fluid surfaces through untouched', () =>
     Effect.sync(() => {
       // `snapQuad` snaps two integer tangent extents onto a coarser grid, and a
-      // fluid surface has neither. Worse than merely inapplicable: a lake's
-      // corner heights are SHARED with its neighbours', so snapping one quad's
-      // corner without the abutting one tears the lake open along that seam.
+      // Fluid surface has neither. Worse than merely inapplicable: a lake's
+      // Corner heights are SHARED with its neighbours', so snapping one quad's
+      // Corner without the abutting one tears the lake open along that seam.
       // Dropping them instead would empty every lake at the first LOD boundary.
       const chunk = chunkWith(
         [

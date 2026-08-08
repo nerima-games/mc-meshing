@@ -17,9 +17,9 @@ import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
+  type ChunkView,
   blockIndex,
   emptyChunk,
-  type ChunkView,
 } from '../src/domain/chunk-view'
 import { FACE_DIRECTIONS, type FaceDirection } from '../src/domain/faces'
 
@@ -71,23 +71,17 @@ const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, nu
  *   aoZNeg :77-87   air cell (lx, y, lz-1); same four
  */
 const OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>> = {
-  xPos: [
-    [1, -1, 0],
-    [1, 1, 0],
-    [1, 0, -1],
-    [1, 0, 1],
-  ],
   xNeg: [
     [-1, -1, 0],
     [-1, 1, 0],
     [-1, 0, -1],
     [-1, 0, 1],
   ],
-  yPos: [
+  xPos: [
+    [1, -1, 0],
     [1, 1, 0],
-    [-1, 1, 0],
-    [0, 1, 1],
-    [0, 1, -1],
+    [1, 0, -1],
+    [1, 0, 1],
   ],
   yNeg: [
     [1, -1, 0],
@@ -95,17 +89,23 @@ const OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>> = 
     [0, -1, 1],
     [0, -1, -1],
   ],
-  zPos: [
-    [1, 0, 1],
-    [-1, 0, 1],
+  yPos: [
+    [1, 1, 0],
+    [-1, 1, 0],
     [0, 1, 1],
-    [0, -1, 1],
+    [0, 1, -1],
   ],
   zNeg: [
     [1, 0, -1],
     [-1, 0, -1],
     [0, 1, -1],
     [0, -1, -1],
+  ],
+  zPos: [
+    [1, 0, 1],
+    [-1, 0, 1],
+    [0, 1, 1],
+    [0, -1, 1],
   ],
 }
 
@@ -128,17 +128,6 @@ const OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>> = 
  *    air cell — an off-by-one in the most plausible direction.
  */
 const NON_OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>> = {
-  xPos: [
-    [1, 0, 0],
-    [2, 0, 0],
-    [-1, 0, 0],
-    [1, 1, 1],
-    [1, 1, -1],
-    [1, -1, 1],
-    [1, -1, -1],
-    [0, 1, 0],
-    [0, 0, 1],
-  ],
   xNeg: [
     [-1, 0, 0],
     [-2, 0, 0],
@@ -150,15 +139,15 @@ const NON_OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>
     [0, 1, 0],
     [0, 0, 1],
   ],
-  yPos: [
-    [0, 1, 0],
-    [0, 2, 0],
-    [0, -1, 0],
+  xPos: [
+    [1, 0, 0],
+    [2, 0, 0],
+    [-1, 0, 0],
     [1, 1, 1],
     [1, 1, -1],
-    [-1, 1, 1],
-    [-1, 1, -1],
-    [1, 0, 0],
+    [1, -1, 1],
+    [1, -1, -1],
+    [0, 1, 0],
     [0, 0, 1],
   ],
   yNeg: [
@@ -172,16 +161,16 @@ const NON_OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>
     [1, 0, 0],
     [0, 0, 1],
   ],
-  zPos: [
-    [0, 0, 1],
-    [0, 0, 2],
-    [0, 0, -1],
-    [1, 1, 1],
-    [1, -1, 1],
-    [-1, 1, 1],
-    [-1, -1, 1],
-    [1, 0, 0],
+  yPos: [
     [0, 1, 0],
+    [0, 2, 0],
+    [0, -1, 0],
+    [1, 1, 1],
+    [1, 1, -1],
+    [-1, 1, 1],
+    [-1, 1, -1],
+    [1, 0, 0],
+    [0, 0, 1],
   ],
   zNeg: [
     [0, 0, -1],
@@ -191,6 +180,17 @@ const NON_OCCLUDING_OFFSETS: Readonly<Record<FaceDirection, ReadonlyArray<Cell>>
     [1, -1, -1],
     [-1, 1, -1],
     [-1, -1, -1],
+    [1, 0, 0],
+    [0, 1, 0],
+  ],
+  zPos: [
+    [0, 0, 1],
+    [0, 0, 2],
+    [0, 0, -1],
+    [1, 1, 1],
+    [1, -1, 1],
+    [-1, 1, 1],
+    [-1, -1, 1],
     [1, 0, 0],
     [0, 1, 0],
   ],
@@ -208,17 +208,17 @@ describe('the sampled cells', () => {
 
   it.effect('each of the four tangent neighbours of the air cell darkens the face by exactly one', () =>
     Effect.sync(() => {
-      // meshing-ao-samples-the-air-cells-tangent-neighbours. One occluder at a
-      // time: a test that placed all four at once would report 3 (the clamp) and
-      // could not tell which of the four was actually being read, so a
-      // transposed axis that sampled some OTHER four cells would still show 3.
+      // Meshing-ao-samples-the-air-cells-tangent-neighbours. One occluder at a
+      // Time: a test that placed all four at once would report 3 (the clamp) and
+      // Could not tell which of the four was actually being read, so a
+      // Transposed axis that sampled some OTHER four cells would still show 3.
       for (const direction of FACE_DIRECTIONS) {
         for (const offset of OCCLUDING_OFFSETS[direction]) {
           const chunk = chunkWith([[...CENTRE, STONE], shifted(CENTRE, offset)])
-          expect({ direction, offset, ao: ambientOcclusionAt(chunk, {}, direction, ...CENTRE) }).toStrictEqual({
+          expect({ ao: ambientOcclusionAt(chunk, {}, direction, ...CENTRE), direction, offset }).toStrictEqual({
+            ao: 1,
             direction,
             offset,
-            ao: 1,
           })
         }
       }
@@ -228,15 +228,15 @@ describe('the sampled cells', () => {
   it.effect('no other neighbour darkens it, including every diagonal the per-vertex algorithm would count', () =>
     Effect.sync(() => {
       // The other half, and the half that fails when the sampled cells are the
-      // right SHAPE around the wrong CENTRE. See NON_OCCLUDING_OFFSETS for what
-      // each entry catches.
+      // Right SHAPE around the wrong CENTRE. See NON_OCCLUDING_OFFSETS for what
+      // Each entry catches.
       for (const direction of FACE_DIRECTIONS) {
         for (const offset of NON_OCCLUDING_OFFSETS[direction]) {
           const chunk = chunkWith([[...CENTRE, STONE], shifted(CENTRE, offset)])
-          expect({ direction, offset, ao: ambientOcclusionAt(chunk, {}, direction, ...CENTRE) }).toStrictEqual({
+          expect({ ao: ambientOcclusionAt(chunk, {}, direction, ...CENTRE), direction, offset }).toStrictEqual({
+            ao: AO_NONE,
             direction,
             offset,
-            ao: AO_NONE,
           })
         }
       }
@@ -246,8 +246,8 @@ describe('the sampled cells', () => {
   it.effect('the two tables are disjoint, so the pair of tests above cannot both be vacuous', () =>
     Effect.sync(() => {
       // If an offset appeared in both tables the two tests would contradict each
-      // other and one of them would have to be wrong; if either table were empty
-      // its test would pass by doing nothing.
+      // Other and one of them would have to be wrong; if either table were empty
+      // Its test would pass by doing nothing.
       for (const direction of FACE_DIRECTIONS) {
         const occluding = new Set(OCCLUDING_OFFSETS[direction].map((offset) => offset.join(',')))
         const inert = new Set(NON_OCCLUDING_OFFSETS[direction].map((offset) => offset.join(',')))
@@ -263,9 +263,9 @@ describe('the sampled cells', () => {
   it.effect('the six directions sample six different sets of cells', () =>
     Effect.sync(() => {
       // Two directions that agreed would mean a face reading its neighbour's
-      // shading — the whole table collapsing onto one row is the failure mode a
-      // per-direction table exists to prevent, and it is invisible to the tests
-      // above, which check each row against itself.
+      // Shading — the whole table collapsing onto one row is the failure mode a
+      // Per-direction table exists to prevent, and it is invisible to the tests
+      // Above, which check each row against itself.
       const rows = FACE_DIRECTIONS.map((direction) =>
         [...OCCLUDING_OFFSETS[direction]].map((offset) => offset.join(',')).sort().join('|'),
       )
@@ -277,10 +277,10 @@ describe('the sampled cells', () => {
 describe('the clamp', () => {
   it.effect('four occluders report AO_MAX, not four', () =>
     Effect.sync(() => {
-      // meshing-ao-clamps-to-three. The count runs 0..4 and the field is two
-      // bits wide (`greedy-meshing-passes.ts:10`), so an unclamped 4 would
-      // overflow into the block id's neighbour in the packed mask cell. The
-      // reference clamps with `count > 3 ? 3 : count`
+      // Meshing-ao-clamps-to-three. The count runs 0..4 and the field is two
+      // Bits wide (`greedy-meshing-passes.ts:10`), so an unclamped 4 would
+      // Overflow into the block id's neighbour in the packed mask cell. The
+      // Reference clamps with `count > 3 ? 3 : count`
       // (`greedy-meshing-ao.ts:24` and the five siblings).
       for (const direction of FACE_DIRECTIONS) {
         const chunk = chunkWith([
@@ -315,26 +315,26 @@ describe('the clamp', () => {
   it.effect('is always in range and never decreases when a block is added', () =>
     Effect.sync(() => {
       // Monotonicity is the shape of the rule rather than any particular value:
-      // occlusion counts non-air cells, so filling an air cell can only add to
-      // the count, never remove from it. An implementation that subtracted
-      // somewhere, or that read the emitting block's own id into the count,
-      // breaks this without breaking any fixed fixture.
+      // Occlusion counts non-air cells, so filling an air cell can only add to
+      // The count, never remove from it. An implementation that subtracted
+      // Somewhere, or that read the emitting block's own id into the count,
+      // Breaks this without breaking any fixed fixture.
       FastCheck.assert(
         FastCheck.property(
           FastCheck.constantFrom(...FACE_DIRECTIONS),
           FastCheck.array(
             FastCheck.tuple(
-              FastCheck.integer({ min: 6, max: 10 }),
-              FastCheck.integer({ min: 62, max: 66 }),
-              FastCheck.integer({ min: 6, max: 10 }),
+              FastCheck.integer({ max: 10, min: 6 }),
+              FastCheck.integer({ max: 66, min: 62 }),
+              FastCheck.integer({ max: 10, min: 6 }),
               FastCheck.constantFrom(STONE, WATER, GLASS),
             ),
-            { minLength: 0, maxLength: 12 },
+            { maxLength: 12, minLength: 0 },
           ),
           FastCheck.tuple(
-            FastCheck.integer({ min: 6, max: 10 }),
-            FastCheck.integer({ min: 62, max: 66 }),
-            FastCheck.integer({ min: 6, max: 10 }),
+            FastCheck.integer({ max: 10, min: 6 }),
+            FastCheck.integer({ max: 66, min: 62 }),
+            FastCheck.integer({ max: 10, min: 6 }),
           ),
           (direction, cells, [addX, addY, addZ]) => {
             const before = chunkWith([[...CENTRE, STONE], ...cells])
@@ -357,10 +357,10 @@ describe('what counts as an occluder', () => {
     Effect.sync(() => {
       // TRANSCRIBED, NOT JUSTIFIED. The reference tests `!== AIR`
       // (`greedy-meshing-ao.ts:20-23`), so a pane of glass darkens what it sits
-      // beside even though `domain/opacity.ts` is careful that glass never
+      // Beside even though `domain/opacity.ts` is careful that glass never
       // OCCLUDES a face. Nothing in this repository has measured whether that is
-      // right; this test pins the rule as ported so that changing it has to be a
-      // decision rather than a drift. See docs/design-notes.md M-10.
+      // Right; this test pins the rule as ported so that changing it has to be a
+      // Decision rather than a drift. See docs/design-notes.md M-10.
       for (const blockId of [STONE, WATER, GLASS, 255]) {
         const chunk = chunkWith([
           [...CENTRE, STONE],
@@ -396,9 +396,9 @@ describe('chunk boundaries', () => {
   it.effect('an absent neighbour reads as air, which is the reference’s answer', () =>
     Effect.sync(() => {
       // The reference does not read across the boundary at all — it returns 0
-      // outright (`greedy-meshing-ao.ts:28`, `if (lx <= 0) return 0`). With no
-      // neighbour loaded this port must agree with it exactly, which is what
-      // makes the deviation below free rather than a behaviour change.
+      // Outright (`greedy-meshing-ao.ts:28`, `if (lx <= 0) return 0`). With no
+      // Neighbour loaded this port must agree with it exactly, which is what
+      // Makes the deviation below free rather than a behaviour change.
       const chunk = chunkWith([[...EDGE, STONE]])
       expect(ambientOcclusionAt(chunk, {}, 'xNeg', ...EDGE)).toBe(AO_NONE)
     }),
@@ -406,11 +406,11 @@ describe('chunk boundaries', () => {
 
   it.effect('a loaded neighbour DOES occlude, so the seam is not a bright ring', () =>
     Effect.sync(() => {
-      // meshing-ao-crosses-a-loaded-boundary. THE DELIBERATE DEVIATION. The air
-      // cell is at lx=-1, i.e. lx=CHUNK_SIZE-1 of the xNeg neighbour, and its
-      // two Y neighbours and two Z neighbours live there too. Zero is the
+      // Meshing-ao-crosses-a-loaded-boundary. THE DELIBERATE DEVIATION. The air
+      // Cell is at lx=-1, i.e. lx=CHUNK_SIZE-1 of the xNeg neighbour, and its
+      // Two Y neighbours and two Z neighbours live there too. Zero is the
       // BRIGHTEST value, so the reference's early return draws an unoccluded
-      // ring around every chunk on terrain that is continuous.
+      // Ring around every chunk on terrain that is continuous.
       const neighbour = chunkWith([[CHUNK_SIZE - 1, 65, 5, STONE]])
       const chunk = chunkWith([[...EDGE, STONE]])
       expect(ambientOcclusionAt(chunk, { xNeg: neighbour }, 'xNeg', ...EDGE)).toBe(1)
@@ -420,7 +420,7 @@ describe('chunk boundaries', () => {
   it.effect('consults the neighbour on the side the face points at, and no other', () =>
     Effect.sync(() => {
       // Supplying the right block through the WRONG neighbour must change
-      // nothing. Without this, cross-wiring xNeg to xPos survives.
+      // Nothing. Without this, cross-wiring xNeg to xPos survives.
       const neighbour = chunkWith([[CHUNK_SIZE - 1, 65, 5, STONE]])
       const chunk = chunkWith([[...EDGE, STONE]])
       for (const side of ['xPos', 'zPos', 'zNeg'] as const) {
@@ -453,9 +453,9 @@ describe('chunk boundaries', () => {
 
   it.effect('the world ceiling and floor read as air rather than throwing', () =>
     Effect.sync(() => {
-      // y is not a chunk axis with a neighbour — chunks are full-height columns
+      // Y is not a chunk axis with a neighbour — chunks are full-height columns
       // (`domain/chunk-view.ts`) — so the samples above y=255 and below y=0 have
-      // nowhere to come from at all.
+      // Nowhere to come from at all.
       const roof = [8, CHUNK_HEIGHT - 1, 8] as const
       const floor = [8, 0, 8] as const
       const chunk = chunkWith([
@@ -470,9 +470,9 @@ describe('chunk boundaries', () => {
   it.effect('is defined for an air cell and for an empty chunk: it never reads the emitter', () =>
     Effect.sync(() => {
       // `ambientOcclusionAt` is a function of the SURROUNDINGS. Asking it about a
-      // cell that holds nothing is meaningless to a caller but must still be
-      // total, because it is called from two meshers and a change to either
-      // could reorder the exposure check and the AO computation.
+      // Cell that holds nothing is meaningless to a caller but must still be
+      // Total, because it is called from two meshers and a change to either
+      // Could reorder the exposure check and the AO computation.
       const chunk = chunkWith([[9, 64, 8, STONE]])
       expect(ambientOcclusionAt(chunk, {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
       expect(ambientOcclusionAt(emptyChunk(), {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
@@ -484,8 +484,8 @@ describe('a shape with a real inside corner', () => {
   it.effect('an L of blocks darkens exactly the faces the corner encloses', () =>
     Effect.sync(() => {
       // Worked by hand rather than by running the code, because every other
-      // fixture in this file is one occluder in isolation and none of them shows
-      // the value the renderer will actually see on terrain.
+      // Fixture in this file is one occluder in isolation and none of them shows
+      // The value the renderer will actually see on terrain.
       //
       // Three blocks in the y=64 plane forming an L around (8, 64, 8):
       //   (8,64,8) the corner, (9,64,8) along +X, (8,64,9) along +Z.
@@ -497,8 +497,8 @@ describe('a shape with a real inside corner', () => {
 
       // The corner block's TOP face. Air cell (8,65,8); samples (9,65,8),
       // (7,65,8), (8,65,9), (8,65,7) — all air, nothing is stacked. So a flat
-      // plate is not self-shadowing, which is the property that keeps the flat
-      // fixture at ten quads.
+      // Plate is not self-shadowing, which is the property that keeps the flat
+      // Fixture at ten quads.
       expect(ambientOcclusionAt(chunk, {}, 'yPos', 8, 64, 8)).toBe(AO_NONE)
 
       // The corner block's -X face. Air cell (7,64,8); samples (7,63,8),
@@ -510,11 +510,11 @@ describe('a shape with a real inside corner', () => {
       expect(ambientOcclusionAt(chunk, {}, 'zNeg', 9, 64, 8)).toBe(AO_NONE)
 
       // The +X block's +Z face is the inside of the corner. Air cell (9,64,9);
-      // samples (10,64,9), (8,64,9), (9,65,9), (9,63,9). Exactly one of those,
+      // Samples (10,64,9), (8,64,9), (9,65,9), (9,63,9). Exactly one of those,
       // (8,64,9), is the third block of the L — so this face is darkened by one
-      // and its neighbours are not. That single step is what AO renders as a
-      // crease, and it is the reason this face can no longer merge with the
-      // corner block's +Z face beside it, which reads 0.
+      // And its neighbours are not. That single step is what AO renders as a
+      // Crease, and it is the reason this face can no longer merge with the
+      // Corner block's +Z face beside it, which reads 0.
       expect(ambientOcclusionAt(chunk, {}, 'zPos', 9, 64, 8)).toBe(1)
       expect(ambientOcclusionAt(chunk, {}, 'zPos', 8, 64, 8)).toBe(AO_NONE)
     }),

@@ -1,5 +1,5 @@
 /**
- * bench-fixtures.ts — the chunk shapes every measurement in this repository runs on.
+ * Bench-fixtures.ts — the chunk shapes every measurement in this repository runs on.
  *
  * Lifted out of `bench-meshing.ts` unchanged when LOD simplification arrived and
  * needed the same four shapes. The move is mechanical and deliberate: that file
@@ -25,10 +25,10 @@
  */
 import {
   BLOCKS_PER_CHUNK,
-  blockIndex,
   CHUNK_SIZE,
   type ChunkView,
   type MeshConfig,
+  blockIndex,
 } from '../src/index'
 
 /** Opaque ids. mc-meshing has no registry; `MeshConfig` is the only source of truth. */
@@ -38,8 +38,8 @@ export const WATER = 3
 export const GLASS = 4
 
 export const CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
   transparentSolidBlockIds: new Set([GLASS]),
+  waterBlockIds: new Set([WATER]),
 }
 
 const newBlocks = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
@@ -159,7 +159,7 @@ const lakeChunk = (): ChunkView => {
       for (let y = bed + 1; y <= 56; y += 1) {
         set(blocks, lx, y, lz, WATER)
         // Level 0 below the surface and a stepped level at the top, so that the
-        // surface tilts and the submerged-cell rule is exercised underneath it.
+        // Surface tilts and the submerged-cell rule is exercised underneath it.
         const index = blockIndex(lx, y, lz)
         levels[index] = y === 56 ? lx % 8 : 0
         sources[index] = y === 56 ? 0 : 1
@@ -180,9 +180,9 @@ export const LAKE: ChunkView = lakeChunk()
  * `fluidMaxLevels` is injected.
  */
 export const FLUID_CONFIG: MeshConfig = {
-  waterBlockIds: new Set([WATER]),
-  transparentSolidBlockIds: new Set([GLASS]),
   fluidMaxLevels: new Map([[WATER, 7]]),
+  transparentSolidBlockIds: new Set([GLASS]),
+  waterBlockIds: new Set([WATER]),
 }
 
 export type BenchFixture = {
@@ -196,8 +196,8 @@ export type BenchFixture = {
  * best case, realistic case, worst case, then the three-layer case.
  */
 export const BENCH_FIXTURES: ReadonlyArray<BenchFixture> = [
-  { name: 'flat', chunk: FLAT },
-  { name: 'rolling', chunk: ROLLING },
-  { name: 'checkerboard-worst', chunk: CHECKERBOARD },
-  { name: 'layered-water-glass', chunk: LAYERED },
+  { chunk: FLAT, name: 'flat' },
+  { chunk: ROLLING, name: 'rolling' },
+  { chunk: CHECKERBOARD, name: 'checkerboard-worst' },
+  { chunk: LAYERED, name: 'layered-water-glass' },
 ]
