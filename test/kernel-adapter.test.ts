@@ -1,7 +1,7 @@
 /* oxlint-disable sort-imports */
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, blockIndex } from '../src/domain/chunk-view'
 import { chunkViewOf } from '../src/domain/kernel-adapter'
-import { blockIdOf, chunk, chunkCoord } from '@nerima-games/mc-kernel'
+import { type Chunk as KernelChunk, blockIdOf, chunk, chunkCoord } from '@nerima-games/mc-kernel'
 import { describe, expect, it } from '@effect/vitest'
 
 const FIRST_INDEX = 0
@@ -35,5 +35,24 @@ describe('chunkViewOf', () => {
     const source = chunk(chunkCoord(FIRST_INDEX, FIRST_INDEX), height, new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * height))
 
     expect(() => chunkViewOf(source)).toThrow(/requires a 256-block chunk/)
+  })
+
+  it('reads a cell past the end of a shorter-than-declared blocks array as air', () => {
+    // `chunk()`'s own validation (`assertBlocks`) never lets `blocks.length`
+    // Disagree with `height`, but `KernelChunk` is a plain structural type, not
+    // Branded to the smart constructor — `chunkViewOf` receives the TYPE, and
+    // Nothing stops a hand-built value (a decoded-but-unvalidated source, or, as
+    // Here, a direct literal) from disagreeing. `?? AIR_BLOCK_ID` is this
+    // Boundary's answer, the same one `domain/fluid-mesh.ts`'s `levelIn` gives
+    // For the identically-shaped `FluidView` boundary.
+    const source: KernelChunk = {
+      blocks: new Uint8Array(STEP),
+      coord: chunkCoord(FIRST_INDEX, FIRST_INDEX),
+      height: CHUNK_HEIGHT,
+    }
+
+    const view = chunkViewOf(source)
+
+    expect(view.blocks[blockIndex(EDGE_X, EDGE_Y, EDGE_Z)]).toBe(FIRST_INDEX)
   })
 })

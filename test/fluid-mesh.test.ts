@@ -236,6 +236,30 @@ describe('the height of one cell', () => {
       expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
     }),
   )
+
+  it.effect(
+    'a FluidView present but shorter than the chunk reads its missing cells the same way a missing FluidView does',
+    () =>
+      Effect.sync(() => {
+        // `levels`/`sources` arrive from outside meshing — `domain/chunk-view.ts`'s
+        // `FluidView` doc spells out why meshing does not own their encoding — so
+        // Nothing here can prove their length matches the chunk the way the
+        // Internally-built lookup tables do. An index past a too-short array reads
+        // Back `undefined`, and `levelIn`/`sourceIn` default that the same way the
+        // Wholly-missing-`FluidView` case above does: `FLUID_BYTE_UNSET`, i.e. full
+        // And not a source. This is that default, witnessed with the `FluidView`
+        // Present but truncated to one entry instead of absent entirely.
+        const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+        blocks[blockIndex(8, 64, 8)] = WATER
+        const chunk: ChunkView = {
+          blocks,
+          fluid: { levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        }
+
+        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
+        expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
+      }),
+  )
 })
 
 describe('the corner averaging', () => {

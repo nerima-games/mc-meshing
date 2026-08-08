@@ -257,13 +257,21 @@ export const buildFluidLookup = (config: MeshConfig): Uint8Array => {
   return lookup
 }
 
-/** Is this id meshed as a fluid volume rather than as a cube? */
-export const isFluidBlock = (lookup: Uint8Array, blockId: number): boolean =>
-  (lookup[blockId] ?? FLUID_BYTE_UNSET) !== FLUID_BYTE_UNSET
+/**
+ * Is this id meshed as a fluid volume rather than as a cube?
+ *
+ * NO `?? FALLBACK` ON THE READ. `lookup` is always `buildFluidLookup`'s
+ * `MAX_BLOCK_ID + 1`-entry table and, as at every other call site in this
+ * repository, `blockId` is a value that came out of a `Uint8Array`
+ * (`getBlock`/`getBlockAcrossBoundary`) or is itself a configured fluid id
+ * traced back to one — so it is always in `[0, MAX_BLOCK_ID]` and `lookup[blockId]`
+ * is never `undefined`. The asserted read is `noUncheckedIndexedAccess`
+ * satisfied by proof, the same move `domain/mesh.ts`'s `layerAt` makes.
+ */
+export const isFluidBlock = (lookup: Uint8Array, blockId: number): boolean => lookup[blockId]! !== FLUID_BYTE_UNSET
 
-/** The injected maximum level for a fluid id. Only meaningful when `isFluidBlock`. */
-const maxLevelOf = (lookup: Uint8Array, blockId: number): number =>
-  (lookup[blockId] ?? INDEX_TO_COUNT_OFFSET) - INDEX_TO_COUNT_OFFSET
+/** The injected maximum level for a fluid id. Only meaningful when `isFluidBlock`. See `isFluidBlock` for why the read is asserted rather than defaulted. */
+const maxLevelOf = (lookup: Uint8Array, blockId: number): number => lookup[blockId]! - INDEX_TO_COUNT_OFFSET
 
 /**
  * Surface height of one cell, as a fraction of the cell.
@@ -853,8 +861,12 @@ const pushSide = (
  * not a fluid, so a non-empty config can still declare no usable fluid.
  */
 const anyFluidConfigured = (fluids: Uint8Array): boolean => {
+  // `blockId` is the loop counter itself, bounded to `[0, MAX_BLOCK_ID]` by the
+  // `for` condition, and `fluids` is always a `MAX_BLOCK_ID + 1`-entry table —
+  // So `fluids[blockId]` is never `undefined` and the read is asserted rather
+  // Than defaulted, as `isFluidBlock` above does for the same table.
   for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += LOOP_STEP) {
-    if ((fluids[blockId] ?? FLUID_BYTE_UNSET) !== FLUID_BYTE_UNSET) {
+    if (fluids[blockId]! !== FLUID_BYTE_UNSET) {
       return true
     }
   }

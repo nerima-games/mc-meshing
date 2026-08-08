@@ -340,6 +340,23 @@ describe('the injected set', () => {
     }),
   )
 
+  it.effect('buildCrossPlantLookup itself defaults an absent set to empty, not just its meshChunk caller', () =>
+    Effect.sync(() => {
+      // The test above goes through `meshChunk`, whose `crossPlantLookupForMesh`
+      // Short-circuits to a shared empty table before `buildCrossPlantLookup` is
+      // Ever called (`domain/mesh.ts`) — so it never exercises this function's
+      // OWN `?? []`. `buildCrossPlantLookup` is exported and `crossPlantBlockIds`
+      // Is optional on `MeshConfig`, so a caller reaching it directly with no set
+      // Is a real, public-API path, not a hypothetical one.
+      const lookup = buildCrossPlantLookup({
+        transparentSolidBlockIds: new Set(),
+        waterBlockIds: new Set(),
+      })
+      expect(lookup.length).toBe(256)
+      expect(lookup.reduce((total, value) => total + value, 0)).toBe(0)
+    }),
+  )
+
   it.effect('the flattened table agrees with the set on every representable id', () =>
     Effect.sync(() => {
       const lookup = buildCrossPlantLookup(CONFIG)

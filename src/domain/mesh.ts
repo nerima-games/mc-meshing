@@ -334,12 +334,13 @@ const fluidLookupForMesh = (config: MeshConfig): Uint8Array => {
 /**
  * The layer a block id belongs to, read from the flattened table.
  *
- * Defaults to `opaque` for an id outside the table, which cannot happen — ids
- * come out of a `Uint8Array` and the table has `MAX_BLOCK_ID + 1` entries — but
- * `noUncheckedIndexedAccess` requires an answer and `opaque` is the one that
- * fails closed: an unknown id occludes rather than opening a hole in the world.
+ * ASSERTED, not defaulted: an id outside the table cannot happen — ids come out
+ * of a `Uint8Array` and the table has `MAX_BLOCK_ID + 1` entries — so
+ * `lookup[blockId]` is never `undefined`. `noUncheckedIndexedAccess` still
+ * requires the assertion to typecheck; `domain/fluid-mesh.ts`'s `isFluidBlock`
+ * makes the identical proof over the identically-shaped table.
  */
-const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId] ?? OPAQUE_LAYER
+const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId]!
 
 /**
  * Is the face of `blockId` pointing at `neighbourId` visible?
@@ -566,7 +567,10 @@ const expandGreedy = (
   for (let outer = FIRST_INDEX; outer < outerSize; outer += STEP) {
     for (let inner = FIRST_INDEX; inner < innerSize; inner += STEP) {
       const base = outer * innerSize + inner
-      const cell = mask[base] ?? NO_FACE
+      // ASSERTED: `mask` is always allocated at least `outerSize * innerSize`
+      // Entries (see the three `expandGreedy` call sites), and `outer < outerSize`,
+      // `inner < innerSize` by the loops above, so `base` is always in range.
+      const cell = mask[base]!
       if (cell !== NO_FACE) {
         const innerRun = growInnerRun(mask, base, inner, innerSize, cell)
         const outerRun = growOuterRun(mask, outer, inner, outerSize, innerSize, innerRun, cell)
@@ -846,7 +850,11 @@ const makeSink = (
     // Stores an index into it, so the routing is the index — no re-spelling of
     // The priority order, which lives in `opacity.ts` and is tested there.
     push: (quad: Quad): void => {
-      const bucket = buckets[layerAt(lookup, quad.blockId)] ?? opaque
+      // ASSERTED: `layerAt` returns an index into `MESH_LAYERS` (`buildLayerLookup`
+      // Only ever writes `MESH_LAYERS.indexOf(...)`), and `buckets` has exactly
+      // `MESH_LAYERS.length` entries in the same order, so the index is always
+      // In range.
+      const bucket = buckets[layerAt(lookup, quad.blockId)]!
       bucket.push(quad)
     },
   }
@@ -1146,7 +1154,12 @@ export const meshChunkRegion = (
   dirtyRegion: MeshRegion,
 ): RegionMesh => {
   const dirty = normalizeRegion(dirtyRegion)
-  const empty = dirty.min.some((value, axis) => value >= (dirty.max[axis] ?? value))
+  // ASSERTED: `MeshRegion.min`/`.max` are typed as exact 3-tuples, and `axis`
+  // Comes from `.some`'s index over `dirty.min`, itself a 3-tuple — so
+  // `dirty.max[axis]` is always in range. The `!` satisfies
+  // `noUncheckedIndexedAccess`, which cannot see the tuple length through a
+  // Computed index.
+  const empty = dirty.min.some((value, axis) => value >= dirty.max[axis]!)
   if (empty) {
     return {
       dirtyRegion: dirty,

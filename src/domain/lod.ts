@@ -250,37 +250,33 @@ const snapSpan = (
 
 /**
  * The snapped `lx` for a quad whose two tangent axes are `widthAxis` /
- * `heightAxis`: whichever of the two IS `'x'` contributes its snapped min: the
+ * `heightAxis`: when `'x'` is one of them it contributes its snapped min; the
  * quad has no `'x'` extent to snap along its own normal, so `quad.lx` survives
  * unchanged in that case.
+ *
+ * ONLY `widthAxis` IS CHECKED AGAINST `'x'`, not `heightAxis` too. `tangentAxes`
+ * has exactly three possible results — `['y','z']`, `['x','z']`, `['x','y']` —
+ * and in every one of them `'x'`, when present at all, is the FIRST element,
+ * i.e. `widthAxis`. So `heightAxis === 'x' && widthAxis !== 'x'` cannot occur
+ * for any `FaceDirection`, and a second check for it would be the unreachable
+ * branch `domain/plant-mesh.ts`'s `buildCrossPlantLookup` already refused: a
+ * permanently uncoverable line and a claim no test can support.
  */
-const snappedLx = (
-  widthAxis: QuadAxis,
-  heightAxis: QuadAxis,
-  widthMin: number,
-  heightMin: number,
-  quad: Quad,
-): number => {
+const snappedLx = (widthAxis: QuadAxis, widthMin: number, quad: Quad): number => {
   if (widthAxis === 'x') {
     return widthMin
-  }
-  if (heightAxis === 'x') {
-    return heightMin
   }
   return quad.lx
 }
 
-/** The snapped `lz`, by the same rule as `snappedLx` with `'z'` in place of `'x'`. */
-const snappedLz = (
-  widthAxis: QuadAxis,
-  heightAxis: QuadAxis,
-  widthMin: number,
-  heightMin: number,
-  quad: Quad,
-): number => {
-  if (widthAxis === 'z') {
-    return widthMin
-  }
+/**
+ * The snapped `lz`, by the same rule as `snappedLx` with `'z'` in place of
+ * `'x'` — except `'z'`'s position in `tangentAxes`' three results is the
+ * mirror image of `'x'`'s: it is always the SECOND element (`heightAxis`) when
+ * present, never the first, so this checks `heightAxis` where `snappedLx`
+ * checks `widthAxis`.
+ */
+const snappedLz = (heightAxis: QuadAxis, heightMin: number, quad: Quad): number => {
   if (heightAxis === 'z') {
     return heightMin
   }
@@ -295,8 +291,8 @@ const snapQuad = (quad: Quad, step: number): Quad => {
   return {
     ...quad,
     height: heightMax - heightMin,
-    lx: snappedLx(widthAxis, heightAxis, widthMin, heightMin, quad),
-    lz: snappedLz(widthAxis, heightAxis, widthMin, heightMin, quad),
+    lx: snappedLx(widthAxis, widthMin, quad),
+    lz: snappedLz(heightAxis, heightMin, quad),
     width: widthMax - widthMin,
     // Never snapped, on any face. See the header.
     y: quad.y,
