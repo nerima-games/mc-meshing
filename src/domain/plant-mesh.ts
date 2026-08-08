@@ -77,9 +77,9 @@
  *    Recorded as a deviation in docs/design-notes.md M-11 and pinned by
  *    `test/plant-mesh.test.ts`.
  */
-import { CHUNK_SIZE, getBlock, type ChunkView } from './chunk-view'
-import { type FaceRole } from './faces'
+import { CHUNK_SIZE, type ChunkView, getBlock } from './chunk-view'
 import { MAX_BLOCK_ID, type MeshConfig } from './opacity'
+import { type FaceRole } from './faces'
 
 /**
  * How far each plate is pulled in from the cell's four vertical walls.
@@ -96,6 +96,12 @@ import { MAX_BLOCK_ID, type MeshConfig } from './opacity'
  * see a renderer. See docs/design-notes.md M-11.
  */
 export const PLANT_INSET = 0.1
+
+/**
+ * One full cell, in block-local units. Each plate's far edge is inset from
+ * `lx`/`lz` plus this, and its top runs from `y` to `y` plus this.
+ */
+const CELL_SIZE = 1
 
 /**
  * A vertex of a plant plate, in chunk-local coordinates. FRACTIONAL, unlike
@@ -157,30 +163,46 @@ export type CrossPlantQuad = {
  * ids — in exchange for one byte-indexed read. The read is the cheap thing here;
  * the contract is not.
  */
+/** `MAX_BLOCK_ID` is inclusive, so the table needs one more slot than that. */
+const TABLE_SIZE_OFFSET = 1
+
+/**
+ * Size of a byte-indexed table covering every representable block id. The
+ * same fact `domain/opacity.ts`'s `buildLayerLookup` needs, restated here
+ * rather than imported — the two tables are kept deliberately separate (see
+ * the comment above), and a shared size constant would be a needless coupling
+ * for one arithmetic fact.
+ */
+const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
+
+/** Marker written into the table for "this id is a cross plant". */
+const CROSS_PLANT_MARKER = 1
+
 export const buildCrossPlantLookup = (config: MeshConfig): Uint8Array => {
-  const lookup = new Uint8Array(MAX_BLOCK_ID + 1)
+  const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
   // Iterating the SET rather than all 256 ids, unlike `buildLayerLookup`. That
-  // one has to visit every id because it must give every id an answer; this one
-  // defaults to "not a plant" and only the named ids differ.
+  // One has to visit every id because it must give every id an answer; this one
+  // Defaults to "not a plant" and only the named ids differ.
   //
   // THERE IS NO BOUNDS CHECK, and that is deliberate. An id outside a byte is a
-  // config mistake, and the obvious `if (blockId >= 0 && blockId <= MAX_BLOCK_ID)`
-  // guard is UNREACHABLE: a write past the end of a `Uint8Array` is dropped by
-  // the array itself, silently and by specification, so the guarded and
-  // unguarded versions are indistinguishable to every caller. It was written,
-  // and it was removed when a mutation test could not make it fail. `domain/lod.ts`
-  // refused the reference's degenerate-span guard on the same grounds — an
-  // unreachable branch is a permanently uncoverable line and a claim no test can
-  // support. `test/plant-mesh.test.ts` keeps the out-of-range case as a
-  // statement of the resulting behaviour.
+  // Config mistake, and the obvious `if (blockId >= 0 && blockId <= MAX_BLOCK_ID)`
+  // Guard is UNREACHABLE: a write past the end of a `Uint8Array` is dropped by
+  // The array itself, silently and by specification, so the guarded and
+  // Unguarded versions are indistinguishable to every caller. It was written,
+  // And it was removed when a mutation test could not make it fail. `domain/lod.ts`
+  // Refused the reference's degenerate-span guard on the same grounds — an
+  // Unreachable branch is a permanently uncoverable line and a claim no test can
+  // Support. `test/plant-mesh.test.ts` keeps the out-of-range case as a
+  // Statement of the resulting behaviour.
   for (const blockId of config.crossPlantBlockIds ?? []) {
-    lookup[blockId] = 1
+    lookup[blockId] = CROSS_PLANT_MARKER
   }
   return lookup
 }
 
 /** Is this id a cross plant, per the flattened table? */
-export const isCrossPlant = (lookup: Uint8Array, blockId: number): boolean => lookup[blockId] === 1
+export const isCrossPlant = (lookup: Uint8Array, blockId: number): boolean =>
+  lookup[blockId] === CROSS_PLANT_MARKER
 
 /**
  * The two plates for one cell, in the reference's vertex order.
@@ -200,14 +222,18 @@ export const isCrossPlant = (lookup: Uint8Array, blockId: number): boolean => lo
  */
 const platesFor = (blockId: number, lx: number, y: number, lz: number): ReadonlyArray<CrossPlantQuad> => {
   const x0 = lx + PLANT_INSET
-  const x1 = lx + 1 - PLANT_INSET
+  const x1 = lx + CELL_SIZE - PLANT_INSET
   const z0 = lz + PLANT_INSET
-  const z1 = lz + 1 - PLANT_INSET
+  const z1 = lz + CELL_SIZE - PLANT_INSET
   const y0 = y
-  const y1 = y + 1
+  const y1 = y + CELL_SIZE
   return [
     {
+      ao: 0,
       blockId,
+      nx: 0,
+      ny: 0,
+      nz: 1,
       role: 'side',
       vertices: [
         [x0, y0, z0],
@@ -215,13 +241,13 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
         [x1, y1, z1],
         [x1, y0, z1],
       ],
-      nx: 0,
-      ny: 0,
-      nz: 1,
-      ao: 0,
     },
     {
+      ao: 0,
       blockId,
+      nx: 1,
+      ny: 0,
+      nz: 0,
       role: 'side',
       vertices: [
         [x1, y0, z0],
@@ -229,10 +255,6 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
         [x0, y1, z1],
         [x0, y0, z1],
       ],
-      nx: 1,
-      ny: 0,
-      nz: 0,
-      ao: 0,
     },
   ]
 }
@@ -256,6 +278,15 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
  * two plants standing side by side both draw both of their plates. That is why
  * this function takes a `ChunkView` and not a `ChunkNeighbours`.
  */
+/** Loop increment: visit each chunk-local coordinate exactly once. */
+const LOOP_STEP = 1
+
+/** Minimum value along a chunk-local coordinate axis. */
+const AXIS_ORIGIN = 0
+
+/** Chunk-local origin, the default lower bound for `meshCrossPlants`. */
+const CHUNK_ORIGIN: readonly [number, number, number] = [AXIS_ORIGIN, AXIS_ORIGIN, AXIS_ORIGIN]
+
 export const meshCrossPlants = (
   chunk: ChunkView,
   plantLookup: Uint8Array,
@@ -263,12 +294,14 @@ export const meshCrossPlants = (
   bounds: {
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
-  } = { min: [0, 0, 0], max: [CHUNK_SIZE, yLimit, CHUNK_SIZE] },
+  } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: CHUNK_ORIGIN },
 ): ReadonlyArray<CrossPlantQuad> => {
+  const [minX, minY, minZ] = bounds.min
+  const [maxX, maxY, maxZ] = bounds.max
   const plates: Array<CrossPlantQuad> = []
-  for (let lx = bounds.min[0]; lx < bounds.max[0]; lx += 1) {
-    for (let lz = bounds.min[2]; lz < bounds.max[2]; lz += 1) {
-      for (let y = bounds.min[1]; y < Math.min(yLimit, bounds.max[1]); y += 1) {
+  for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
+    for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
+      for (let y = minY; y < Math.min(yLimit, maxY); y += LOOP_STEP) {
         const blockId = getBlock(chunk.blocks, lx, y, lz)
         if (isCrossPlant(plantLookup, blockId)) {
           plates.push(...platesFor(blockId, lx, y, lz))

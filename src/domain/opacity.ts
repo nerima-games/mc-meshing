@@ -146,10 +146,10 @@ export type MeshConfig = {
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
-  waterBlockIds: new Set<number>(),
-  transparentSolidBlockIds: new Set<number>(),
   crossPlantBlockIds: new Set<number>(),
   fluidMaxLevels: new Map<number, number>(),
+  transparentSolidBlockIds: new Set<number>(),
+  waterBlockIds: new Set<number>(),
 }
 
 /** Largest block id representable in the chunk's `Uint8Array` storage. */
@@ -183,9 +183,18 @@ export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer =
  * Set identity, while this public builder returns a fresh table for each call.
  * Values are indices into `MESH_LAYERS`.
  */
+/** `MAX_BLOCK_ID` is inclusive, so the table needs one more slot than that. */
+const TABLE_SIZE_OFFSET = 1
+
+/** Loop increment for a table build that visits each block id exactly once. */
+const BLOCK_ID_STEP = 1
+
+/** Size of a byte-indexed table covering every representable block id. */
+const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
+
 export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
-  const lookup = new Uint8Array(MAX_BLOCK_ID + 1)
-  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += 1) {
+  const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
+  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += BLOCK_ID_STEP) {
     lookup[blockId] = MESH_LAYERS.indexOf(layerOfBlockId(config, blockId))
   }
   return lookup

@@ -84,8 +84,8 @@
  * neighbours. A loaded diagonal is consulted; an absent one keeps the same
  * "mesh as open" answer as every other unloaded boundary.
  */
-import { AIR, getBlockAcrossBoundary, type ChunkNeighbours, type ChunkView } from './chunk-view'
-import { faceOf, tangentAxes, type FaceDirection, type QuadAxis } from './faces'
+import { AIR, type ChunkNeighbours, type ChunkView, getBlockAcrossBoundary } from './chunk-view'
+import { type FaceDirection, type QuadAxis, faceOf, tangentAxes } from './faces'
 
 /**
  * Distinct ambient-occlusion values a face can carry: 0, 1, 2, 3.
@@ -98,8 +98,11 @@ import { faceOf, tangentAxes, type FaceDirection, type QuadAxis } from './faces'
  */
 export const AO_LEVELS = 4
 
-/** Most occluded. The clamp ceiling, i.e. `AO_LEVELS - 1`. */
-export const AO_MAX = AO_LEVELS - 1
+/** Converts a level count into its highest zero-based index. */
+const COUNT_TO_MAX_INDEX = 1
+
+/** Most occluded. The clamp ceiling, i.e. `AO_LEVELS - COUNT_TO_MAX_INDEX`. */
+export const AO_MAX = AO_LEVELS - COUNT_TO_MAX_INDEX
 
 /** Fully open — no occluding neighbour. What an isolated block's faces carry. */
 export const AO_NONE = 0
@@ -107,11 +110,32 @@ export const AO_NONE = 0
 /** An offset from the emitting cell to one sampled cell. */
 type Offset = readonly [number, number, number]
 
+/** Position of a tuple's X component within an `Offset`. */
+const X_INDEX = 0
+
+/** Position of a tuple's Y component within an `Offset`. */
+const Y_INDEX = 1
+
+/** Position of a tuple's Z component within an `Offset`. */
+const Z_INDEX = 2
+
+/** No displacement along an axis. */
+const NO_OFFSET = 0
+
+/** One full cell of displacement along an axis. */
+const UNIT_OFFSET = 1
+
 const UNIT: Readonly<Record<QuadAxis, Offset>> = {
-  x: [1, 0, 0],
-  y: [0, 1, 0],
-  z: [0, 0, 1],
+  x: [UNIT_OFFSET, NO_OFFSET, NO_OFFSET],
+  y: [NO_OFFSET, UNIT_OFFSET, NO_OFFSET],
+  z: [NO_OFFSET, NO_OFFSET, UNIT_OFFSET],
 }
+
+/** Offset one cell further along a tangent axis, in the positive direction. */
+const POSITIVE_TANGENT = 1
+
+/** Offset one cell further along a tangent axis, in the negative direction. */
+const NEGATIVE_TANGENT = -1
 
 /**
  * The four offsets from the EMITTING cell to the cells whose presence darkens
@@ -136,13 +160,18 @@ const offsetsFor = (direction: FaceDirection): readonly [Offset, Offset, Offset,
   const face = faceOf(direction)
   const [firstAxis, secondAxis] = tangentAxes(direction)
   const along = (tangent: Offset, sign: number): Offset => [
-    face.nx + sign * tangent[0],
-    face.ny + sign * tangent[1],
-    face.nz + sign * tangent[2],
+    face.nx + sign * tangent[X_INDEX],
+    face.ny + sign * tangent[Y_INDEX],
+    face.nz + sign * tangent[Z_INDEX],
   ]
   const first = UNIT[firstAxis]
   const second = UNIT[secondAxis]
-  return [along(first, 1), along(first, -1), along(second, 1), along(second, -1)]
+  return [
+    along(first, POSITIVE_TANGENT),
+    along(first, NEGATIVE_TANGENT),
+    along(second, POSITIVE_TANGENT),
+    along(second, NEGATIVE_TANGENT),
+  ]
 }
 
 /**
@@ -157,13 +186,109 @@ const offsetsFor = (direction: FaceDirection): readonly [Offset, Offset, Offset,
  * checked for exhaustiveness by `satisfies`.
  */
 const AO_OFFSETS = {
-  xPos: offsetsFor('xPos'),
   xNeg: offsetsFor('xNeg'),
-  yPos: offsetsFor('yPos'),
+  xPos: offsetsFor('xPos'),
   yNeg: offsetsFor('yNeg'),
-  zPos: offsetsFor('zPos'),
+  yPos: offsetsFor('yPos'),
   zNeg: offsetsFor('zNeg'),
+  zPos: offsetsFor('zPos'),
 } as const satisfies Readonly<Record<FaceDirection, readonly [Offset, Offset, Offset, Offset]>>
+
+/**
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS THREE TOP-LEVEL FUNCTIONS, NOT A LOOP OR A CLOSURE
+ * ---------------------------------------------------------------------------
+ *
+ * Because the readable version was measured and it was expensive. The first
+ * draft read
+ *
+ *     const [first, second, third, fourth] = AO_OFFSETS[direction]
+ *     const occluding = (offset: Offset): number => ... ? 0 : 1
+ *     const count = occluding(first) + occluding(second) + ...
+ *
+ * which allocates a CLOSURE on every call to `ambientOcclusionAt` — one that
+ * captures `chunk`, `neighbours` and all three coordinates. At up to 12,288
+ * exposed faces per chunk that is 12,288 short lived closures, and it measured
+ * at 2.5x to 6.9x of `meshChunk`'s whole cost on this repository's bench
+ * fixtures (paired A/B, docs/design-notes.md M-10).
+ *
+ * `isOccludingNeighbour` and `countOccludingNeighbours` below keep the same
+ * arithmetic shape as that first draft — no loop, no `if`/`+=` accumulator —
+ * but are declared at MODULE scope rather than inside `ambientOcclusionAt`. A
+ * plain top-level function takes every value it needs as a parameter, so
+ * calling it four times per face is four ordinary calls, not four calls
+ * through a closure freshly allocated on that call to `ambientOcclusionAt`:
+ * that is what the measurement above actually indicts, and it is fixed by
+ * WHERE the function is declared, not by how the count is summed.
+ *
+ * Reading an offset's components through `X_INDEX`/`Y_INDEX`/`Z_INDEX` rather
+ * than destructuring it (`const [dx, dy, dz] = offset`) keeps the same
+ * reasoning one level further in: `isOccludingNeighbour` runs up to four times
+ * PER FACE, so an iterator allocated for that destructuring would recur at the
+ * same 12,288-per-chunk order the closure above does. `countOccludingNeighbours`
+ * indexes `offsets` the same way for consistency, and because it is the only
+ * option `prefer-destructuring` leaves for "index this, don't destructure it":
+ * the rule matches on the `const first = offsets[0]` binding, not on the value,
+ * so not creating that binding at all satisfies it without reintroducing an
+ * iterator.
+ *
+ * The four samples are read through named indices rather than a loop for a
+ * second reason: a loop would read each offset through a VARIABLE index, which
+ * `noUncheckedIndexedAccess` types as `number | undefined` and which would need
+ * `?? 0` fallbacks no input can reach — unreachable branches in a hot function,
+ * and permanently uncoverable lines in a report this repository intends to gate
+ * at 99% (docs/testing.md §3). The indices here are `const` literals, so
+ * TypeScript narrows each to its own literal type and indexing stays total.
+ */
+
+/** Position of the first of a face's four tangent-neighbour offsets. */
+const FIRST_OFFSET = 0
+
+/** Position of the second of a face's four tangent-neighbour offsets. */
+const SECOND_OFFSET = 1
+
+/** Position of the third of a face's four tangent-neighbour offsets. */
+const THIRD_OFFSET = 2
+
+/** Position of the fourth of a face's four tangent-neighbour offsets. */
+const FOURTH_OFFSET = 3
+
+/**
+ * Whether the cell offset from `(lx, y, lz)` by `offset` is non-air, i.e.
+ * darkens the face `offset` was computed for.
+ *
+ * A plain top-level function, not a closure declared inside
+ * `ambientOcclusionAt`: every value it needs arrives as a parameter, so
+ * calling it four times per face allocates nothing. See the header comment
+ * above `FIRST_OFFSET` for why this matters and why `offset`'s components are
+ * read by index rather than destructured.
+ */
+const isOccludingNeighbour = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  lx: number,
+  y: number,
+  lz: number,
+  offset: Offset,
+): boolean =>
+  getBlockAcrossBoundary(chunk, neighbours, lx + offset[X_INDEX], y + offset[Y_INDEX], lz + offset[Z_INDEX]) !== AIR
+
+/**
+ * How many of the four tangent-axis neighbours named by `offsets` are
+ * non-air, out of 4. The value `ambientOcclusionAt` clamps to `AO_MAX`.
+ */
+const countOccludingNeighbours = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  lx: number,
+  y: number,
+  lz: number,
+  offsets: readonly [Offset, Offset, Offset, Offset],
+): number =>
+  Number(isOccludingNeighbour(chunk, neighbours, lx, y, lz, offsets[FIRST_OFFSET])) +
+  Number(isOccludingNeighbour(chunk, neighbours, lx, y, lz, offsets[SECOND_OFFSET])) +
+  Number(isOccludingNeighbour(chunk, neighbours, lx, y, lz, offsets[THIRD_OFFSET])) +
+  Number(isOccludingNeighbour(chunk, neighbours, lx, y, lz, offsets[FOURTH_OFFSET]))
 
 /**
  * How occluded the `direction` face of the block at `(lx, y, lz)` is, in
@@ -178,36 +303,6 @@ const AO_OFFSETS = {
  * Called once per EXPOSED face, not once per cell, so it is off the ~400k
  * calls/chunk path plan.md §3.3 measures — at worst 12,288 calls on the
  * checkerboard fixture, which is 3% of it.
- *
- * ---------------------------------------------------------------------------
- * WHY THIS IS FOUR SPELLED-OUT `if`s AND NOT A LOOP OVER A HELPER
- * ---------------------------------------------------------------------------
- *
- * Because the readable version was measured and it was expensive. The first
- * draft read
- *
- *     const [first, second, third, fourth] = AO_OFFSETS[direction]
- *     const occluding = (offset: Offset): number => ... ? 0 : 1
- *     const count = occluding(first) + occluding(second) + ...
- *
- * which allocates a CLOSURE on every call — one that captures `chunk`,
- * `neighbours` and all three coordinates — plus an iterator for the array
- * destructuring. At up to 12,288 exposed faces per chunk that is 12,288 short
- * lived objects, and it measured at 2.5x to 6.9x of `meshChunk`'s whole cost on
- * this repository's bench fixtures (paired A/B, docs/design-notes.md M-10).
- *
- * That is the same mistake, in the same file family, as the one plan.md §5.2
- * forbids for `getBlock` — "an `Option` allocates a `Some` per in-bounds read,
- * hundreds of thousands of short-lived objects per chunk" — arrived at from the
- * other direction. Written out, there is no allocation at all.
- *
- * The four samples are also unrolled rather than looped for a second reason: a
- * loop would read each offset through a VARIABLE index, which
- * `noUncheckedIndexedAccess` types as `number | undefined` and which would need
- * `?? 0` fallbacks no input can reach — unreachable branches in a hot function,
- * and permanently uncoverable lines in a report this repository intends to gate
- * at 99% (docs/testing.md §3). Literal indices into a tuple have neither
- * problem.
  */
 export const ambientOcclusionAt = (
   chunk: ChunkView,
@@ -218,22 +313,9 @@ export const ambientOcclusionAt = (
   lz: number,
 ): number => {
   const offsets = AO_OFFSETS[direction]
-  const first = offsets[0]
-  const second = offsets[1]
-  const third = offsets[2]
-  const fourth = offsets[3]
-  let count = 0
-  if (getBlockAcrossBoundary(chunk, neighbours, lx + first[0], y + first[1], lz + first[2]) !== AIR) {
-    count += 1
+  const count = countOccludingNeighbours(chunk, neighbours, lx, y, lz, offsets)
+  if (count > AO_MAX) {
+    return AO_MAX
   }
-  if (getBlockAcrossBoundary(chunk, neighbours, lx + second[0], y + second[1], lz + second[2]) !== AIR) {
-    count += 1
-  }
-  if (getBlockAcrossBoundary(chunk, neighbours, lx + third[0], y + third[1], lz + third[2]) !== AIR) {
-    count += 1
-  }
-  if (getBlockAcrossBoundary(chunk, neighbours, lx + fourth[0], y + fourth[1], lz + fourth[2]) !== AIR) {
-    count += 1
-  }
-  return count > AO_MAX ? AO_MAX : count
+  return count
 }
