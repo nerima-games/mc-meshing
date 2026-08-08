@@ -1,5 +1,5 @@
 /**
- * bench-meshing.ts — the meshing hot path, measured.
+ * Bench-meshing.ts — the meshing hot path, measured.
  *
  * Run: `pnpm bench`. Also `--update-baseline`, `--guard-tolerance=`, `--workload-tolerance=`.
  * NOT part of `pnpm verify`: CI runs on every pull request in a public
@@ -45,23 +45,28 @@ import { HashSet, Option } from 'effect'
 import {
   AIR,
   BLOCKS_PER_CHUNK,
-  buildLayerLookup,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
   FACES,
-  getBlock,
   LOD_LEVELS,
+  type LodLevel,
   MESH_LAYERS,
+  type MeshLayers,
+  buildLayerLookup,
+  getBlock,
   meshChunk,
   meshChunkNaive,
   simplifyMesh,
   totalQuadArea,
   totalQuadCount,
-  type LodLevel,
-  type MeshLayers,
 } from '../src/index'
 import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, GLASS, LAKE, ROLLING, WATER } from './bench-fixtures'
 import {
+  type Baseline,
+  type Guard,
+  type MeasureOptions,
+  SHIPPED_VS_FROZEN_TOLERANCE,
+  type Workload,
   checkGuards,
   checkWorkloads,
   formatCheck,
@@ -70,14 +75,9 @@ import {
   guardRatio,
   measure,
   readBaseline,
-  SHIPPED_VS_FROZEN_TOLERANCE,
   tolerancesFrom,
   wantsBaselineUpdate,
   writeBaseline,
-  type Baseline,
-  type Guard,
-  type MeasureOptions,
-  type Workload,
 } from './bench-harness'
 
 const BASELINE_PATH = new URL('./bench-baseline.json', import.meta.url).pathname
@@ -313,6 +313,9 @@ const optionWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
  * A merge that lost a face would show a smaller quad count and a smaller area,
  * and without this column the first would read as a triumph.
  */
+const percent = (after: number, before: number): string =>
+  before === 0 ? '     -' : `${(100 * (1 - after / before)).toFixed(1).padStart(5)}%`
+
 const printMergeTable = (): void => {
   console.log('greedy merge quad reduction — an exact COUNT over deterministic fixtures, not a timing:\n')
   console.log(
@@ -334,8 +337,8 @@ const printMergeTable = (): void => {
     )
     if (!areaOk) {
       // Not a tolerance and not a warning. If this ever prints, the merge has
-      // lost or duplicated surface and the quad reduction on the same line is
-      // meaningless.
+      // Lost or duplicated surface and the quad reduction on the same line is
+      // Meaningless.
       console.error(
         `  ${''.padEnd(22)}AREA MISMATCH: naive ${String(totalQuadArea(naive))} vs merged ` +
           `${String(totalQuadArea(merged))} — the merge is not covering the same surface.`,
@@ -364,9 +367,6 @@ const splitByNormal = (layers: MeshLayers): { readonly caps: number; readonly si
   }
   return { caps, sides: layers.opaque.length - caps }
 }
-
-const percent = (after: number, before: number): string =>
-  before === 0 ? '     -' : `${(100 * (1 - after / before)).toFixed(1).padStart(5)}%`
 
 /**
  * What simplification removes, per fixture and per level.
@@ -422,8 +422,8 @@ const printReductionTable = (
 
 const options = (iterations: number, warmupIterations = iterations): MeasureOptions => ({
   iterations,
-  warmupIterations,
   runs: RUNS,
+  warmupIterations,
 })
 
 const main = async (): Promise<number> => {
@@ -444,8 +444,8 @@ const main = async (): Promise<number> => {
   const guards: ReadonlyArray<Guard> = [
     {
       // THE GATE for M-2: the shipped `getBlock` against a frozen copy of its
-      // own current shape. Expected ~1.0; it drops if `getBlock` gets slower,
-      // whatever the reason.
+      // Own current shape. Expected ~1.0; it drops if `getBlock` gets slower,
+      // Whatever the reason.
       name: 'neighbour-read/shipped-vs-frozen-inline-reference',
       regression: 'meshing-get-block-is-allocation-free',
       fastLabel: 'getBlock (shipped)',
@@ -466,27 +466,27 @@ const main = async (): Promise<number> => {
       slowMs: hashMs,
     },
     {
+      fastLabel: 'native Set.has',
+      fastMs: nativeMs,
       name: 'set-membership/hashset-vs-native-set',
       regression: 'meshing-transparency-sets-are-native',
-      fastLabel: 'native Set.has',
       slowLabel: 'Effect HashSet.has',
-      fastMs: nativeMs,
       slowMs: hashMs,
     },
     {
+      fastLabel: 'Uint8Array lookup',
+      fastMs: lookupMs,
       name: 'set-membership/native-set-vs-lookup-table',
       regression: 'meshing-transparency-sets-are-native',
-      fastLabel: 'Uint8Array lookup',
       slowLabel: 'native Set.has',
-      fastMs: lookupMs,
       slowMs: nativeMs,
     },
     {
+      fastLabel: 'getBlock -> number',
+      fastMs: plainMs,
       name: 'neighbour-read/option-vs-plain-number',
       regression: 'meshing-get-block-is-allocation-free',
-      fastLabel: 'getBlock -> number',
       slowLabel: 'getBlock -> Option',
-      fastMs: plainMs,
       slowMs: optionMs,
     },
   ]
@@ -498,7 +498,7 @@ const main = async (): Promise<number> => {
   }
 
   // Deliberately more iterations than any other case: the yardstick divides
-  // every workload figure, so its noise is every workload's noise.
+  // Every workload figure, so its noise is every workload's noise.
   const yardstickMs = measure(yardstickOver(rolling.blocks), options(200, 400))
 
   const meshWorkloads: ReadonlyArray<Workload> = BENCH_FIXTURES.map(({ name, chunk }) => {
@@ -506,10 +506,10 @@ const main = async (): Promise<number> => {
       sink += meshChunk(chunk, {}, CONFIG).opaque.length
     }, options(60))
     return {
-      name: `meshChunk/${name}`,
-      msPerUnit,
-      unit: 'chunk',
       detail: `${String(totalQuadCount(meshChunk(chunk, {}, CONFIG)))} quads`,
+      msPerUnit,
+      name: `meshChunk/${name}`,
+      unit: 'chunk',
     }
   })
 
@@ -530,18 +530,18 @@ const main = async (): Promise<number> => {
       sink += meshChunkNaive(chunk, {}, CONFIG).opaque.length
     }, options(60))
     return {
-      name: `meshChunkNaive/${name}`,
-      msPerUnit,
-      unit: 'chunk',
       detail: `${String(totalQuadCount(meshChunkNaive(chunk, {}, CONFIG)))} quads (the oracle, not shipped)`,
+      msPerUnit,
+      name: `meshChunkNaive/${name}`,
+      unit: 'chunk',
     }
   })
 
   // Meshed once, outside the timed loop: this measures simplification, not
-  // meshing, and the two differ by more than an order of magnitude.
+  // Meshing, and the two differ by more than an order of magnitude.
   const meshedFixtures = BENCH_FIXTURES.map(({ name, chunk }) => ({
-    name,
     layers: meshChunk(chunk, {}, CONFIG),
+    name,
   }))
 
   const simplifyWorkloads: ReadonlyArray<Workload> = meshedFixtures.flatMap(({ name, layers }) =>
@@ -551,10 +551,10 @@ const main = async (): Promise<number> => {
       }, options(200, 400))
       const after = simplifyMesh(layers, level)
       return {
-        name: `simplifyMesh/lod${String(level)}/${name}`,
-        msPerUnit,
-        unit: 'chunk',
         detail: `${String(layers.opaque.length)} -> ${String(after.opaque.length)} opaque quads`,
+        msPerUnit,
+        name: `simplifyMesh/lod${String(level)}/${name}`,
+        unit: 'chunk',
       }
     }),
   )
@@ -575,22 +575,22 @@ const main = async (): Promise<number> => {
    */
   const fluidWorkloads: ReadonlyArray<Workload> = [
     {
-      name: 'meshChunk/lake-fluid',
-      msPerUnit: measure(() => {
-        sink += meshChunk(LAKE, {}, FLUID_CONFIG).fluids.length
-      }, options(60)),
-      unit: 'chunk',
       detail:
         `${String(meshChunk(LAKE, {}, FLUID_CONFIG).fluids.length)} fluid faces + ` +
         `${String(totalQuadCount(meshChunk(LAKE, {}, FLUID_CONFIG)))} quads`,
+      msPerUnit: measure(() => {
+        sink += meshChunk(LAKE, {}, FLUID_CONFIG).fluids.length
+      }, options(60)),
+      name: 'meshChunk/lake-fluid',
+      unit: 'chunk',
     },
     {
-      name: 'meshChunk/lake-as-cubes',
+      detail: `${String(totalQuadCount(meshChunk(LAKE, {}, CONFIG)))} quads (same chunk, fluid table absent)`,
       msPerUnit: measure(() => {
         sink += meshChunk(LAKE, {}, CONFIG).water.length
       }, options(60)),
+      name: 'meshChunk/lake-as-cubes',
       unit: 'chunk',
-      detail: `${String(totalQuadCount(meshChunk(LAKE, {}, CONFIG)))} quads (same chunk, fluid table absent)`,
     },
   ]
 
@@ -611,26 +611,26 @@ const main = async (): Promise<number> => {
   printMergeTable()
 
   // Both tables, and the pair is the finding. The first is what mc-render
-  // actually gets — LOD applied to the merged mesh it will be handed — and the
-  // second is what docs/design-notes.md M-8 measured before the merge existed.
-  // docs/responsibility.md §3.5(c) asked for exactly this comparison, on the
-  // grounds that if LOD 1 stops buying anything once merging lands then the
+  // Actually gets — LOD applied to the merged mesh it will be handed — and the
+  // Second is what docs/design-notes.md M-8 measured before the merge existed.
+  // Docs/responsibility.md §3.5(c) asked for exactly this comparison, on the
+  // Grounds that if LOD 1 stops buying anything once merging lands then the
   // 4-chunk threshold is paying an ~11px silhouette error for nothing.
   printReductionTable('on the MERGED mesh (what mc-render is handed)', meshedFixtures)
   printReductionTable(
     'on the NAIVE mesh (what M-8 originally measured)',
-    BENCH_FIXTURES.map(({ name, chunk }) => ({ name, layers: meshChunkNaive(chunk, {}, CONFIG) })),
+    BENCH_FIXTURES.map(({ name, chunk }) => ({ layers: meshChunkNaive(chunk, {}, CONFIG), name })),
   )
 
   if (wantsBaselineUpdate(process.argv)) {
     const recorded: Baseline = {
-      version: 1,
-      recordedOn: process.env['BENCH_MACHINE'] ?? 'unrecorded machine',
+      guards: Object.fromEntries(guards.map((guard) => [guard.name, Number(guardRatio(guard).toPrecision(4))])),
       note:
         'guards are slow/fast A/B ratios measured in one process and are machine-independent; ' +
         'workloads are workload/yardstick ratios and are only approximately so. ' +
         'Regenerate with `pnpm bench --update-baseline` and say in the commit message what moved and why.',
-      guards: Object.fromEntries(guards.map((guard) => [guard.name, Number(guardRatio(guard).toPrecision(4))])),
+      recordedOn: process.env['BENCH_MACHINE'] ?? 'unrecorded machine',
+      version: 1,
       workloads: Object.fromEntries(
         workloads.map((workload) => [workload.name, Number((workload.msPerUnit / yardstickMs).toPrecision(4))]),
       ),

@@ -92,7 +92,52 @@
     // discretion until/unless oxlint reintroduces these rules; this repo deliberately runs no
     // prettier/biome/.editorconfig per the file header above).
     "no-array-method-this-argument": "warn",
-    "no-bitwise": "warn",
+    // `Schema.Literal(...)` is an `effect` Schema factory, called as a plain
+    // function per the Effect ecosystem convention (Schema.Struct(...),
+    // Context.Tag(...), etc.) — not a `class`, so `new Schema.Literal(...)` is
+    // not an option. `capIsNewExceptions` is the rule's own documented escape
+    // hatch for exactly this shape; every other capitalized call in src/ still
+    // warns.
+    "new-cap": ["warn", { "capIsNewExceptions": ["Literal"] }],
+    // Verified empirically across every flagged site: the short identifiers
+    // this codebase uses are the coordinate vocabulary itself — `y` (paired
+    // with the already-2-character `lx`/`lz`) as a loop variable, shorthand
+    // property, and destructured tuple field, and `x`/`z` as tuple labels
+    // (`readonly [x: number, z: number]`) — plus `K` as a mapped-type index
+    // (`{ readonly [K in MeshLayer]: … }`), the standard TypeScript
+    // generic/mapped-type convention (T, K, V). Same domain-vocabulary
+    // exception class as mc-noise's `id-length` precedent; every other
+    // single-character identifier in src/ still warns.
+    "id-length": ["warn", { "exceptions": ["x", "y", "z", "K"] }],
+    // Same reasoning as mc-noise's `max-params` precedent: this domain's
+    // per-cell mesh functions take a position (lx, y, lz — the value that
+    // changes on every one of tens of thousands of inner-loop iterations per
+    // chunk), a chunk reference, a neighbour-chunk reference, and 1-3
+    // geometry-specific values (block id, direction, corner heights).
+    // Bundling the position into an options object would allocate on that
+    // hot path for no behavioural benefit, the same trade mc-noise rejected.
+    // Bundling `chunk`+`neighbours` doesn't reduce real complexity either:
+    // they are two independently-relevant references (this chunk vs. its
+    // neighbours), not one concept, so wrapping them adds a
+    // destructure-back-out step at every call without shrinking what a
+    // reader has to track. Default stays 4 (mc-noise's own number, and
+    // enough for every non-mesh-loop function in this repository); the
+    // handful of files whose per-cell mesh functions genuinely need more are
+    // raised per-file below, each to the verified real maximum for that
+    // file, not a round number.
+    "max-params": ["warn", { "max": 4 }],
+    // PERFORMANCE / CORRECTNESS EXCEPTION. Two distinct, verified uses in this
+    // repository, both in `src/`:
+    //  - `src/domain/mesh.ts` packs a greedy-mesh face cell as `blockId | (ao
+    //    << AO_SHIFT)` and unpacks it with `& MAX_BLOCK_ID` / `>> AO_SHIFT`.
+    //    The bit layout is the mask format `expandGreedy` scans per slice;
+    //    rewriting it with arithmetic operators would change what "no face"
+    //    means to the scanner, not just how it's spelled.
+    //  - `scripts/bench-meshing.ts` generates deterministic per-cell fixture
+    //    ids with a small `Math.imul`/`>>> 0`/`>>> 24` PRNG, the same class of
+    //    uint32-wrapping hash construct as mc-noise's mulberry32 exception.
+    // Rewriting either as `&&`/`||` would silently change the values produced.
+    "no-bitwise": "off",
 
     // Restriction
     "default-case": "warn",
@@ -143,5 +188,106 @@
     "no-param-reassign": "off",
     "no-plusplus": "off"
   },
+  // Scoped strictness (org policy, 2026-08-08): src/ (the shipped library) is
+  // fully strict — every category default and every rule above stays
+  // "warn"/"error" there, and a violation must be fixed in source, never
+  // suppressed. test/** and scripts/** are relaxed below, each entry verified
+  // against this repository's actual violations rather than copied wholesale
+  // from another repo's config:
+  //
+  //  - test/**: assertions and fixture builders are written against literal
+  //    expected values by design (`toStrictEqual([5, 7, 2])`), so
+  //    `no-magic-numbers` fires on correctness-bearing numbers whose whole
+  //    point is to be a literal. `id-length`, `sort-keys`, `sort-imports`,
+  //    `max-params`/`max-statements` flag the terse, table-driven, high-arity
+  //    style normal for test fixtures. `no-ternary`/`no-nested-ternary` fire
+  //    on the chained `axis === 'x' ? … : axis === 'y' ? … : …` axis-dispatch
+  //    idiom repeated across this file's geometry test helpers (e.g.
+  //    `boxOf`/`unitFacesOf` in mesh.test.ts and lod.test.ts) — a concise,
+  //    already-established pattern, not masked branching logic.
+  //  - scripts/**: dev-only benchmark tooling (bench-meshing.ts,
+  //    bench-harness.ts, bench-fixtures.ts), never shipped, never imported by
+  //    src/. `no-console` would ban the console output that is the script's
+  //    entire purpose. `no-undefined` fires throughout bench-harness.ts,
+  //    where `X | undefined` and explicit `=== undefined` checks are the
+  //    idiom for "no recorded baseline yet". `no-ternary`/`no-nested-ternary`
+  //    fire on the same concise CLI-reporting/axis-dispatch code as test/.
+  //    The remaining rules are the same literal-heavy fixture style as
+  //    test/**.
+  //
+  // Verified empirically (oxlint 1.76.0, same as mc-noise's precedent):
+  // `overrides[].files` glob-matches against paths relative to the config
+  // file and layers rules on top of the base `rules` block above rather than
+  // replacing it, so anything not listed per-override (e.g. `no-eval`, the
+  // `no-restricted-imports` Tier1 dependency rule) still applies inside
+  // test/ and scripts/ too.
+  "overrides": [
+    // Per-file `max-params` ceilings for this domain's per-cell mesh
+    // functions (see the base rule's comment above for why bundling doesn't
+    // help here). Each ceiling is the verified real maximum in that file
+    // today, via `oxlint src/domain/<file>.ts` — not a round number, and not
+    // "off". `src/domain/plant-mesh.ts` needs no entry: its highest is 4,
+    // already covered by the base ceiling.
+    {
+      "files": ["src/domain/chunk-view.ts"],
+      "rules": {
+        // `getBlockAcrossBoundary`: blocks + the 8-neighbour set + lx, y, lz.
+        "max-params": ["warn", { "max": 5 }]
+      }
+    },
+    {
+      "files": ["src/domain/ambient-occlusion.ts"],
+      "rules": {
+        // `ambientOcclusionAt`: chunk + neighbours + direction + lx, y, lz.
+        "max-params": ["warn", { "max": 6 }]
+      }
+    },
+    {
+      "files": ["src/domain/lod.ts", "src/domain/mesh.ts"],
+      "rules": {
+        // `packQuadKey`/the greedy-merge inner helpers: chunk/lookup context
+        // + face direction + lx, y, lz + the emitted quad's own fields.
+        "max-params": ["warn", { "max": 9 }]
+      }
+    },
+    {
+      "files": ["src/domain/fluid-mesh.ts"],
+      "rules": {
+        // `pushSide`, the per-cell, per-side skirt emitter: quads sink +
+        // chunk + neighbours + context + lx, y, lz + blockId + here +
+        // direction + the two corner heights the caller already computed.
+        // The largest genuine case in this repository.
+        "max-params": ["warn", { "max": 12 }]
+      }
+    },
+    {
+      "files": ["test/**"],
+      "rules": {
+        "no-magic-numbers": "off",
+        "id-length": "off",
+        "sort-keys": "off",
+        "sort-imports": "off",
+        "max-params": "off",
+        "max-statements": "off",
+        "no-ternary": "off",
+        "no-nested-ternary": "off"
+      }
+    },
+    {
+      "files": ["scripts/**"],
+      "rules": {
+        "no-magic-numbers": "off",
+        "id-length": "off",
+        "sort-keys": "off",
+        "sort-imports": "off",
+        "max-params": "off",
+        "max-statements": "off",
+        "no-console": "off",
+        "no-ternary": "off",
+        "no-nested-ternary": "off",
+        "no-undefined": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["node_modules/**", "coverage/**", "dist/**", ".git/**", "*.config.ts", "docs/**"]
 }
