@@ -1,29 +1,45 @@
 /**
  * The chunk as meshing sees it, and the hot-path block read.
  *
- * `ChunkView` is the renderer-facing fixed-height view. mc-kernel owns the
+ * `ChunkView` is the renderer-facing variable-height view. mc-kernel owns the
  * source `Chunk`; use `chunkViewOf` from `kernel-adapter.ts` at that boundary.
  */
+import { AIR, type BlockId } from './block-data.js'
+import type { LightView } from './light-types.js'
+import { MAX_CHUNK_HEIGHT } from '@nerima-games/mc-kernel'
+import type { RailShapeView } from './rail-types.js'
 
 /** Horizontal extent of a chunk, in blocks. */
 export const CHUNK_SIZE = 16
 
-/** Vertical extent of a chunk, in blocks. */
+/** Canonical vertical extent used by the fixtures and the default chunk. */
 export const CHUNK_HEIGHT = 256
-
-/** The block id that means "nothing here". */
-export const AIR = 0
+const MIN_CHUNK_HEIGHT = 1
 
 /**
- * Block storage layout: `y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE`.
+ * Number of block cells in a chunk with the supplied vertical extent.
+ *
+ * The upper bound is the same bound enforced by mc-kernel's `ChunkHeight`.
+ * Keeping this check at the meshing boundary prevents a malformed view from
+ * producing an incorrectly sized typed array or an out-of-range index.
+ */
+export const blockCountOf = (height: number): number => {
+  if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
+    throw new RangeError(`Chunk height must be an integer from 1 to ${MAX_CHUNK_HEIGHT}, received ${height}`)
+  }
+  return CHUNK_SIZE * height * CHUNK_SIZE
+}
+
+/**
+ * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.
  *
  * Y-major within a column, because meshing and lighting both walk columns
  * top-down and this makes that walk contiguous. Same layout as the reference
  * (`greedy-meshing-ao.ts:8`), which matters: it is what lets the reference's
  * chunk fixtures be reused directly as golden inputs.
  */
-export const blockIndex = (lx: number, y: number, lz: number): number =>
-  y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE
+export const blockIndex = (lx: number, y: number, lz: number, height: number): number =>
+  y + lz * height + lx * height * CHUNK_SIZE
 
 /**
  * The fluid simulation's per-cell state, as meshing needs to see it.
@@ -37,8 +53,10 @@ export const blockIndex = (lx: number, y: number, lz: number): number =>
  * (`packages/block/domain/fluid.ts:9-12`). Those masks belong to the
  * fluid SIMULATION. Restating them here would put a second copy of another
  * repository's encoding in this one, which is the mistake docs/responsibility.md
- * §3.3 refused for coordinates, §3.4 for LOD distances and M-11 for rail shapes:
- * two spellings of one fact, and only one of them is the one anybody updates.
+ * §3.3 refused for coordinates and §3.4 for LOD distances: two spellings of one
+ * fact, and only one of them is the one anybody updates. Rail state follows the
+ * same boundary: `railShapes` carries decoded renderer-facing values, while the
+ * source's state storage and codec remain outside this package.
  *
  * So the seam is drawn at the DECODED state instead. Meshing needs to know how
  * full a cell is, whether it is a source, and optionally whether it is falling;
@@ -59,17 +77,15 @@ export const blockIndex = (lx: number, y: number, lz: number): number =>
  *    (`fluid-model.ts:15-16`) — and it describes how far the fluid SPREADS,
  *    which is propagation vocabulary. It is injected through `MeshConfig`.
  *
- * THE STATE IS OPTIONAL IN EFFECT: `domain/fluid-mesh.ts` reads a missing
- * `FluidView` as all zeroes, which is a full, non-source cell. A caller that has
- * block ids but no simulation state yet therefore gets flat full-height fluid
- * rather than invisible fluid. The optional `falling` array preserves the same
- * compatibility for callers that predate the renderer-facing flow descriptor.
+ * The state is optional at the `ChunkView` boundary because mc-kernel 0.4.0
+ * publishes no fluid sidecar. When present, `FluidView` is complete decoded
+ * renderer state: all three arrays are required. A missing `FluidView` is
+ * interpreted by fluid sampling as a full, non-source cell so block ids still
+ * produce visible fluid geometry before simulation state is available.
  *
- * LIKE `ChunkView` ITSELF, THIS IS A PLACEHOLDER. docs/responsibility.md §3.6
- * left the fluid input undecided between "wait for the owner to publish" and
- * "declare the minimum structural type here, as `ChunkView` already does for
- * `Chunk`". This is the second, and it is recorded in docs/porting.md as a
- * pending replacement exactly as `ChunkView` is.
+ * The type intentionally stops at decoded state. The owner of simulation
+ * storage decodes its packed bytes before passing this view; meshing does not
+ * duplicate that codec.
  */
 export type FluidView = {
   /**
@@ -80,32 +96,37 @@ export type FluidView = {
   /** Non-zero where the cell is a fluid SOURCE rather than flow. Same layout. */
   readonly sources: Readonly<Uint8Array>
   /**
-   * Non-zero where the fluid is falling vertically. Same layout. Optional for
-   * compatibility with callers that only provide level/source state.
+   * Non-zero where the fluid is falling vertically. Same layout.
    */
-  readonly falling?: Readonly<Uint8Array>
+  readonly falling: Readonly<Uint8Array>
 }
 
 export type ChunkView = {
-  /** `CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
+  /** Vertical extent of this chunk, in blocks. */
+  readonly height: number
+  /** `CHUNK_SIZE * height * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
   readonly blocks: Readonly<Uint8Array>
   /**
-   * Per-cell fluid state, when the caller has any.
+   * Per-cell decoded fluid state when available from the simulation boundary.
    *
-   * OPTIONAL, so that every `ChunkView` written before fluids existed still
-   * typechecks and behaves exactly as it did. It sits on `ChunkView` rather than
-   * beside it as a separate parameter so that `ChunkNeighbours` carries it for
-   * free — a lake spanning a chunk seam needs the neighbour's levels to compute
-   * the corner heights along that seam, and a fluid passed separately would have
-   * reached the four neighbours only through a second, parallel structure.
+   * It remains optional because mc-kernel 0.4.0 owns block ids only and does not
+   * publish a fluid sidecar. When present, all `FluidView` arrays are required.
+   * It sits on `ChunkView` rather than beside it as a separate parameter so that
+   * `ChunkNeighbours` carries it for free — a lake spanning a chunk seam needs
+   * the neighbour's levels to compute corner heights along that seam, and a
+   * fluid passed separately would have reached the four neighbours only through
+   * a second, parallel structure.
    */
   readonly fluid?: FluidView
+  /** Decoded vanilla rail shape per cell; absent when the source has no state sidecar. */
+  readonly railShapes?: RailShapeView
+  readonly light?: LightView
 }
 
-export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
+export const BLOCKS_PER_CHUNK = blockCountOf(CHUNK_HEIGHT)
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
-export const emptyChunk = (): ChunkView => ({ blocks: new Uint8Array(BLOCKS_PER_CHUNK) })
+export const emptyChunk = (height = CHUNK_HEIGHT): ChunkView => ({ blocks: new Uint8Array(blockCountOf(height)), height })
 
 /** First valid index along any chunk-local axis (`lx`, `y`, or `lz`). */
 const FIRST_LOCAL_INDEX = 0
@@ -129,7 +150,7 @@ const LAST_LOCAL_INDEX = CHUNK_SIZE - LAST_INDEX_OFFSET
  *  1. The six bounds comparisons are written out inline as one short-circuiting
  *     `if`, not delegated to a helper. At ~400k calls per chunk the call
  *     overhead is not noise.
- *  2. The return type is `number`, not `Option<number>`. An `Option` allocates
+ *  2. The return type is `BlockId`, not `Option<BlockId>`. An `Option` allocates
  *     a `Some` per in-bounds read — hundreds of thousands of short-lived
  *     objects per chunk, which is a GC pause you can see in a frame graph.
  *  3. Out of bounds returns the `AIR` sentinel rather than failing. That is the
@@ -140,18 +161,18 @@ const LAST_LOCAL_INDEX = CHUNK_SIZE - LAST_INDEX_OFFSET
  * Do not "improve" any of the three. See docs/design-notes.md, regression
  * `meshing-get-block-is-allocation-free`.
  */
-export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number => {
+export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number, height: number): BlockId => {
   if (
     lx < FIRST_LOCAL_INDEX ||
     lx >= CHUNK_SIZE ||
     y < FIRST_LOCAL_INDEX ||
-    y >= CHUNK_HEIGHT ||
+    y >= height ||
     lz < FIRST_LOCAL_INDEX ||
     lz >= CHUNK_SIZE
   ) {
     return AIR
   }
-  return blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE] ?? AIR
+  return (blocks[y + lz * height + lx * height * CHUNK_SIZE] ?? AIR) as BlockId
 }
 
 /**
@@ -189,9 +210,9 @@ export type ChunkNeighbours = {
  * "is there a chunk here, and if so what is at this local coordinate in it"
  * — so it is factored out once rather than repeated per neighbour.
  */
-const neighbourBlock = (neighbour: ChunkView | undefined, lx: number, y: number, lz: number): number => {
+const neighbourBlock = (neighbour: ChunkView | undefined, lx: number, y: number, lz: number): BlockId => {
   if (neighbour) {
-    return getBlock(neighbour.blocks, lx, y, lz)
+    return getBlock(neighbour.blocks, lx, y, lz, neighbour.height)
   }
   return AIR
 }
@@ -206,7 +227,7 @@ const neighbourBlock = (neighbour: ChunkView | undefined, lx: number, y: number,
  * `no-undefined` rule bans the latter identifier; the two are otherwise
  * interchangeable here.
  */
-const getBlockAtCorner = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): number | null => {
+const getBlockAtCorner = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): BlockId | null => {
   if (lx < FIRST_LOCAL_INDEX && lz < FIRST_LOCAL_INDEX) {
     return neighbourBlock(neighbours.xNegZNeg, LAST_LOCAL_INDEX, y, LAST_LOCAL_INDEX)
   }
@@ -231,7 +252,7 @@ const getBlockAtCorner = (neighbours: ChunkNeighbours, lx: number, y: number, lz
  * `getBlockAtCorner` has already ruled out both axes being out of range at
  * once, so at most one of the four checks below can match.
  */
-const getBlockAtEdge = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): number | null => {
+const getBlockAtEdge = (neighbours: ChunkNeighbours, lx: number, y: number, lz: number): BlockId | null => {
   if (lx < FIRST_LOCAL_INDEX) {
     return neighbourBlock(neighbours.xNeg, LAST_LOCAL_INDEX, y, lz)
   }
@@ -253,8 +274,8 @@ export const getBlockAcrossBoundary = (
   lx: number,
   y: number,
   lz: number,
-): number => {
-  if (y < FIRST_LOCAL_INDEX || y >= CHUNK_HEIGHT) {
+): BlockId => {
+  if (y < FIRST_LOCAL_INDEX || y >= chunk.height) {
     return AIR
   }
   const corner = getBlockAtCorner(neighbours, lx, y, lz)
@@ -265,5 +286,5 @@ export const getBlockAcrossBoundary = (
   if (edge !== null) {
     return edge
   }
-  return getBlock(chunk.blocks, lx, y, lz)
+  return getBlock(chunk.blocks, lx, y, lz, chunk.height)
 }

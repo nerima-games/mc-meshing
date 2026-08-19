@@ -147,6 +147,42 @@ export type Baseline = {
   readonly workloads: Readonly<Record<string, number>>
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const decodeNumberRecord = (value: unknown, field: string): Readonly<Record<string, number>> => {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid benchmark baseline: ${field} must be an object`)
+  }
+
+  const decoded: Record<string, number> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) {
+      throw new TypeError(`Invalid benchmark baseline: ${field}.${key} must be a finite number`)
+    }
+    decoded[key] = entry
+  }
+  return decoded
+}
+
+const decodeBaseline = (value: unknown): Baseline => {
+  if (
+    !isRecord(value) ||
+    value['version'] !== 1 ||
+    typeof value['recordedOn'] !== 'string' ||
+    typeof value['note'] !== 'string'
+  ) {
+    throw new TypeError('Invalid benchmark baseline: expected version 1 metadata')
+  }
+  return {
+    guards: decodeNumberRecord(value['guards'], 'guards'),
+    note: value['note'],
+    recordedOn: value['recordedOn'],
+    version: 1,
+    workloads: decodeNumberRecord(value['workloads'], 'workloads'),
+  }
+}
+
 /**
  * How far a ratio may drift before the run fails. Guards and workloads get
  * different numbers, because they are different kinds of measurement.
@@ -244,7 +280,7 @@ export const checkWorkloads = (
 
 export const readBaseline = async (filePath: string): Promise<Baseline | undefined> => {
   const raw = await readFile(filePath, 'utf8').catch(() => undefined)
-  return raw === undefined ? undefined : (JSON.parse(raw) as Baseline)
+  return raw === undefined ? undefined : decodeBaseline(JSON.parse(raw))
 }
 
 export const writeBaseline = async (filePath: string, baseline: Baseline): Promise<void> => {
@@ -266,7 +302,7 @@ export const formatGuard = (guard: Guard): string =>
 export const formatWorkload = (workload: Workload): string =>
   `  ${pad(workload.name, 44)} ${workload.msPerUnit.toFixed(4)} ms/${workload.unit}${workload.unit === 'chunk'
     ? `   x${String(CHUNKS_ON_LOAD)} = ${(workload.msPerUnit * CHUNKS_ON_LOAD).toFixed(1)} ms`
-    : '' 
+    : ''
   }${workload.detail === undefined ? '' : `   (${workload.detail})`}`
 
 export const formatCheck = (result: CheckResult): string => {

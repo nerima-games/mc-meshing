@@ -1,6 +1,6 @@
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect } from 'effect'
-import { BLOCKS_PER_CHUNK, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
 import { type MeshLayers, type MeshRegion, meshChunkNaive, meshChunkRegion } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 
@@ -19,12 +19,13 @@ const chunkWith = (
   fluidCells: ReadonlyArray<readonly [x: number, y: number, z: number, level: number]> = [],
 ): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-  for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z)] = id}
-  if (fluidCells.length === 0) {return { blocks }}
+  for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = id}
+  if (fluidCells.length === 0) {return { height: CHUNK_HEIGHT, blocks }}
+  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  for (const [x, y, z, level] of fluidCells) {levels[blockIndex(x, y, z)] = level}
-  return { blocks, fluid: { levels, sources } }
+  for (const [x, y, z, level] of fluidCells) {levels[blockIndex(x, y, z, CHUNK_HEIGHT)] = level}
+  return { height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 const inRegion = (region: MeshRegion, x: number, y: number, z: number): boolean =>
@@ -50,6 +51,7 @@ const project = (layers: MeshLayers, region: MeshRegion): MeshLayers => ({
   crossPlants: layers.crossPlants.filter((q) => inRegion(region, ...origin(q.vertices))),
   fluids: layers.fluids.filter((q) => inRegion(region, ...fluidOrigin(q))),
   opaque: layers.opaque.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
+  specialBlocks: layers.specialBlocks.filter((q) => inRegion(region, ...origin(q.vertices))),
   transparentSolid: layers.transparentSolid.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
   water: layers.water.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
 })
@@ -105,6 +107,16 @@ describe('subregion meshing', () => {
       expect(MESH_LAYERS.every((layer) => result.layers[layer].length === 0)).toBe(true)
       expect(result.layers.crossPlants).toStrictEqual([])
       expect(result.layers.fluids).toStrictEqual([])
+    }),
+  )
+
+  it.effect('clamps non-finite region bounds to their lower edge', () =>
+    Effect.sync(() => {
+      const result = meshChunkRegion(emptyChunk(), {}, CONFIG, {
+        max: [1, 1, 1],
+        min: [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+      })
+      expect(result.dirtyRegion).toStrictEqual({ max: [1, 1, 1], min: [0, 0, 0] })
     }),
   )
 })

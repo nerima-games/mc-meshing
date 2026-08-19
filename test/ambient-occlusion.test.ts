@@ -10,7 +10,7 @@
  *   meshing-ao-clamps-to-three
  *   meshing-ao-crosses-a-loaded-boundary
  */
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
 import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../src/domain/ambient-occlusion'
 import {
@@ -35,9 +35,9 @@ type Cell = readonly [number, number, number]
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { blocks }
+  return { height: CHUNK_HEIGHT, blocks }
 }
 
 const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, number] => [

@@ -10,7 +10,7 @@
  *   meshing-cross-plants-emit-no-cube-faces
  *   meshing-cross-plants-occlude-nothing
  */
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
 import {
   BLOCKS_PER_CHUNK,
@@ -22,7 +22,13 @@ import {
 } from '../src/domain/chunk-view'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
-import { type CrossPlantQuad, PLANT_INSET, buildCrossPlantLookup, isCrossPlant } from '../src/domain/plant-mesh'
+import {
+  type CrossPlantQuad,
+  PLANT_INSET,
+  buildCrossPlantLookup,
+  isCrossPlant,
+  meshCrossPlants,
+} from '../src/domain/plant-mesh'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
@@ -33,6 +39,7 @@ const GRASS_TUFT = 8
 
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set([FLOWER, GRASS_TUFT]),
+  fluidMaxLevels: new Map(),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
 }
@@ -40,15 +47,28 @@ const CONFIG: MeshConfig = {
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { blocks }
+  return { height: CHUNK_HEIGHT, blocks }
 }
 
 const cornersOf = (plate: CrossPlantQuad): ReadonlyArray<string> =>
   plate.vertices.map((vertex) => vertex.join(','))
 
 describe('the two plates', () => {
+  it.effect('defaults absent neighbours for direct plant meshing', () =>
+    Effect.sync(() => {
+      const plates = meshCrossPlants({
+        chunk: chunkWith([[8, 64, 8, FLOWER]]),
+        plantLookup: buildCrossPlantLookup(CONFIG),
+        yLimit: CHUNK_HEIGHT,
+      })
+
+      expect(plates).toHaveLength(2)
+      expect(plates.every((plate) => !plate.light)).toBe(true)
+    }),
+  )
+
   it.effect('a plant emits exactly two plates, four vertices each', () =>
     Effect.sync(() => {
       const layers = meshChunk(chunkWith([[8, 64, 8, FLOWER]]), {}, CONFIG)
@@ -213,6 +233,18 @@ describe('the two plates', () => {
     }),
   )
 
+  it.effect('a plant at the top of a short chunk is still meshed', () =>
+    Effect.sync(() => {
+      const height = 8
+      const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+      blocks[blockIndex(3, height - 1, 3, height)] = FLOWER
+
+      const layers = meshChunk({ height, blocks }, {}, CONFIG)
+
+      expect(layers.crossPlants.length).toBe(2)
+    }),
+  )
+
   it.effect('an empty chunk has an empty, distinct plate list', () =>
     Effect.sync(() => {
       const layers = meshChunk(emptyChunk(), {}, CONFIG)
@@ -325,30 +357,25 @@ describe('what a plant does to the six solid passes', () => {
 })
 
 describe('the injected set', () => {
-  it.effect('an absent crossPlantBlockIds means no id is a plant', () =>
+  it.effect('an empty crossPlantBlockIds explicitly disables plant geometry', () =>
     Effect.sync(() => {
-      // The field is optional so that a config written before cross plates
-      // Existed behaves exactly as it did. `EMPTY_MESH_CONFIG` sets it; a
-      // Hand-written config need not.
-      const legacy: MeshConfig = {
+      const withoutPlants: MeshConfig = {
+        crossPlantBlockIds: new Set(),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set([GLASS]),
         waterBlockIds: new Set([WATER]),
       }
-      const layers = meshChunk(chunkWith([[8, 64, 8, FLOWER]]), {}, legacy)
+      const layers = meshChunk(chunkWith([[8, 64, 8, FLOWER]]), {}, withoutPlants)
       expect(layers.crossPlants.length).toBe(0)
       expect(totalQuadCount(layers)).toBe(6)
     }),
   )
 
-  it.effect('buildCrossPlantLookup itself defaults an absent set to empty, not just its meshChunk caller', () =>
+  it.effect('buildCrossPlantLookup accepts an explicitly empty set', () =>
     Effect.sync(() => {
-      // The test above goes through `meshChunk`, whose `crossPlantLookupForMesh`
-      // Short-circuits to a shared empty table before `buildCrossPlantLookup` is
-      // Ever called (`domain/mesh.ts`) — so it never exercises this function's
-      // OWN `?? []`. `buildCrossPlantLookup` is exported and `crossPlantBlockIds`
-      // Is optional on `MeshConfig`, so a caller reaching it directly with no set
-      // Is a real, public-API path, not a hypothetical one.
       const lookup = buildCrossPlantLookup({
+        crossPlantBlockIds: new Set(),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set(),
       })
@@ -361,7 +388,7 @@ describe('the injected set', () => {
     Effect.sync(() => {
       const lookup = buildCrossPlantLookup(CONFIG)
       for (let blockId = 0; blockId <= 255; blockId += 1) {
-        expect(isCrossPlant(lookup, blockId)).toBe(CONFIG.crossPlantBlockIds?.has(blockId) ?? false)
+        expect(isCrossPlant(lookup, blockId)).toBe(CONFIG.crossPlantBlockIds.has(blockId))
       }
     }),
   )
@@ -377,6 +404,7 @@ describe('the injected set', () => {
       // Reader who wants to add one finds the answer here.
       const lookup = buildCrossPlantLookup({
         crossPlantBlockIds: new Set([-1, 256, 1000, FLOWER]),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set(),
       })
@@ -394,6 +422,7 @@ describe('the injected set', () => {
       // The two classifications must be able to hold at once.
       const both: MeshConfig = {
         crossPlantBlockIds: new Set([FLOWER]),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set([FLOWER]),
         waterBlockIds: new Set(),
       }

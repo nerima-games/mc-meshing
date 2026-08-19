@@ -77,9 +77,13 @@
  *    Recorded as a deviation in docs/design-notes.md M-11 and pinned by
  *    `test/plant-mesh.test.ts`.
  */
-import { CHUNK_SIZE, type ChunkView, getBlock } from './chunk-view'
-import { MAX_BLOCK_ID, type MeshConfig } from './opacity'
-import { type FaceRole } from './faces'
+import { type BlockId, MAX_BLOCK_ID } from './block-data.js'
+import { CHUNK_SIZE, type ChunkNeighbours, type ChunkView, getBlock } from './chunk-view.js'
+import type { CrossPlantQuad } from './plant-types.js'
+import { type MeshConfig } from './opacity.js'
+import { quadLightAt } from './light-sampling.js'
+
+export type { CrossPlantQuad, PlantVertex } from './plant-types.js'
 
 /**
  * How far each plate is pulled in from the cell's four vertical walls.
@@ -102,55 +106,6 @@ export const PLANT_INSET = 0.1
  * `lx`/`lz` plus this, and its top runs from `y` to `y` plus this.
  */
 const CELL_SIZE = 1
-
-/**
- * A vertex of a plant plate, in chunk-local coordinates. FRACTIONAL, unlike
- * everything else this repository emits.
- */
-export type PlantVertex = readonly [number, number, number]
-
-/**
- * One diagonal pane. Two of these make a cross.
- *
- * The four vertices are given explicitly and in winding order, because there is
- * no origin-plus-extents description of a diagonal plane — which is exactly what
- * distinguishes this type from `Quad`.
- */
-export type CrossPlantQuad = {
-  readonly blockId: number
-  /**
-   * Always `'side'`. The reference passes `'side'` for both plates
-   * (`plant-mesh.ts:96-97`), because a plant has one texture and no top or
-   * bottom variant. Carried anyway so that a consumer's texture lookup is the
-   * same shape for a plate as for a face.
-   */
-  readonly role: FaceRole
-  readonly vertices: readonly [PlantVertex, PlantVertex, PlantVertex, PlantVertex]
-  /**
-   * The normal the reference hands the renderer — AXIS-ALIGNED, and therefore
-   * NOT the plate's true geometric normal.
-   *
-   * The first plate spans the `(x0,z0)`-`(x1,z1)` diagonal, so its true normal
-   * is `(1, 0, -1)/sqrt(2)`; the reference gives it `[0, 0, 1]`
-   * (`plant-mesh.ts:96`) and gives the second `[1, 0, 0]` (:97). This is
-   * transcribed rather than corrected. A cross plant is drawn with flat,
-   * unshaded lighting — the reference hands it `EMPTY_AO` (:16, :76) and a
-   * single voxel's light for all four corners (:51-62) — so the normal is not
-   * used for shading, and changing it here would be a change with no stated
-   * consumer. See docs/design-notes.md M-11.
-   */
-  readonly nx: number
-  readonly ny: number
-  readonly nz: number
-  /**
-   * Always 0. Plants take no ambient occlusion: `addQuad` is called with
-   * `EMPTY_AO` (`plant-mesh.ts:16`, used at :76). A cross plate has no face
-   * whose enclosure could be counted — `domain/ambient-occlusion.ts` samples the
-   * tangent neighbours of the air cell in front of an axis-aligned face, and a
-   * diagonal plate has neither.
-   */
-  readonly ao: number
-}
 
 /**
  * Flatten the cross-plant id set into a 256-entry byte table, `1` meaning "this
@@ -194,7 +149,7 @@ export const buildCrossPlantLookup = (config: MeshConfig): Uint8Array => {
   // Unreachable branch is a permanently uncoverable line and a claim no test can
   // Support. `test/plant-mesh.test.ts` keeps the out-of-range case as a
   // Statement of the resulting behaviour.
-  for (const blockId of config.crossPlantBlockIds ?? []) {
+  for (const blockId of config.crossPlantBlockIds) {
     lookup[blockId] = CROSS_PLANT_MARKER
   }
   return lookup
@@ -220,7 +175,96 @@ export const isCrossPlant = (lookup: Uint8Array, blockId: number): boolean =>
  * Y is NOT inset: the plate runs the full height of the cell, `y` to `y + 1`
  * (:93-94). A plant inset vertically would float above the ground it stands on.
  */
-const platesFor = (blockId: number, lx: number, y: number, lz: number): ReadonlyArray<CrossPlantQuad> => {
+/**
+ * Every cross plate in the chunk, in `lx` then `lz` then `y` order.
+ *
+ * That is the reference's loop nesting (`addPlantMeshes`, `plant-mesh.ts:238-240`)
+ * and it is also the order `meshChunkNaive` uses, which is convenient rather
+ * than load-bearing: nothing merges here, so no ordering is forced by the
+ * algorithm the way the six face passes' orders are (docs/design-notes.md M-4).
+ * It is pinned by a test anyway, because a golden hash over a geometry buffer
+ * does not care why an order is stable, only that it is.
+ *
+ * Bounded by `yLimit` like the face passes, and for the same reason: a plant is
+ * a non-air block, so none can exist above the highest one. The reference caps
+ * the same way (`Math.min(chunk.height, yLimit)`, :237).
+ *
+ * Neighbours are consulted only for injected corner lighting. Cross-plate
+ * geometry itself is bounded to the chunk and does not participate in culling.
+ */
+/** Loop increment: visit each chunk-local coordinate exactly once. */
+const LOOP_STEP = 1
+
+/** Minimum value along a chunk-local coordinate axis. */
+const AXIS_ORIGIN = 0
+
+/** Chunk-local origin, the default lower bound for `meshCrossPlants`. */
+const CHUNK_ORIGIN: readonly [number, number, number] = [AXIS_ORIGIN, AXIS_ORIGIN, AXIS_ORIGIN]
+
+type CrossPlantBounds = {
+  readonly min: readonly [number, number, number]
+  readonly max: readonly [number, number, number]
+}
+
+type CrossPlantOptions = {
+  readonly bounds?: CrossPlantBounds
+  readonly chunk: ChunkView
+  readonly neighbours?: ChunkNeighbours
+  readonly plantLookup: Uint8Array
+  readonly yLimit: number
+}
+
+type PlantPlateInput = {
+  readonly blockId: BlockId
+  readonly lx: number
+  readonly y: number
+  readonly lz: number
+  readonly light: CrossPlantQuad['light']
+}
+
+type CrossPlantContext = {
+  readonly chunk: ChunkView
+  readonly maxX: number
+  readonly maxY: number
+  readonly maxZ: number
+  readonly minX: number
+  readonly minY: number
+  readonly minZ: number
+  readonly neighbours: ChunkNeighbours
+  readonly plantLookup: Uint8Array
+}
+
+const crossPlantContextOf = ({
+  bounds,
+  chunk,
+  neighbours,
+  plantLookup,
+  yLimit,
+}: CrossPlantOptions): CrossPlantContext => {
+  const resolvedBounds = bounds ?? { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: CHUNK_ORIGIN }
+  const [minX, minY, minZ] = resolvedBounds.min
+  const [maxX, maxBoundY, maxZ] = resolvedBounds.max
+  return {
+    chunk,
+    maxX,
+    maxY: Math.min(yLimit, maxBoundY),
+    maxZ,
+    minX,
+    minY,
+    minZ,
+    neighbours: neighbours ?? {},
+    plantLookup,
+  }
+}
+
+const lightPropertiesOf = (light: CrossPlantQuad['light']): Pick<CrossPlantQuad, 'light'> => {
+  if (light) {
+    return { light }
+  }
+  return {}
+}
+
+const platesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
   const x0 = lx + PLANT_INSET
   const x1 = lx + CELL_SIZE - PLANT_INSET
   const z0 = lz + PLANT_INSET
@@ -235,6 +279,7 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
       ny: 0,
       nz: 1,
       role: 'side',
+      ...lightPropertiesOf(light),
       vertices: [
         [x0, y0, z0],
         [x0, y1, z0],
@@ -249,6 +294,7 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
       ny: 0,
       nz: 0,
       role: 'side',
+      ...lightPropertiesOf(light),
       vertices: [
         [x1, y0, z0],
         [x1, y1, z0],
@@ -259,52 +305,17 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
   ]
 }
 
-/**
- * Every cross plate in the chunk, in `lx` then `lz` then `y` order.
- *
- * That is the reference's loop nesting (`addPlantMeshes`, `plant-mesh.ts:238-240`)
- * and it is also the order `meshChunkNaive` uses, which is convenient rather
- * than load-bearing: nothing merges here, so no ordering is forced by the
- * algorithm the way the six face passes' orders are (docs/design-notes.md M-4).
- * It is pinned by a test anyway, because a golden hash over a geometry buffer
- * does not care why an order is stable, only that it is.
- *
- * Bounded by `yLimit` like the face passes, and for the same reason: a plant is
- * a non-air block, so none can exist above the highest one. The reference caps
- * the same way (`Math.min(CHUNK_HEIGHT, yLimit)`, :237).
- *
- * NEIGHBOURS ARE NOT CONSULTED. A cross plate's geometry depends only on its own
- * cell — there is no culling to do, because there is no shared face to cull, and
- * two plants standing side by side both draw both of their plates. That is why
- * this function takes a `ChunkView` and not a `ChunkNeighbours`.
- */
-/** Loop increment: visit each chunk-local coordinate exactly once. */
-const LOOP_STEP = 1
-
-/** Minimum value along a chunk-local coordinate axis. */
-const AXIS_ORIGIN = 0
-
-/** Chunk-local origin, the default lower bound for `meshCrossPlants`. */
-const CHUNK_ORIGIN: readonly [number, number, number] = [AXIS_ORIGIN, AXIS_ORIGIN, AXIS_ORIGIN]
-
-export const meshCrossPlants = (
-  chunk: ChunkView,
-  plantLookup: Uint8Array,
-  yLimit: number,
-  bounds: {
-    readonly min: readonly [number, number, number]
-    readonly max: readonly [number, number, number]
-  } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: CHUNK_ORIGIN },
-): ReadonlyArray<CrossPlantQuad> => {
-  const [minX, minY, minZ] = bounds.min
-  const [maxX, maxY, maxZ] = bounds.max
+export const meshCrossPlants = (options: CrossPlantOptions): ReadonlyArray<CrossPlantQuad> => {
+  const { chunk, maxX, maxY, maxZ, minX, minY, minZ, neighbours, plantLookup } = crossPlantContextOf(options)
   const plates: Array<CrossPlantQuad> = []
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
     for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
-      for (let y = minY; y < Math.min(yLimit, maxY); y += LOOP_STEP) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
+      for (let y = minY; y < maxY; y += LOOP_STEP) {
+        const blockId = getBlock(chunk.blocks, lx, y, lz, chunk.height)
         if (isCrossPlant(plantLookup, blockId)) {
-          plates.push(...platesFor(blockId, lx, y, lz))
+          plates.push(
+            ...platesFor({ blockId, light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz), lx, lz, y }),
+          )
         }
       }
     }

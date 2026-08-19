@@ -7,11 +7,18 @@
  * non-negotiable: the transparency sets are native, and the layer priority is
  * the documented one.
  */
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect } from 'effect'
 import * as meshing from '../src/index'
 
 describe('public API surface', () => {
+  it.effect('exports the kernel branded id type for registry-derived values', () =>
+    Effect.sync(() => {
+      const air: meshing.BlockId = meshing.AIR
+      expect(air).toBe(meshing.AIR)
+    }),
+  )
+
   it.effect('re-exports every value mc-render is expected to import', () =>
     Effect.sync(() => {
       const expected = [
@@ -24,6 +31,24 @@ describe('public API surface', () => {
         'emptyChunk',
         'getBlock',
         'getBlockAcrossBoundary',
+        'chunkViewOf',
+        // Kernel-derived block data
+        'blockIdsWithRenderKind',
+        'MINECRAFT_WATER_BLOCK_IDS',
+        'MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS',
+        'MINECRAFT_CROSS_PLANT_BLOCK_IDS',
+        'MINECRAFT_FLUID_MAX_LEVELS',
+        // Ambient occlusion
+        'AO_LEVELS',
+        'AO_MAX',
+        'AO_NONE',
+        'ambientOcclusionAt',
+        // Injected Minecraft light
+        'LIGHT_LEVEL_MIN',
+        'LIGHT_LEVEL_MAX',
+        'clampMeshLight',
+        'sampleLightAt',
+        'quadLightAt',
         // Faces
         'FACES',
         'FACE_DIRECTIONS',
@@ -31,6 +56,7 @@ describe('public API surface', () => {
         'INDICES_PER_QUAD',
         'oppositeDirection',
         'faceOf',
+        'facePlacementOf',
         'tangentAxes',
         // Lod — mc-render decides WHICH level a chunk is at and imports the
         // Vocabulary for it from here; see docs/responsibility.md §3.4.
@@ -43,11 +69,25 @@ describe('public API surface', () => {
         'MESH_LAYER_PRIORITY',
         'MAX_BLOCK_ID',
         'EMPTY_MESH_CONFIG',
+        'MINECRAFT_MESH_CONFIG',
         'layerOfBlockId',
         'buildLayerLookup',
         'occludes',
+        // Plant, fluid, and kernel-special geometry
+        'PLANT_INSET',
+        'buildCrossPlantLookup',
+        'isCrossPlant',
+        'meshCrossPlants',
+        'SOURCE_SURFACE_HEIGHT',
+        'buildFluidLookup',
+        'isFluidBlock',
+        'meshFluidSurfaces',
+        'isSpecialBlock',
+        'meshSpecialBlocks',
         // Mesh
         'meshChunk',
+        'MeshScratch',
+        'createMeshScratch',
         'totalQuadCount',
         // Added with the greedy merge. `totalQuadArea` is the quantity merging
         // Must NOT change, and mc-render wants it for the same reason this
@@ -58,6 +98,20 @@ describe('public API surface', () => {
         'totalQuadArea',
         'meshChunkNaive',
         'meshChunkRegion',
+        // Packed GPU-ready geometry
+        'MESH_BUFFER_LAYERS',
+        'packMeshLayers',
+        // Resource-pack JSON resolution and pure model meshing
+        'normalizeResourceName',
+        'resolveBlockStateModels',
+        'resolveBlockModel',
+        'resolveModelTexture',
+        'ResourcePackAssetsSchema',
+        'ResourcePackParseError',
+        'parseResourcePackAssets',
+        'parseResourcePackAssetsJson',
+        'meshBlockModel',
+        'meshBlockState',
       ]
       const actual = new Set(Object.keys(meshing))
       for (const name of expected) {
@@ -120,6 +174,8 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
   it.effect('the layer lookup table covers every representable block id', () =>
     Effect.sync(() => {
       const config = {
+        crossPlantBlockIds: new Set<number>(),
+        fluidMaxLevels: new Map<number, number>(),
         transparentSolidBlockIds: new Set([3, 255]),
         waterBlockIds: new Set([2]),
       }
@@ -136,6 +192,8 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
       // If water or glass occluded, the underside of a lake and the far pane of
       // A glass box would not render — the classic "world is inside out" bug.
       const config = {
+        crossPlantBlockIds: new Set<number>(),
+        fluidMaxLevels: new Map<number, number>(),
         transparentSolidBlockIds: new Set([3]),
         waterBlockIds: new Set([2]),
       }
