@@ -8,19 +8,19 @@
 | --- | --- |
 | `pnpm typecheck` | `tsconfig.build.json`（出荷ソース）と `tsconfig.test.json`（テスト・ツール）の両方 |
 | `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
-| `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
-| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。§3 参照) |
-| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**CI と同じ内容**(DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6) |
+| `pnpm test` | vitest。`test/effect-test.ts` の `it.effect` が主 API |
+| `pnpm test:coverage` | カバレッジ計測（4 指標を 100% でゲート。§3 参照） |
+| `pnpm verify` | `typecheck` / `lint` / `test:coverage` / `build` / `verify:package` を直列実行。**CI と同じリリース検証**（依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6） |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
 
 ```console
-$ direnv allow          # flake.nix の devShell で nodejs_22 + corepack が入る
+$ direnv allow          # flake.nix の devShell で nodejs_24 + corepack が入る
 $ pnpm install
 ```
 
-Nix を使わない場合は Node.js 22 以上と pnpm 9.15.0 が要る。
+Nix を使わない場合は Node.js 24 以上と pnpm 11 が要る。
 `package.json` の `packageManager` が版を pin しているので `corepack pnpm ...` でよい。
 
 > ツールチェーンは `devenv.nix` から `flake.nix` + `flake.lock` に移行済みである。
@@ -31,7 +31,7 @@ Nix を使わない場合は Node.js 22 以上と pnpm 9.15.0 が要る。
 
 ### `it.effect` を使う
 
-`@effect/vitest` の `it.effect` が主 API である。純粋な同期アサーションでも
+`test/effect-test.ts` の `it.effect` が主 API である。純粋な同期アサーションでも
 `Effect.sync(() => { ... })` で包む。理由は一貫性であり、
 Effect を要求するコードが後から入ったときにテストの書き方が変わらないためである。
 
@@ -96,20 +96,14 @@ test/mesh.test.ts
 `design-notes.md` の各項目には**回帰テスト名**が振ってあり、ソースのコメントからも
 同じ名前で参照している。テストを消すときは design-notes 側も同時に更新すること。
 
-## 3. カバレッジ閾値は**まだ**有効化していない
+## 3. カバレッジ閾値は 100% で有効化済み
 
-参照実装は branches / functions / lines / statements すべてに **99%** を強制している。
-本リポジトリは計測とレポートは常に動かしているが、**閾値は設定していない**。
-
-理由（`vitest.config.ts` のコメントにも記載）:
-スケルトンに閾値を課しても意味がない。第一版のモジュール数個で自明に満たされてしまい、
-実装の質については何も言わない数字になる。
-
-**99% ゲートは完成条件（§4）に到達した時点で、`vitest.config.ts` と CI の両方で有効化する。**
+`vitest.config.ts` は branches / functions / lines / statements の 4 指標すべてに **100%** を強制する。
+`pnpm verify` に含まれる `pnpm test:coverage` がこのゲートと HTML レポートを生成するため、CI で同じ検証を重複実行しない。
+新しい分岐は、閾値を緩めずテストで到達させるか、不要な分岐そのものを削除する。
 
 ```typescript
-// vitest.config.ts に追加する行
-thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
+thresholds: { branches: 100, functions: 100, lines: 100, statements: 100 },
 ```
 
 ## 4. 完成条件
@@ -125,20 +119,33 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
 
 したがって mc-meshing の完成条件は:
 
-- **ゴールデンテスト**（chunk fixture → バッファのハッシュ比較）—— plan.md §3.3 の要求。**未達**
+- **ゴールデンテスト**（chunk fixture → バッファのハッシュ比較）—— plan.md §3.3 の要求。**達成**（`test/mesh-golden.test.ts`。packed typed arrays と draw group を含む SHA-256）
 - **性質テスト**（面数上限、隣接チャンク境界の整合）—— 同上。現在の被覆テストがこれに当たる。**達成**
 - **グリーディメッシングの実装** —— **達成**（`domain/mesh.ts`）。
   旧記述「まだ無い。マージ実装は現在のテストをすべて green のまま通さなければならない」は
   **後半が誤りだったことが実装で判明した**ので、そのまま残さず訂正する。
   マージは 7 本のテストを落とした。うち 6 本は「面数」で書かれた被覆の主張（面積に書き換えた。値は不変）、
   1 本は面順序である。**面順序は保存できない** —— 理由は次項
+- **呼び出し間の作業領域再利用** —— **達成**（`domain/mesh-scratch.ts` と `test/mesh-scratch.test.ts`）。
+  面マスク／ライト作業配列だけを再利用し、返り値の所有権と次の呼び出しからの独立性は維持する。
+  出力アキュムレータのプールは、所有された返り値のライフタイム契約を保つためこの公開契約では採用しない。
 - **アンビエントオクルージョン** —— **達成**（`domain/ambient-occlusion.ts`。`design-notes.md` M-10）
 - **十字板の植生** —— **達成**（`domain/plant-mesh.ts`。M-11）
 - **流体の水面高と流れ方向** —— **達成**（`domain/fluid-mesh.ts`。M-12）。
   責務表 §3 の最後の保留行であり、保留の理由は作業量ではなく**入力の所有権**だった。
   継ぎ目を復号済みの状態（`FluidView`）に引いて解いた。**5 つのバイトマスクはここに 1 つも無い**
+- **kernel が宣言する追加形状** —— **達成**（`domain/special-mesh.ts`）。cactus / slab /
+ pressurePlate / rail / lilyPad を専用レイヤーへ分離した。固定形状に加えて、rail は
+  `ChunkView.railShapes` の復号済み sidecar から vanilla の 10 rail shape を選択し、flat / curved / ascending
+  の平面・傾斜 geometry を検証する。resource-pack JSON の対応 subset に対する
+ blockstate / model 解決は `domain/resource-pack-schema.ts`、`domain/resource-pack-resolver.ts`、
+ `domain/resource-pack-mesh.ts` とそのテストで検証する。旧来の `axis` / `angle` と Snapshot 25w46a の
+ X → Y → Z 多軸回転、旧形式優先、`rescale`、面名・`cullface` と回転後法線の分離も回帰テストで検証する。
+- このリポジトリ固有の小さな chunk fixture をゴールデン入力として固定する
+  —— **達成**（`test/mesh-golden.test.ts`。`blockIndex`、全 packed buffer、draw group を検証）。
 - 参照実装の chunk fixture をゴールデン入力として取り込む
-  （`blockIndex` のレイアウトを参照実装と同一にしてあるのはこのため）。**未達**
+  （`blockIndex` のレイアウトを参照実装と同一にしてあるのはこのため）。**外部保留**
+  （参照 checkout と fixture の取得元が現ツリーにないため）。
 
 ### 方向内の出力順は動いた。動かさずに済ませる方法は無い
 
@@ -157,21 +164,20 @@ load-bearing である」と宣言していた。**グリーディマージは�
 
 **正準な方向順（`FACES`）は不変である。** mc-render のゴールデンハッシュが本当に固定していたのは
 そちらであり、方向内の列は 6 分の 4 で動く。
-**このリポジトリにゴールデンハッシュのファイルは存在しない**（`grep golden` はコメントと
-mc-render への言及しか返さない）ので、ここで再生成したものは無い。
-動くのは mc-render 側でバッファ全体のハッシュを取っている場合であり、
-それは**メッシュ形式の変更**であってリファクタではない。`versioning.md` の扱いに従うこと。
+このリポジトリのローカル fixture に対するバッファ全体のハッシュは
+`test/mesh-golden.test.ts` に固定してあり、全 packed typed array と draw group を正準化して比較する。
+一方、mc-render の既存ハッシュ契約と完全一致させるには、参照実装の fixture とシリアライズ仕様が必要であり、
+それは**外部保留**である。方向内の列の変更はメッシュ形式の変更になり得るため、`versioning.md` の扱いに従うこと。
 
 順序テストの fixture も差し替えた。旧 `SCATTERED` は 5 ブロックが各軸で相異なる値を持っており、
 **先頭キーだけで列が決まってしまう** —— つまり `y → lz → lx` を `y → lx → lz` と区別できなかった。
 新しい fixture は 6 ブロックで、3 つが `y=10` を共有し、2 つが `(lx, lz)` を共有する。
 9 つのキー位置すべてがどこかで tie を破る。
 
-到達時に行うこと:
+残る外部確認:
 
-1. `vitest.config.ts` と `.github/workflows/ci.yaml` で 99% 閾値を有効化
-2. ビルド / publish パイプラインを追加（`versioning.md` §3）
-3. `0.x` → `1.0.0`（mc-render が実際に消費して契約を確認したら）
+1. 参照実装の chunk fixture と mc-render のバッファハッシュ契約を取得し、ローカル golden と照合する
+2. `0.x` → `1.0.0`（mc-render が実際に消費して契約を確認したら）
 
 ## 5. CI
 
@@ -179,13 +185,11 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 （失敗箇所が step 名で分かるようにするため）:
 
 1. Checkout
-2. Setup pnpm（`pnpm/action-setup@v4`）
-3. Setup Node.js 22（pnpm キャッシュ有効）
+2. Setup pnpm（`pnpm/action-setup@v6`）
+3. Setup Node.js 24（pnpm キャッシュ有効）
 4. `pnpm install --frozen-lockfile`
-5. `pnpm verify`（`typecheck && lint && test`）
-6. `pnpm test:coverage` —— **ハードゲート**。4 指標(statements/branches/functions/lines)
-   99% のしきい値を下回れば非ゼロ終了する（§3）
-7. カバレッジレポートを artifact に upload（7 日保持）
+5. `pnpm verify`（`typecheck && lint && test:coverage && build && verify:package`）
+6. カバレッジレポートを artifact に upload（7 日保持）
 
 依存グラフの逸脱(Tier を越えた `@nerima-games/*` import)は、専用スクリプトではなく
 `pnpm lint` が読む `.oxlintrc.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
@@ -201,7 +205,8 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 | `test/public-api.test.ts` | barrel の export、透過集合が native `Set`、レイヤ優先度、正準面順序と法線と role、`oppositeDirection` の対合性、lookup table の全域性、`occludes` の意味論 |
 | `test/lod.test.ts` | LOD 段の語彙（`LOD_LEVELS` / `LodLevelSchema`）、`packQuadKey` の単射性（3^9 全数）と 2^53 上界、LOD 0 の同一性、純粋性（入力を書き換えない・水とガラスは素通し）、snap の軸（水平のみ・Y は不変）、**素朴メッシュに対する**削減の厳密な数（上下面 ÷step²、側面 ÷step）、**マージ済みメッシュに対しては何も削減しないこと**（M-8 / M-9）、穴が開かないこと（包含）、出力列が入力列の部分列であること（並べ替えでないこと）、接線軸規約（`faceOf` / `tangentAxes`） |
 | `test/plant-mesh.test.ts` | 十字板の頂点（**2 枚が逆の対角**であること —— 参照実装から転記した頂点列と、XZ 射影の外積が 0 でないことの二重検査、水平だけ inset して Y は inset しないこと、AO を持たないこと、`lx → lz → y` の順序を**同点を含む** fixture で）、6 パスとの関係（**立方体の面を 1 枚も出さない**、**何も遮蔽しない** —— 6 方向すべて + 不透明隣接の対照）、両メッシャの一致（プロパティ）、注入される集合（省略時は植物なし、平坦化表の全域一致、範囲外 ID、形状と材質が両立すること） |
-| `test/fluid-mesh.test.ts` | セルの高さ（水源 = `14/16`、レベルごとの段が**注入された `maxLevel`** で決まること —— 水 1/8 と溶岩 1/4 を**別の値で**検査、段の下限、水没セルは満水、`FluidView` 欠如時は満水）、4 隅の平均による水面形状（空いている側へ傾くこと、孤立セルは平ら、NaN にならないこと）、renderer 向け flow descriptor（水源 / 平坦面はゼロ、水と溶岩の低い隣接へ向く、対角方向を正規化、落下フラグ、1 段下への流れ、ロード済み / 未ロード境界、側面に descriptor を重複させない）、どの面が出るか（**上面 + 側面 4 枚。下面は無い**、不透明な蓋は隠すがガラスは隠さない、上に流体があれば別種でも隠す、**流体も植物も遮蔽しない**（不透明隣接の対照つき）、同高の 2 セルは壁を作らない、**側面の下端は隣接の水面**、AO は常に 0）、6 パスとの関係（**立方体の面を 1 枚も出さない**、流体表を外すと立方体に戻ること、`totalQuadArea` / `totalQuadCount` に入らないこと、湖底の面は消えないこと）、チャンク境界（**4 辺すべて**で継ぎ目に壁ができないこと + 隣接なしの対照、隣接の**レベル**が隅の平均に届くこと）、注入される表（キーが集合であること、省略時は流体なし、範囲外の記述）、両メッシャの一致・**被覆同値性が成立し続けること**・**マージしないこと**（プロパティ 3 本）、`lx → y → lz` の順序、LOD 素通し |
+| `test/special-mesh.test.ts` | kernel の形状レジストリからの派生、cactus / slab / pressurePlate / rail / lilyPad のジオメトリ、隣接不透明セルによる cull、立方体パスとの重複排除、両メッシャの一致 |
+| `test/fluid-mesh.test.ts` | セルの高さ（水源 = `14/16`、レベルごとの段が**注入された `maxLevel`** で決まること —— 水 1/8 と溶岩 1/4 を**別の値で**検査、段の下限、水没セルは満水、`FluidView` 欠如時は満水）、4 隅の平均による水面形状（空いている側へ傾くこと、孤立セルは平ら、NaN にならないこと）、renderer 向け flow descriptor（水源 / 平坦面はゼロ、水と溶岩の低い隣接へ向く、対角方向を正規化、落下フラグ、1 段下への流れ、ロード済み / 未ロード境界、側面に descriptor を重複させない）、どの面が出るか（**上面 + 側面 4 枚。下面は無い**、不透明な蓋は隠すがガラスは隠さない、上に流体があれば別種でも隠す、**流体も植物も遮蔽しない**（不透明隣接の対照つき）、同高の 2 セルは壁を作らない、**側面の下端は隣接の水面**、AO は常に 0）、6 パスとの関係（**立方体の面を 1 枚も出さない**、流体表を外すと立方体に戻ること、`totalQuadArea` / `totalQuadCount` に入らないこと、湖底の面は消えないこと）、チャンク境界（**4 辺すべて**で継ぎ目に壁ができないこと + 隣接なしの対照、隣接の**レベル**が隅の平均に届くこと）、注入される表（キーが集合であること、省略時は流体なし、ID `0..MAX_BLOCK_ID`・レベル `0..255` の全域、範囲外は `RangeError`）、両メッシャの一致・**被覆同値性が成立し続けること**・**マージしないこと**（プロパティ 3 本）、`lx → y → lz` の順序、LOD 素通し |
 
 ## 7. ベンチマーク（`pnpm bench`）
 
@@ -248,7 +253,7 @@ fixture がその名前である理由でもある。
 地形より上の空気の列を走査しない）が効いている。
 `solidCeiling` を強制的に無効化して測り直すと:
 
-| fixture | 素朴（256 走査） | マージ（256 走査） | マージのみの比 |
+| fixture | 素朴（デフォルト高さ 256 走査） | マージ（デフォルト高さ 256 走査） | マージのみの比 |
 | --- | ---: | ---: | ---: |
 | flat | 1.378 ms | 1.604 ms | **1.16x 遅い** |
 | rolling | 1.403 ms | 1.678 ms | **1.20x 遅い** |
@@ -295,7 +300,7 @@ fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-
 | **workload** | 実測値 ÷ 同じ run 内で測った yardstick | 近似的にしか無い | 2.00x |
 
 `scripts/bench-baseline.json` がコミットされた baseline である。
-記録は **5 回の通し実行の中央値**であり、1 回の実行ではない。
+記録はベンチマークスクリプト内の **warmup 後 7 回の timed run の中央値**であり、1 回の実行ではない。
 
 ### guard の 2 つの役割
 
@@ -307,23 +312,19 @@ fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-
 - **price list（値札）** —— 「HashSet にしたら何倍か」を数字で示す。
   レビューで「native `Set` でいい理由」を問われたときに出す答えがこれである。
 
-### 実測値（Apple M4 Max / Node 22.23.1、5 回通しの中央値）
+### 実測値（Apple M4 Max / Node 24.18.0 の現行 baseline）
 
 | guard | 比 |
 | --- | --- |
-| `set-membership/hashset-vs-lookup-table` | **12.2x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
-| `set-membership/native-set-vs-lookup-table` | **6.2x**（native `Set.has` 対 `Uint8Array`） |
-| `set-membership/hashset-vs-native-set` | **2.0x**（Effect `HashSet.has` 対 native `Set.has`） |
-| `neighbour-read/option-vs-plain-number` | **2.2x**（`Option` 返し 対 素の `number` 返し） |
+| `set-membership/hashset-vs-lookup-table` | **11.71x**（Effect `HashSet.has` 対 `buildLayerLookup` の `Uint8Array`） |
+| `set-membership/native-set-vs-lookup-table` | **5.42x**（native `Set.has` 対 `Uint8Array`） |
+| `set-membership/hashset-vs-native-set` | **2.16x**（Effect `HashSet.has` 対 native `Set.has`） |
+| `neighbour-read/option-vs-plain-number` | **1.99x**（`Option` 返し 対 素の `number` 返し） |
 | `neighbour-read/shipped-vs-frozen-inline-reference` | 0.92（ゲート。1.0 付近であるべき値） |
 
-AO 着地時に取り直した値である。**guard は 5 本とも旧記録の 0.94-1.06 倍**で、
-どれも AO を通らないのでこれは予想どおりである。動いたのは workload の側で、
-`meshChunk/*` が 1.18-1.33 倍（checkerboard だけ **2.01 倍**）上がった。
-**checkerboard の旧値に対する 2.01 倍は workload tolerance の 2.0 をわずかに超えており、
-baseline を取り直さなければこのゲートは落ちていた。**
-負荷の中で「AO の分」と「機械の分」を分けた手順は `design-notes.md` M-10 にある
-（AO 前と AO 後を**交互に 5 対**走らせ、yardstick が両腕で 1.01 倍であることを確認した）。
+この baseline は flake の devShell が Node 22 から Node 24 に更新された後、同じ
+`nix develop --command pnpm bench --update-baseline` で取り直した。Node 22 時代の
+数値は履歴資料であり、現行の Node 24 ゲートと直接比較しない。
 
 ### ゲートの ばらつき についての訂正 —— shipped-vs-frozen は**静かではない**
 
@@ -337,10 +338,10 @@ baseline を取り直さなければこのゲートは落ちていた。**
 
 ### Node のメジャー版をまたいで比べてはならない
 
-同じベンチマークを Node 24.13.0 で走らせると workload 比が 22-32% 上、
-HashSet 系の guard が 16-18% 上に出る。baseline の記録環境は
-**flake の devShell の Node 22.23.1**（CI と同じ）であり、記録も検査も
-`nix develop --command pnpm bench` で行うこと。
+同じベンチマークでも Node のメジャー版が変わると workload 比が変わり得る。
+Node 22.23.1 の旧 baseline は履歴資料として残し、現行ゲートには **flake の devShell の
+Node 24** で記録した baseline だけを使う。Node のメジャー版を更新した場合は、
+`nix develop --command pnpm bench --update-baseline` で同じ環境の値を取り直し、変更理由を記録する。
 
 いずれも 1 チャンク分の 393,216 回（6 面 × 16×16×256）のルックアップ上での測定である。
 

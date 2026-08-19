@@ -9,7 +9,7 @@
 
 `effect` と `@nerima-games/mc-kernel` に依存する。`Chunk` 型と能力フラグは
 mc-kernel が所有し、`chunkViewOf` が kernel の可変高さチャンクをメッシング専用の
-固定高さビューへ変換する。
+可変高さビューへ変換する。
 意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
 （org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
 `.oxlintrc.json` の `no-restricted-imports`（Tier1: `mc-kernel` 以外の `@nerima-games/*` への依存を禁止）である。
@@ -67,11 +67,11 @@ Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
 | `pnpm typecheck` | `tsconfig.build.json` と `tsconfig.test.json` の両方を型検査 |
 | `pnpm lint` | oxlint（このリポジトリ唯一の lint / format 設定）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm lint:fix` | oxlint の自動修正 |
-| `pnpm test` | vitest（`@effect/vitest` の `it.effect` が主 API） |
+| `pnpm test` | vitest（`test/effect-test.ts` の `it.effect` が主 API） |
 | `pnpm test:watch` | vitest watch |
-| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。TEST_STANDARD.md §3) |
-| `pnpm bench` | `scripts/bench-harness.ts` による自作ベンチマーク(`pnpm verify` / CI には含まれない。PERFORMANCE_STANDARD.md) |
-| `pnpm verify` | `typecheck && lint && test`。CI と同じ内容 |
+| `pnpm test:coverage` | カバレッジ計測（statements / branches / functions / lines をすべて 100% でゲート） |
+| `pnpm bench` | `scripts/bench-harness.ts` による自作ベンチマーク（`pnpm verify` / CI には含まれない。PERFORMANCE_STANDARD.md） |
+| `pnpm verify` | `typecheck && lint && test:coverage && build && verify:package`。CI と同じリリース検証 |
 
 ## 使い方
 
@@ -95,7 +95,9 @@ for (const quad of fluids) {
 
 流体上面の `flow.direction` は正規化された chunk-local X/Z ベクトルで、静水は `[0, 0]`。
 `flow.falling` は `ChunkView.fluid.falling` の非ゼロ値を渡す。`falling` 配列と
-`FluidQuad.flow` は後方互換のため optional であり、側面 quad には `flow` が付かない。
+`FluidQuad.flow` は別の条件で optional である。`ChunkView.fluid` がある場合は
+`falling` 配列も必須だが、側面 quad には renderer 向けの `flow` が付かないため、
+`FluidQuad.flow` は呼び出し側で確認する。
 方向は同種流体の水面高の勾配から決定論的に計算し、空いた隣接セルの 1 段下に同種流体がある場合は
 段差を越える流れとして扱う。未ロード隣接チャンクは流れを捏造せず静止側として扱う。
 
@@ -112,7 +114,7 @@ for (const quad of fluids) {
 
 ## 現状
 
-**このリポジトリはまだ第一版（叩き台）である。**
+**このリポジトリは 0.x のメッシングライブラリであり、Minecraft Java の全ブロック表現を内包するものではない。**
 
 - **opaque 限定のグリーディマージは実装済み。これがこのリポジトリの本体である。**
   同一スライス・同一方向・同一 `blockId`・同一 AO の opaque 面だけを最大矩形にまとめる
@@ -142,30 +144,60 @@ for (const quad of fluids) {
   故障ではなく**吸収**である。`renderDistance = 4` で LOD 1 が買うのは quad の約 1.2% であり、
   その代金は約 11 px の水平方向のずれである —— 4 / 8 という定数どころか
   LOD 1 という段そのものが疑わしい。判断は mc-render のもの（`responsibility.md` §3.4 / §3.5）。
-- **`ChunkView` はメッシング専用の固定高さビュー。** `Chunk` を所有するのは mc-kernel であり、
+- **`ChunkView` はメッシング専用の可変高さビュー。** `Chunk` を所有するのは mc-kernel であり、
   `chunkViewOf` が境界で高さを検証して変換する。異なる高さは暗黙に切り詰めたりゼロ埋めしたりしない。
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
-- **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）。
+- **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）、および
+ mc-kernel が宣言する cactus / slab / pressurePlate / rail / lilyPad の専用ジオメトリ。
+  専用形状は `MeshLayers.specialBlocks` で運び、レールは `ChunkView.railShapes` の復号済み sidecar から
+  vanilla の 10 状態（平面、曲線、昇り）を選択する。曲線状態は vanilla の平面モデルを使い、昇り状態は
+  vanilla の 45 度モデルを使う。sidecar の格納形式と state の復号は呼び出し側の責務である。
   AO と流体の角平均は optional な対角チャンクも参照し、未ロードなら従来どおり開境界として扱う。
   流体上面は renderer 向けの正規化された流れ方向と落下フラグも持つ。
-  **未実装**なのはアキュムレータプール。
+  `ChunkView.light` に注入した block / sky light は cube の greedy merge key と全専用形状の四隅属性へ伝播し、
+  `packMeshLayers` は両方の typed array を返す。ライトグリッドの生成・伝播は呼び出し側の責務である。
+  `createMeshScratch()` で呼び出し元ごとの作業領域を作り、`meshChunk(..., scratch)` に渡すと、面マスクと
+  ライト用の一時配列を呼び出し間で再利用できる。同じ scratch を並行メッシュ処理で共有してはならない。
+  返り値のレイヤーと quad は毎回新しく所有される。出力アキュムレータのプールは、所有権とライフタイム契約を
+  変えないことを優先し、この API では採用しない。
   参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
-  （参照実装自身がコメントで警告している）。プール版はベンチマークを用意してから
-  明示的な opt-in として追加する。
+  （参照実装自身がコメントで警告している）。出力配列のプール版は所有権とライフタイム契約を変えるため、
+  明示的な opt-in として追加していない。作業配列の scratch 再利用はこの所有権を変えない。
 - **局所更新は `meshChunkRegion`。** chunk-local の半開 `dirtyRegion` を渡すと、face culling、AO、
   fluid corner が読む範囲を含む 1-cell halo（chunk 境界で clamp）を `ownedRegion` として返す。
   cube は安全な単位 face、plant / fluid もセル単位の独立所有バッファであり、呼び出し側は同じ
   `ownedRegion` の以前のバッファを丸ごと交換する。greedy な full-chunk mesh の quad を途中で splice
   してはならない。空領域は空の所有バッファを返し、従来の `meshChunk` API と出力は不変である。
-- **ビルド／publish はまだない。** `exports` は TypeScript ソースを直接指している。
-  `version` は mc-render が実際に消費して契約を確認するまで `0.x` に留める。
-- **カバレッジ閾値は 4 指標 99% で有効化済み(TEST_STANDARD.md §3)。** 現状の実測は
-  statements 100% / functions 100% / lines 100% / **branches 95.89%** であり、
-  `branches` が未達のため CI のカバレッジステップは赤い。これは組織としての既知・受容済みの結果であり、
-  閾値の緩和では対処しない(未到達分岐を埋めるテスト追加、または到達不能な分岐そのものの削除で対処する)。
+- **ビルド成果物を公開検証する。** `exports` は `dist` の ESM と宣言ファイルを指し、
+  `pnpm verify:package` は tarball に開発用ソースが混入していないことと公開 API の import を検査する。
+  自動 publish はまだ有効化せず、mc-render が実際に消費して契約を確認するまで `version` は `0.x` に留める。
+- **カバレッジは 4 指標 100% をリリースゲートにする。** `pnpm verify` が
+  statements / branches / functions / lines をすべて計測し、未到達分岐は閾値の緩和ではなくテスト追加または
+  到達不能な分岐の削除で対処する。
+
+### Minecraft Java の機能境界
+
+現行のメッシャが扱うのは、mc-kernel のブロックレジストリ／能力値または解析済みの
+`ResourcePackAssets` を入力にしたジオメトリ生成である。キューブ面、透明固体、流体、十字板、
+kernel 宣言形状、AO、LOD、リージョン更新に加え、resource pack の blockstate variant / multipart、
+model の親継承・テクスチャ変数・ambient occlusion・回転・UV・UV lock・face metadata の解決と純粋な quad 化を提供する。
+対応する JSON subset は `parseResourcePackAssets`（`unknown` 値）と
+`parseResourcePackAssetsJson`（JSON 文字列）で `ResourcePackAssets` に検証できる。
+モデルの `faces` と `cullface` は Java Edition の公式面名（`down` / `up` / `north` / `south` / `west` / `east`）を受け取り、
+メッシュ出力の `direction` / `cullface` は本ライブラリの内部 `FaceDirection`（`xPos` など）で返す。
+
+次の Java Edition の表現は、このライブラリの責務としてまだ実装していない。
+
+- resource pack の zip / filesystem / PNG loader、テクスチャアトラス、material、tint / biome color
+- ワールドのライトグリッド生成・伝播、WebGL / GPU device への upload、block entity の描画
+- resource pack の generic な状態依存モデルを kernel の block-state sidecar と自動接続する統合
+- ワールド生成、ブロック状態の伝播、流体シミュレーション、worker のライフサイクル
+
+これらを追加する場合は、mc-kernel に状態・能力値の所有権があるかを確認し、mc-render 側の材質・バッファ責務と
+重複するアダプターを増やさないことを前提に、別の受け入れ条件とゴールデン fixture を定義する。
 
 ## License
 

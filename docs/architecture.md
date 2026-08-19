@@ -98,6 +98,13 @@ org 標準の依存グラフの正典である `DEPENDENCY_POLICY.md` の roster
 ゼロに保っており（実測確認済み）、本計画はその分離を 1 段下で維持する。
 ジオメトリは素の typed array であり、それを `BufferGeometry` にするのは mc-render の仕事である。
 
+resource pack の境界も同じである。`domain/resource-pack-schema.ts` は対応する JSON 語彙を
+`unknown` 値または JSON 文字列から検証して `ResourcePackAssets` に変換する。
+`domain/resource-pack-resolver.ts` は loader を持たず、型付け済みの `ResourcePackAssets` を受け取り、
+blockstate / model の解決結果を返す。
+`domain/resource-pack-mesh.ts` はその結果を `ResourceModelQuad` に変換するが、filesystem / zip / PNG、
+texture atlas、material、tint、GPU buffer は所有しない。
+
 ## 5. 構成の成立条件（plan.md §2.3）
 
 ### 5.1 基盤 = 名詞、体験 = 動詞（§2.3-1）
@@ -183,20 +190,22 @@ org 標準では、リポジトリ間依存の許可グラフの実効機構は�
 かつては 16 リポジトリ共通のテンプレートスクリプト(`scripts/check-dependency-whitelist.ts` +
 専用テスト + `pnpm check:deps`)がこの役割を担っていたが、org 標準の策定に伴い撤去された
 (PACKAGE_STANDARD.md「`scripts/check-dependency-whitelist.ts` の廃止」)。`Date.now()` 直接呼び出し
-の禁止のように oxlint がまだ実装していないチェック(oxlint 0.12 で `no-restricted-syntax` /
-`no-restricted-properties` / `no-restricted-globals` のいずれも未実装であることを実測確認済み)は、
+の禁止のように現行の Nix devShell の oxlint がまだ実装していないチェック
+(`no-restricted-syntax` / `no-restricted-properties` / `no-restricted-globals` のいずれも
+未実装であることを実測確認済み)は、
 org 標準としては個別リポジトリの裁量に委ねられており、本リポジトリでは現在専用の代替スクリプトを
 持たない。
 
 ## 7. 依存宣言とkernel境界
 
 `@nerima-games/mc-kernel` は `dependencies` に固定され、メッシュ入力の
-`Chunk` 型を直接消費する。mc-meshing固有の `ChunkView` はレンダラー向けの固定高さ
+`Chunk` 型を直接消費する。mc-meshing固有の `ChunkView` はレンダラー向けの可変高さ
 ビューとして残し、`chunkViewOf` がkernelの可変高さチャンクを検証しながら変換する。
 高さが一致しない場合は暗黙の切り詰め・パディングをせず、明示的に失敗する。
 
 この依存境界により、共有語彙はmc-kernel、チャンク表現の変換と面生成はmc-meshingが
-所有する。依存グラフの制約は `DEPENDENCY_POLICY.md` の roster に従う。
+所有する。resource pack の JSON 入力は mc-meshing が定義するデータ契約であり、読み込み元は
+上位の asset pipeline が所有する。依存グラフの制約は `DEPENDENCY_POLICY.md` の roster に従う。
 
 ## 参照
 
