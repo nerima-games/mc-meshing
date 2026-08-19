@@ -5,14 +5,8 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        maxForks: '50%',
-        minForks: 1,
-        isolate: true,
-        singleFork: false,
-      },
-    },
+    maxWorkers: '50%',
+    isolate: true,
     include: ['test/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '**/.git/**'],
     testTimeout: 10000,
@@ -30,17 +24,11 @@ export default defineConfig({
       enabled: false,
       include: ['src/index.ts', 'src/domain/**/*.ts'],
       exclude: ['**/*.d.ts', '**/*.config.ts', '**/*.test.ts', '**/*.spec.ts'],
-      all: true,
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
-      // TEST_STANDARD.md §3: 4-metric 99% gate, enabled org-wide with no
-      // staged rollout. As of the org-standard migration, real measured
-      // coverage here is statements 100% / branches 95.89% / functions 100% /
-      // lines 100% (see coverage/coverage-final.json), so this gate makes CI
-      // red on `branches` until that gap is closed. That is the expected,
-      // accepted result of turning the gate on (TEST_STANDARD.md §3), not a
-      // reason to defer or lower the threshold.
-      thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
+      // Every V8 metric is a release gate. Keep all targets at 100% so an
+      // untested branch cannot silently enter the published package.
+      thresholds: { branches: 100, functions: 100, lines: 100, statements: 100 },
     },
   },
   esbuild: {
