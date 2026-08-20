@@ -31,7 +31,6 @@ describe('public API surface', () => {
         'emptyChunk',
         'getBlock',
         'getBlockAcrossBoundary',
-        'chunkViewOf',
         // Kernel-derived block data
         'blockIdsWithRenderKind',
         'MINECRAFT_WATER_BLOCK_IDS',

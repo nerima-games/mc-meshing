@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../src/domain/ambient-occlusion'
 import {
   BLOCKS_PER_CHUNK,
@@ -37,7 +38,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, number] => [

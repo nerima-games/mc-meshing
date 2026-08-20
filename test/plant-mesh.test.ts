@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -49,7 +50,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 const cornersOf = (plate: CrossPlantQuad): ReadonlyArray<string> =>
@@ -239,7 +240,7 @@ describe('the two plates', () => {
       const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
       blocks[blockIndex(3, height - 1, 3, height)] = FLOWER
 
-      const layers = meshChunk({ height, blocks }, {}, CONFIG)
+      const layers = meshChunk({ blocks, coord: chunkCoord(0, 0), height }, {}, CONFIG)
 
       expect(layers.crossPlants.length).toBe(2)
     }),

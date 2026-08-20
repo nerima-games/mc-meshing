@@ -311,7 +311,7 @@ export const meshCrossPlants = (options: CrossPlantOptions): ReadonlyArray<Cross
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
     for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
       for (let y = minY; y < maxY; y += LOOP_STEP) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz, chunk.height)
+        const blockId = getBlock(chunk, lx, y, lz)
         if (isCrossPlant(plantLookup, blockId)) {
           plates.push(
             ...platesFor({ blockId, light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz), lx, lz, y }),

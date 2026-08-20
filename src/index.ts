@@ -20,7 +20,6 @@
 export * from './domain/ambient-occlusion.js'
 export * from './domain/block-data.js'
 export * from './domain/chunk-view.js'
-export * from './domain/kernel-adapter.js'
 export * from './domain/faces.js'
 export * from './domain/light-sampling.js'
 export * from './domain/light-types.js'

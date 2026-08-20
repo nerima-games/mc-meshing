@@ -31,6 +31,7 @@ import {
   type MeshConfig,
   blockIndex,
 } from '../src/index'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 
 /** Synthetic ids used only by the benchmark fixtures. */
 export const STONE = 1
@@ -62,7 +63,7 @@ const flatChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GRASS)
     }
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** Per-column height varying 56..72. A realistic surface — moderate faces. */
@@ -77,7 +78,7 @@ const rollingChunk = (): ChunkView => {
       set(blocks, lx, height, lz, GRASS)
     }
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** Every cell in a 16^3 volume alternates solid/air. Worst case — maximum faces. */
@@ -92,7 +93,7 @@ const checkerChunk = (): ChunkView => {
       }
     }
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -115,7 +116,7 @@ const layeredChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GLASS)
     }
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -170,7 +171,7 @@ const lakeChunk = (): ChunkView => {
       }
     }
   }
-  return { height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 export const LAKE: ChunkView = lakeChunk()

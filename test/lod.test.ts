@@ -17,6 +17,7 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck, Schema } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_NONE } from '../src/domain/ambient-occlusion'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
 import {
@@ -56,7 +57,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** A solid `side` x `side` x 1 slab of stone at y=64, anchored at the origin. */

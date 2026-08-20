@@ -229,12 +229,13 @@ const getBlockOption = (
  * including the same 1-cell out-of-bounds shell, that meshing performs.
  */
 const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+  const chunk = { blocks, height: CHUNK_HEIGHT }
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          total += getBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz, CHUNK_HEIGHT)
+          total += getBlock(chunk, lx + face.nx, y + face.ny, lz + face.nz)
         }
       }
     }

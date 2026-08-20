@@ -1,5 +1,6 @@
 import { describe, expect, it } from './effect-test.js'
 import { Effect } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
 import { type MeshLayers, type MeshRegion, meshChunkNaive, meshChunkRegion } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
@@ -20,12 +21,12 @@ const chunkWith = (
 ): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = id}
-  if (fluidCells.length === 0) {return { height: CHUNK_HEIGHT, blocks }}
+  if (fluidCells.length === 0) {return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }}
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, level] of fluidCells) {levels[blockIndex(x, y, z, CHUNK_HEIGHT)] = level}
-  return { height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 const inRegion = (region: MeshRegion, x: number, y: number, z: number): boolean =>

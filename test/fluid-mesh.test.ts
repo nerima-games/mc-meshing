@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { MAX_BLOCK_ID } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
@@ -83,7 +84,7 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
   if (fluidCells.length === 0) {
-    return { height: CHUNK_HEIGHT, blocks }
+    return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
   }
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
@@ -93,7 +94,7 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     sources[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = source
     falling[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = isFalling
   }
-  return { height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -239,7 +240,11 @@ describe('the height of one cell', () => {
       levels[index] = 0
       sources[index] = 1
 
-      const layers = meshChunk({ height, blocks, fluid: { falling, levels, sources } }, {}, CONFIG)
+      const layers = meshChunk(
+        { blocks, coord: chunkCoord(0, 0), height, fluid: { falling, levels, sources } },
+        {},
+        CONFIG,
+      )
 
       expect(layers.fluids.length).toBe(5)
       expect(ysOf(faceOfDirection(layers.fluids, 'yPos') as FluidQuad)).toStrictEqual([
@@ -279,6 +284,7 @@ describe('the height of one cell', () => {
         const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
         blocks[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = WATER
         const chunk: ChunkView = {
+          coord: chunkCoord(0, 0),
           height: CHUNK_HEIGHT,
           blocks,
           fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
@@ -903,7 +909,7 @@ const arbitraryFluidChunk = FastCheck.array(
       }
     }
   }
-  return { height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 })
 
 /** A fluid quad as a string, for multiset comparison. */

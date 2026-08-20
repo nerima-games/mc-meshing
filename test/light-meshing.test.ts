@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AIR_BLOCK_ID,
   BLOCK_IDS,
+  chunkCoord,
   propertyOfBlockId,
   type BlockId,
 } from '@nerima-games/mc-kernel'
@@ -46,7 +47,7 @@ const chunkWith = (
   for (const [x, y, z, blockId] of cells) {
     blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = blockId
   }
-  const chunk = { blocks, height: CHUNK_HEIGHT }
+  const chunk = { blocks, coord: chunkCoord(0, 0), height: CHUNK_HEIGHT }
   if (light) {
     return { ...chunk, light }
   }

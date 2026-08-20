@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { blockIdOf, type BlockId } from '@nerima-games/mc-kernel'
+import { blockIdOf, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
 import { describe, expect, it } from './effect-test.js'
 import {
   blockIndex,
@@ -58,6 +58,7 @@ const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
 
   return {
     blocks,
+    coord: chunkCoord(0, 0),
     fluid: { falling, levels, sources },
     height: CHUNK_HEIGHT,
     railShapes,

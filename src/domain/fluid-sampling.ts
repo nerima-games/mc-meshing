@@ -124,7 +124,7 @@ const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
 
 const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: number): number => {
   const [lx, y, lz] = position
-  if (getBlock(view.blocks, lx, y, lz, view.height) !== wantId) {
+  if (getBlock(view, lx, y, lz) !== wantId) {
     return NO_FLUID
   }
   const index = blockIndex(lx, y, lz, view.height)

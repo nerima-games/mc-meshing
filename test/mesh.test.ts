@@ -19,6 +19,7 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_MAX } from '../src/domain/ambient-occlusion'
 import { AIR } from '../src/domain/block-data'
 import {
@@ -102,7 +103,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 const CONFIG: MeshConfig = {
@@ -585,7 +586,7 @@ describe('variable chunk height', () => {
       const height = 8
       const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
       blocks[blockIndex(4, height - 1, 5, height)] = STONE
-      const chunk: ChunkView = { height, blocks }
+      const chunk: ChunkView = { blocks, coord: chunkCoord(0, 0), height }
 
       const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
 
@@ -609,7 +610,7 @@ describe('chunk boundaries', () => {
       neighbourBlocks[blockIndex(CHUNK_SIZE - 1, 64, 0, CHUNK_HEIGHT)] = STONE
       const layers = meshChunk(
         chunkWith([[0, 64, 0, STONE]]),
-        { xNeg: { height: CHUNK_HEIGHT, blocks: neighbourBlocks } },
+        { xNeg: { blocks: neighbourBlocks, coord: chunkCoord(-1, 0), height: CHUNK_HEIGHT } },
         EMPTY_MESH_CONFIG,
       )
       expect(layers.opaque.length).toBe(5)
@@ -902,7 +903,7 @@ const arbitraryChunkOfBoxes = FastCheck.array(
       }
     }
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 })
 
 /** Some of the four horizontal neighbours present, some absent. */
@@ -1039,7 +1040,7 @@ describe('the greedy merge against the naive oracle', () => {
             unitFacesOf(quad).every((face) => {
               const [, position] = face.split(':')
               const [lx, y, lz] = (position ?? '').split(',').map(Number)
-              return getBlock(chunk.blocks, lx ?? -1, y ?? -1, lz ?? -1, chunk.height) === quad.blockId
+              return getBlock(chunk, lx ?? -1, y ?? -1, lz ?? -1) === quad.blockId
             }),
           )
         }),
@@ -1254,7 +1255,7 @@ describe('the Y scan ceiling', () => {
       // GetBlock's missing-cell-as-AIR behavior and the emitted sequence.
       const blocks = new Uint8Array(1)
       blocks[0] = STONE
-      const chunk: ChunkView = { height: CHUNK_HEIGHT, blocks }
+      const chunk: ChunkView = { blocks, coord: chunkCoord(0, 0), height: CHUNK_HEIGHT }
       expect(meshChunk(chunk, {}, EMPTY_MESH_CONFIG)).toStrictEqual(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))
     }),
   )
@@ -1273,9 +1274,9 @@ describe('getBlock', () => {
         [0, 0, -1],
         [0, 0, CHUNK_SIZE],
       ] as const) {
-        expect(getBlock(blocks, lx, y, lz, CHUNK_HEIGHT)).toBe(AIR)
+        expect(getBlock({ blocks, height: CHUNK_HEIGHT }, lx, y, lz)).toBe(AIR)
       }
-      expect(getBlock(blocks, 0, 0, 0, CHUNK_HEIGHT)).toBe(STONE)
+      expect(getBlock({ blocks, height: CHUNK_HEIGHT }, 0, 0, 0)).toBe(STONE)
     }),
   )
 
@@ -1289,7 +1290,7 @@ describe('getBlock', () => {
           (lx, y, lz) => {
             const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
             blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = STONE
-            return getBlock(blocks, lx, y, lz, CHUNK_HEIGHT) === STONE
+            return getBlock({ blocks, height: CHUNK_HEIGHT }, lx, y, lz) === STONE
           },
         ),
         { numRuns: 200 },

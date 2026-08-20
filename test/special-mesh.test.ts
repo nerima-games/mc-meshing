@@ -2,6 +2,7 @@ import { describe, expect, it } from './effect-test.js'
 import { Effect } from 'effect'
 import {
   BLOCK_IDS,
+  chunkCoord,
   type RenderKind,
   propertyOfBlockId,
 } from '@nerima-games/mc-kernel'
@@ -56,7 +57,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 describe('kernel-defined special block geometry', () => {
@@ -251,7 +252,7 @@ describe('kernel-defined special block geometry', () => {
       const blocks = new Uint8Array(16 * height * 16)
       blocks[blockIndex(8, height - 1, 8, height)] = CACTUS
 
-      const specialBlocks = meshSpecialBlocks({ height, blocks }, {}, height)
+      const specialBlocks = meshSpecialBlocks({ blocks, coord: chunkCoord(0, 0), height }, {}, height)
 
       expect(specialBlocks).toHaveLength(6)
       expect(specialBlocks.every((quad) => quad.vertices.every(([, y]) => y <= height))).toBe(true)

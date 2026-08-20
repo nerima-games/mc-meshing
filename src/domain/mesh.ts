@@ -369,7 +369,7 @@ const lightPropertiesOf = (light: Quad['light']): Pick<Quad, 'light'> => {
  * once a cell is visited.
  */
 const emitUnitFace = (ctx: FaceScanContext, lx: number, y: number, lz: number): void => {
-  const blockId = getBlock(ctx.chunk.blocks, lx, y, lz, ctx.chunk.height)
+  const blockId = getBlock(ctx.chunk, lx, y, lz)
   if (
     blockId !== AIR &&
     !isCrossPlant(ctx.plants, blockId) &&

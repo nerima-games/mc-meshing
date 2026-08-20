@@ -1,20 +1,25 @@
 /**
  * The chunk as meshing sees it, and the hot-path block read.
  *
- * `ChunkView` is the renderer-facing variable-height view. mc-kernel owns the
- * source `Chunk`; use `chunkViewOf` from `kernel-adapter.ts` at that boundary.
+ * `ChunkView` is the renderer-facing variable-height view. It keeps the
+ * mc-kernel coordinate and height while carrying the byte view used by the
+ * meshing hot path. The caller copies opaque kernel block storage at the
+ * boundary; this package does not expose a second adapter API.
  */
 import { AIR, type BlockId } from './block-data.js'
+import { CHUNK_SIZE_XZ, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
 import type { LightView } from './light-types.js'
-import { MAX_CHUNK_HEIGHT } from '@nerima-games/mc-kernel'
 import type { RailShapeView } from './rail-types.js'
 
+export type { ChunkCoord } from '@nerima-games/mc-kernel'
+
 /** Horizontal extent of a chunk, in blocks. */
-export const CHUNK_SIZE = 16
+export const CHUNK_SIZE = CHUNK_SIZE_XZ
 
 /** Canonical vertical extent used by the fixtures and the default chunk. */
 export const CHUNK_HEIGHT = 256
 const MIN_CHUNK_HEIGHT = 1
+const ORIGIN_CHUNK_AXIS = 0
 
 /**
  * Number of block cells in a chunk with the supplied vertical extent.
@@ -23,12 +28,14 @@ const MIN_CHUNK_HEIGHT = 1
  * Keeping this check at the meshing boundary prevents a malformed view from
  * producing an incorrectly sized typed array or an out-of-range index.
  */
-export const blockCountOf = (height: number): number => {
+export const blockCount = (height: number): number => {
   if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
     throw new RangeError(`Chunk height must be an integer from 1 to ${MAX_CHUNK_HEIGHT}, received ${height}`)
   }
   return CHUNK_SIZE * height * CHUNK_SIZE
 }
+
+export const blockCountOf = blockCount
 
 /**
  * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.
@@ -38,7 +45,7 @@ export const blockCountOf = (height: number): number => {
  * (`greedy-meshing-ao.ts:8`), which matters: it is what lets the reference's
  * chunk fixtures be reused directly as golden inputs.
  */
-export const blockIndex = (lx: number, y: number, lz: number, height: number): number =>
+export const blockIndex = (lx: number, y: number, lz: number, height = CHUNK_HEIGHT): number =>
   y + lz * height + lx * height * CHUNK_SIZE
 
 /**
@@ -101,7 +108,7 @@ export type FluidView = {
   readonly falling: Readonly<Uint8Array>
 }
 
-export type ChunkView = {
+export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   /** Vertical extent of this chunk, in blocks. */
   readonly height: number
   /** `CHUNK_SIZE * height * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
@@ -126,7 +133,11 @@ export type ChunkView = {
 export const BLOCKS_PER_CHUNK = blockCountOf(CHUNK_HEIGHT)
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
-export const emptyChunk = (height = CHUNK_HEIGHT): ChunkView => ({ blocks: new Uint8Array(blockCountOf(height)), height })
+export const emptyChunk = (height = CHUNK_HEIGHT): ChunkView => ({
+  blocks: new Uint8Array(blockCountOf(height)),
+  coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
+  height,
+})
 
 /** First valid index along any chunk-local axis (`lx`, `y`, or `lz`). */
 const FIRST_LOCAL_INDEX = 0
@@ -161,7 +172,8 @@ const LAST_LOCAL_INDEX = CHUNK_SIZE - LAST_INDEX_OFFSET
  * Do not "improve" any of the three. See docs/design-notes.md, regression
  * `meshing-get-block-is-allocation-free`.
  */
-export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number, height: number): BlockId => {
+export const getBlock = (chunk: Pick<ChunkView, 'blocks' | 'height'>, lx: number, y: number, lz: number): BlockId => {
+  const { blocks, height } = chunk
   if (
     lx < FIRST_LOCAL_INDEX ||
     lx >= CHUNK_SIZE ||
@@ -212,7 +224,7 @@ export type ChunkNeighbours = {
  */
 const neighbourBlock = (neighbour: ChunkView | undefined, lx: number, y: number, lz: number): BlockId => {
   if (neighbour) {
-    return getBlock(neighbour.blocks, lx, y, lz, neighbour.height)
+    return getBlock(neighbour, lx, y, lz)
   }
   return AIR
 }
@@ -286,5 +298,5 @@ export const getBlockAcrossBoundary = (
   if (edge !== null) {
     return edge
   }
-  return getBlock(chunk.blocks, lx, y, lz, chunk.height)
+  return getBlock(chunk, lx, y, lz)
 }

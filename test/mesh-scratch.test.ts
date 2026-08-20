@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import {
   CHUNK_SIZE,
   blockIndex,
@@ -12,7 +13,7 @@ const sampleChunk = (light?: ChunkView['light']): ChunkView => {
   const height = 4
   const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
   blocks[blockIndex(1, 1, 1, height)] = 1
-  return light ? { blocks, height, light } : { blocks, height }
+  return light ? { blocks, coord: chunkCoord(0, 0), height, light } : { blocks, coord: chunkCoord(0, 0), height }
 }
 
 describe('mesh scratch workspace', () => {

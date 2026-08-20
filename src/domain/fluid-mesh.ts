@@ -337,7 +337,7 @@ const meshFluidCellsInBounds = (
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
     for (let y = minY; y < Math.min(yLimit, maxY); y += LOOP_STEP) {
       for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz, chunk.height)
+        const blockId = getBlock(chunk, lx, y, lz)
         if (isFluidBlock(fluids, blockId)) {
           meshFluidCell(quads, space, [lx, y, lz], blockId)
         }
