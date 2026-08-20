@@ -97,17 +97,23 @@
 kernel のチャンクごとの高さを保持し、範囲検証とストレージの所有権だけをこの境界で確定する:
 
 ```typescript
+import type { ChunkCoord } from '@nerima-games/mc-kernel'
+
 export type ChunkView = {
+  readonly coord: ChunkCoord
   readonly height: number
   readonly blocks: Readonly<Uint8Array>
   readonly fluid?: FluidView
   readonly railShapes?: RailShapeView
+  readonly light?: LightView
 }
 ```
 
 `Chunk` を所有するのは mc-kernel（plan.md §3.1: 「`Chunk` データ構造とコーデック」）であり、
-mc-meshing は `@nerima-games/mc-kernel` に依存する。`chunkViewOf` が kernel の可変高さ
-チャンクを検証して変換するため、異なる高さを暗黙に切り詰めたりゼロ埋めしたりしない。
+mc-meshing は `@nerima-games/mc-kernel` に依存する。`ChunkView` は kernel の
+`coord` と可変 `height` を保持し、opaque な `blocks` は呼び出し側が byte view に
+コピーして渡す。`blockCount` が高さを検証して必要なストレージ長を算出するため、異なる高さを
+暗黙に切り詰めたりゼロ埋めしたりしない。
 
 ### 3.2 `FluidView` —— **バイトではなく復号済みの状態**を受け取る
 
@@ -122,7 +128,9 @@ export type FluidView = {
 これはバイト codec とメッシャーの間に置く入力境界であり、**`ChunkView` とは
 所有者と差し替え方が違う**ので分けて書く。
 
-`ChunkView` は参照実装と**同じ形**（`blocks: Uint8Array`）を宣言している。
+`ChunkView.blocks` は参照実装と**同じレイアウト**（`blocks: Uint8Array`）の byte view である。
+一方、kernel の `Chunk.blocks` は opaque な `BlockState` なので、境界で
+`chunk.blocks.copyTo(blocks)` のように呼び出し側がコピーする。
 `FluidView` は**わざと違う形**を宣言している —— 参照実装が渡すのは 1 本の
 `fluid: Uint8Array` であり、それを 5 つのマスク（`packages/block/domain/fluid.ts:7-11`）で
 復号する。**そのマスクを所有しているのは流体シミュレーション側であって、ここではない**ので、
@@ -135,8 +143,8 @@ sidecar として `railShapes` に置くため、物理側の state byte codec �
 | | `ChunkView.blocks` | `FluidView` |
 | --- | --- | --- |
 | 参照実装の形 | 同一 | **意図的に別** |
-| 差し替え時に起きること | `kernel-adapter.ts` で高さを検証して変換 | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
-| その層の置き場所 | mc-meshing（kernelのChunkを消費する境界） | mc-render（両方に依存する側）。責務表 §3.6 (c) |
+| 差し替え時に起きること | kernel `Chunk` の `coord` / `height` を保持し、`blocks` を呼び出し側が byte view へコピー | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
+| その層の置き場所 | kernel の `Chunk` を取得する呼び出し側の境界 | mc-render（両方に依存する側）。責務表 §3.6 (c) |
 
 **mc-meshing 側は差し替え時も変わらない。** ここが要求しているのは
 「セルごとの level / source / falling」であって「どう詰められていたか」ではないので、

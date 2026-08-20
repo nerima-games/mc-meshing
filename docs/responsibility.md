@@ -68,14 +68,15 @@
 | **kernel 宣言の専用形状** | **mc-meshing**（**実装済み**: `domain/special-mesh.ts`） | cactus、slab、pressure plate、rail、lily pad を `MeshLayers.specialBlocks` で運ぶ。rail は `ChunkView.railShapes` の復号済み sidecar から vanilla の 10 状態を選択し、平面・曲線・昇りを生成する。Java resource-pack の JSON 解決と純粋な model quad 化は `domain/resource-pack-resolver.ts` / `domain/resource-pack-mesh.ts` に実装済みだが、generic state の自動接続、loader、PNG atlas、material / tint は対象外 |
 | 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
 
-### 3.3 このリポジトリは座標を持たない（意図的）
+### 3.3 `ChunkView` は座標を持つが、隣接ルックアップは持たない
 
 `ChunkNeighbours`（`domain/chunk-view.ts`）は軸方向 4 つと対角方向 4 つの optional な `ChunkView` であり、
-「どの `ChunkView` がどの隣接チャンクか」を決める座標はここに無い。
+各 `ChunkView` は mc-kernel の `ChunkCoord` に対応する `coord` を持つ。ただし、
+「どの `ChunkView` がどの隣接スロットに入るか」を決める座標ルックアップはここに無い。
 縦切りスパイクはこれを穴として指摘した — 座標をキーにしたストアから
 `ChunkNeighbours` を埋めるには、呼び出し側が手でルックアップすることになる、と。
 
-**決着: 座標はここに入れない。ルックアップはキーを所有する側が持つ。**
+**決着: `ChunkView` に座標を保持し、ルックアップはキーを所有する側が持つ。**
 
 `mc-worldgen` の `ChunkStore.neighbours(coord)` がルックアップを行い、
 `{ xPos?, xNeg?, zPos?, zNeg?, xPosZPos?, xPosZNeg?, xNegZPos?, xNegZNeg? }` を返せる。
@@ -390,9 +391,10 @@ rail state は復号済みの renderer-facing sidecar として `ChunkView.railS
 | 子（依存元） | `mc-render` のみ |
 
 `mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。
-`domain/kernel-adapter.ts` の `chunkViewOf` が、kernelの可変高さデータを
-meshingの256高さビューへ変換する責務を持つ。高さが一致しない入力は拒否し、
-暗黙の切り詰め・ゼロ埋めでワールドデータを破壊しない。
+公開する `ChunkView` は kernel の `coord` と可変 `height` を保持し、メッシング用の
+`Readonly<Uint8Array>` を `blocks` として受け取る。kernel の opaque な `Chunk.blocks` は、
+その `Chunk` を取得した呼び出し側が `copyTo` で byte view にコピーして渡す。
+`blockCount` が高さを検証して必要な長さを算出し、256 高さへの暗黙の切り詰め・ゼロ埋めは行わない。
 
 ## 5. 完成条件
 

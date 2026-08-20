@@ -8,8 +8,9 @@
 ## 依存
 
 `effect` と `@nerima-games/mc-kernel` に依存する。`Chunk` 型と能力フラグは
-mc-kernel が所有し、`chunkViewOf` が kernel の可変高さチャンクをメッシング専用の
-可変高さビューへ変換する。
+mc-kernel が所有し、`ChunkView` は kernel の `coord` とチャンクごとの `height` を
+保持する。kernel の opaque なブロックストレージは、呼び出し側が境界で
+メッシング用の byte view にコピーして渡す。
 意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
 （org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
 `.oxlintrc.json` の `no-restricted-imports`（Tier1: `mc-kernel` 以外の `@nerima-games/*` への依存を禁止）である。
@@ -145,7 +146,8 @@ for (const quad of fluids) {
   その代金は約 11 px の水平方向のずれである —— 4 / 8 という定数どころか
   LOD 1 という段そのものが疑わしい。判断は mc-render のもの（`responsibility.md` §3.4 / §3.5）。
 - **`ChunkView` はメッシング専用の可変高さビュー。** `Chunk` を所有するのは mc-kernel であり、
-  `chunkViewOf` が境界で高さを検証して変換する。異なる高さは暗黙に切り詰めたりゼロ埋めしたりしない。
+  `ChunkView` はその `coord` とチャンクごとの `height`、およびメッシング用の byte view を保持する。
+  `blockCount` が高さを検証し、必要なストレージ長を算出する。異なる高さを暗黙に切り詰めたりゼロ埋めしたりしない。
   ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
   参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
 - **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）、および

@@ -6,15 +6,23 @@
 ## 1. メッシング入口と戻り値
 
 ```typescript
-import { chunkViewOf, meshChunk } from '@nerima-games/mc-meshing'
+import { blockCount, meshChunk, type ChunkView } from '@nerima-games/mc-meshing'
 
-const view = chunkViewOf(kernelChunk)
+const blocks = new Uint8Array(blockCount(kernelChunk.height))
+kernelChunk.blocks.copyTo(blocks)
+const view: ChunkView = {
+  coord: kernelChunk.coord,
+  height: kernelChunk.height,
+  blocks,
+}
 const layers = meshChunk(view, neighbours, config)
 ```
 
-`chunkViewOf` は mc-kernel の可変高さ `Chunk` を検証し、`height` を保持した所有済みの `ChunkView` にコピーする。
-`meshChunk` は `ChunkView`、隣接チャンク、注入された `MeshConfig` を受け取り、呼び出し側が所有できる
-`MeshLayers` を返す。返り値は cube 面と専用形状を別のコレクションに保持する。
+呼び出し側は mc-kernel の `Chunk` から `coord` と `height` を引き継ぎ、opaque な
+`blocks` を `copyTo` でメッシング用の byte view にコピーして `ChunkView` を組み立てる。
+`blockCount` は可変高さの範囲を検証し、必要なストレージ長を算出する。`meshChunk` は `ChunkView`、
+隣接チャンク、注入された `MeshConfig` を受け取り、呼び出し側が所有できる `MeshLayers` を返す。
+返り値は cube 面と専用形状を別のコレクションに保持する。
 
 連続して複数チャンクをメッシュ化する呼び出し元は、面マスクとライト用一時配列を再利用できる。
 `MeshScratch` は呼び出し元が保持する逐次処理用の作業領域であり、同じインスタンスを並行呼び出しで共有してはならない。
@@ -135,24 +143,34 @@ export const CHUNK_SIZE = 16
 export const CHUNK_HEIGHT = 256
 export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
 export const AIR = 0
+export const blockCount = (height: number): number
 export const blockCountOf = (height: number): number
 
+export type ChunkCoord = { readonly cx: number; readonly cz: number }
 export type ChunkView = {
+  readonly coord: ChunkCoord
   readonly height: number
   readonly blocks: Readonly<Uint8Array>
   readonly fluid?: FluidView
   readonly railShapes?: RailShapeView
   readonly light?: LightView
 }
-export const blockIndex = (lx: number, y: number, lz: number, height: number): number
-export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number, height: number): BlockId
+export const blockIndex = (lx: number, y: number, lz: number, height?: number): number
+export const getBlock = (
+  chunk: Pick<ChunkView, 'blocks' | 'height'>,
+  lx: number,
+  y: number,
+  lz: number,
+): BlockId
 export const getBlockAcrossBoundary = (...): BlockId
 export const emptyChunk = (height?: number): ChunkView
 ```
 
 ストレージは X、Z、Y の順で、`blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE`。
-`ChunkView.height` はチャンクごとの垂直範囲であり、`CHUNK_HEIGHT` はデフォルト値にすぎない。
-`getBlock` は範囲外を `AIR` として返し、隣接チャンクを含む読み出しは `getBlockAcrossBoundary` が担当する。
+`ChunkView.coord` は kernel のチャンク座標を保持し、`ChunkView.height` はチャンクごとの垂直範囲である。
+`CHUNK_HEIGHT` はデフォルト値にすぎない。`blockCountOf` は互換 alias であり、`blockCount` と同じ検証を行う。
+`blockIndex` の高さは省略時に `CHUNK_HEIGHT` となる。`getBlock` は `ChunkView` の `blocks` と `height` を
+受け取り、範囲外を `AIR` として返す。隣接チャンクを含む読み出しは `getBlockAcrossBoundary` が担当する。
 
 `FluidView` は同じインデックス配置の `levels`、`sources`、`falling` を持つ復号済み状態である。
 `ChunkView.fluid` 自体は入力側に sidecar がない場合のため optional だが、存在する場合は 3 配列をすべて渡す。
