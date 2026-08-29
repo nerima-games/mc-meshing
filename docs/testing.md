@@ -9,18 +9,18 @@
 | `pnpm typecheck` | `tsconfig.build.json`（出荷ソース）と `tsconfig.test.json`（テスト・ツール）の両方 |
 | `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm test` | vitest。`@effect/vitest` の `it.effect` が主 API |
-| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。§3 参照) |
-| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**CI と同じ内容**(DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6) |
+| `pnpm test:coverage` | カバレッジ計測。branches / functions / lines / statements の 100% 閾値を適用する（§3 参照） |
+| `pnpm verify` | `typecheck` / `lint` / `test` / `build` を直列実行。**CI と同じ内容**（DEPENDENCY_POLICY.md により、依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6） |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
 
 ```console
-$ direnv allow          # flake.nix の devShell で nodejs_22 + corepack が入る
+$ direnv allow          # flake.nix の devShell で Node.js 24 + corepack が入る
 $ pnpm install
 ```
 
-Nix を使わない場合は Node.js 22 以上と pnpm 9.15.0 が要る。
+Nix を使わない場合は Node.js 24 以上と pnpm 11.17.0 が要る。
 `package.json` の `packageManager` が版を pin しているので `corepack pnpm ...` でよい。
 
 > ツールチェーンは `devenv.nix` から `flake.nix` + `flake.lock` に移行済みである。
@@ -87,8 +87,9 @@ test/mesh.test.ts
 これがあるおかげで、**ゴールデン（出力順）を動かす判断が正当化できる**。
 順序が変わっても被覆が同じであることを、fixture ではなく性質として示せるからである。
 
-なお `meshChunkNaive` は**テストファイルの中ではなく `domain/mesh.ts` に置いて export してある**。
-`test/` にコピーを置くと、オラクルの側が黙って drift する余地が生まれる。
+なお `meshChunkNaive` は**テストファイルの中ではなく `domain/mesh-naive.ts` に置き、公開入口の
+`domain/mesh.ts` から再エクスポートしてある**。`test/` にコピーを置くと、オラクルの側が黙って
+drift する余地が生まれる。
 
 ### 少数の誠実なテスト > 多数の自明なテスト
 
@@ -96,20 +97,15 @@ test/mesh.test.ts
 `design-notes.md` の各項目には**回帰テスト名**が振ってあり、ソースのコメントからも
 同じ名前で参照している。テストを消すときは design-notes 側も同時に更新すること。
 
-## 3. カバレッジ閾値は**まだ**有効化していない
+## 3. カバレッジ閾値は 100% で有効化済み
 
-参照実装は branches / functions / lines / statements すべてに **99%** を強制している。
-本リポジトリは計測とレポートは常に動かしているが、**閾値は設定していない**。
-
-理由（`vitest.config.ts` のコメントにも記載）:
-スケルトンに閾値を課しても意味がない。第一版のモジュール数個で自明に満たされてしまい、
-実装の質については何も言わない数字になる。
-
-**99% ゲートは完成条件（§4）に到達した時点で、`vitest.config.ts` と CI の両方で有効化する。**
+`vitest.config.ts` と CI は branches / functions / lines / statements のすべてに
+**100%** を強制する。計測結果だけで実装の質を判断せず、被覆同値性・境界条件・公開 API
+のテストと組み合わせて判定する。
 
 ```typescript
-// vitest.config.ts に追加する行
-thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
+// vitest.config.ts
+thresholds: { branches: 100, functions: 100, lines: 100, statements: 100 },
 ```
 
 ## 4. 完成条件
@@ -125,8 +121,13 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
 
 したがって mc-meshing の完成条件は:
 
-- **ゴールデンテスト**（chunk fixture → バッファのハッシュ比較）—— plan.md §3.3 の要求。**未達**
+- **決定論的ゴールデンテスト**（chunk fixture → canonical `MeshLayers` JSON の SHA-256）——
+  plan.md §3.3 の要求。**達成**（`test/mesh-golden.test.ts`、`test/golden/mesh-goldens.json`）。
+  GPU buffer は mc-render の責務なので、ここでは本リポジトリが所有するメッシュ出力境界を固定する。
 - **性質テスト**（面数上限、隣接チャンク境界の整合）—— 同上。現在の被覆テストがこれに当たる。**達成**
+- **mc-kernel 登録ブロックの経路網羅** —— **達成**（`test/kernel-registry-coverage.test.ts`）。
+  `BLOCK_IDS` 全件を `propertyOfBlockId` と照合し、メッシュ層・特殊形状・流体最大レベルの
+  ルーティングが登録表から外れていないことを検証する。
 - **グリーディメッシングの実装** —— **達成**（`domain/mesh.ts`）。
   旧記述「まだ無い。マージ実装は現在のテストをすべて green のまま通さなければならない」は
   **後半が誤りだったことが実装で判明した**ので、そのまま残さず訂正する。
@@ -134,11 +135,13 @@ plan.md §2.3-4 が「プレビューは検証対象と同居する」と定め�
   1 本は面順序である。**面順序は保存できない** —— 理由は次項
 - **アンビエントオクルージョン** —— **達成**（`domain/ambient-occlusion.ts`。`design-notes.md` M-10）
 - **十字板の植生** —— **達成**（`domain/plant-mesh.ts`。M-11）
+- **特殊形状（サボテン・レール・睡蓮）** —— **達成**（`domain/special-mesh.ts`。M-13）
 - **流体の水面高と流れ方向** —— **達成**（`domain/fluid-mesh.ts`。M-12）。
   責務表 §3 の最後の保留行であり、保留の理由は作業量ではなく**入力の所有権**だった。
   継ぎ目を復号済みの状態（`FluidView`）に引いて解いた。**5 つのバイトマスクはここに 1 つも無い**
 - 参照実装の chunk fixture をゴールデン入力として取り込む
-  （`blockIndex` のレイアウトを参照実装と同一にしてあるのはこのため）。**未達**
+  （`blockIndex` のレイアウトを参照実装と同一にしてあるのはこのため）。**未達**。現行 golden は
+  参照実装の外部 fixture ではなく、登録済み Minecraft ブロックを含むローカルの canonical fixture である。
 
 ### 方向内の出力順は動いた。動かさずに済ませる方法は無い
 
@@ -157,8 +160,9 @@ load-bearing である」と宣言していた。**グリーディマージは�
 
 **正準な方向順（`FACES`）は不変である。** mc-render のゴールデンハッシュが本当に固定していたのは
 そちらであり、方向内の列は 6 分の 4 で動く。
-**このリポジトリにゴールデンハッシュのファイルは存在しない**（`grep golden` はコメントと
-mc-render への言及しか返さない）ので、ここで再生成したものは無い。
+**このリポジトリにはローカルのゴールデンハッシュファイルが存在する**（`test/golden/mesh-goldens.json`）。
+これは外部 renderer の GPU buffer hash ではなく、本リポジトリが所有する canonical `MeshLayers` JSON の
+SHA-256 である。参照実装の chunk fixture と renderer の GPU buffer hash は引き続き外部連携の確認項目である。
 動くのは mc-render 側でバッファ全体のハッシュを取っている場合であり、
 それは**メッシュ形式の変更**であってリファクタではない。`versioning.md` の扱いに従うこと。
 
@@ -167,11 +171,11 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 新しい fixture は 6 ブロックで、3 つが `y=10` を共有し、2 つが `(lx, lz)` を共有する。
 9 つのキー位置すべてがどこかで tie を破る。
 
-到達時に行うこと:
+現行の出荷条件:
 
-1. `vitest.config.ts` と `.github/workflows/ci.yaml` で 99% 閾値を有効化
-2. ビルド / publish パイプラインを追加（`versioning.md` §3）
-3. `0.x` → `1.0.0`（mc-render が実際に消費して契約を確認したら）
+1. `pnpm verify` と `pnpm test:coverage` を通す
+2. `pnpm build` で declaration と bundle を生成し、`pnpm pack` の内容を確認する
+3. `0.x` → `1.0.0` は mc-render が実際に消費して契約を確認したら行う
 
 ## 5. CI
 
@@ -179,13 +183,18 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 （失敗箇所が step 名で分かるようにするため）:
 
 1. Checkout
-2. Setup pnpm（`pnpm/action-setup@v4`）
-3. Setup Node.js 22（pnpm キャッシュ有効）
-4. `pnpm install --frozen-lockfile`
-5. `pnpm verify`（`typecheck && lint && test`）
-6. `pnpm test:coverage` —— **ハードゲート**。4 指標(statements/branches/functions/lines)
-   99% のしきい値を下回れば非ゼロ終了する（§3）
-7. カバレッジレポートを artifact に upload（7 日保持）
+2. Setup pnpm（`pnpm/action-setup@v6`）
+3. Setup Node.js 24（pnpm キャッシュ有効）
+4. GitHub Packages 認証を設定し、`pnpm install --frozen-lockfile --ignore-scripts`
+5. Nix devShell を設定し、`pnpm verify`（`typecheck && lint && test && build`）
+6. Pull Request では `pnpm changeset status --since=origin/main` —— 公開変更の記録を検査
+7. `pnpm test:coverage` —— **ハードゲート**。4 指標(statements/branches/functions/lines)
+   100% のしきい値を下回れば非ゼロ終了する（§3）
+8. カバレッジレポートを artifact に upload（7 日保持）
+
+`vitest` と `@vitest/coverage-v8` は現行の `@effect/vitest@0.30.0` が要求する
+Vitest 3 系を使用する。Vitest 4 への更新は、この peer 契約を満たす
+`@effect/vitest` が公開されてから行う。
 
 依存グラフの逸脱(Tier を越えた `@nerima-games/*` import)は、専用スクリプトではなく
 `pnpm lint` が読む `.oxlintrc.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
@@ -201,7 +210,7 @@ mc-render への言及しか返さない）ので、ここで再生成したも�
 | `test/public-api.test.ts` | barrel の export、透過集合が native `Set`、レイヤ優先度、正準面順序と法線と role、`oppositeDirection` の対合性、lookup table の全域性、`occludes` の意味論 |
 | `test/lod.test.ts` | LOD 段の語彙（`LOD_LEVELS` / `LodLevelSchema`）、`packQuadKey` の単射性（3^9 全数）と 2^53 上界、LOD 0 の同一性、純粋性（入力を書き換えない・水とガラスは素通し）、snap の軸（水平のみ・Y は不変）、**素朴メッシュに対する**削減の厳密な数（上下面 ÷step²、側面 ÷step）、**マージ済みメッシュに対しては何も削減しないこと**（M-8 / M-9）、穴が開かないこと（包含）、出力列が入力列の部分列であること（並べ替えでないこと）、接線軸規約（`faceOf` / `tangentAxes`） |
 | `test/plant-mesh.test.ts` | 十字板の頂点（**2 枚が逆の対角**であること —— 参照実装から転記した頂点列と、XZ 射影の外積が 0 でないことの二重検査、水平だけ inset して Y は inset しないこと、AO を持たないこと、`lx → lz → y` の順序を**同点を含む** fixture で）、6 パスとの関係（**立方体の面を 1 枚も出さない**、**何も遮蔽しない** —— 6 方向すべて + 不透明隣接の対照）、両メッシャの一致（プロパティ）、注入される集合（省略時は植物なし、平坦化表の全域一致、範囲外 ID、形状と材質が両立すること） |
-| `test/fluid-mesh.test.ts` | セルの高さ（水源 = `14/16`、レベルごとの段が**注入された `maxLevel`** で決まること —— 水 1/8 と溶岩 1/4 を**別の値で**検査、段の下限、水没セルは満水、`FluidView` 欠如時は満水）、4 隅の平均による水面形状（空いている側へ傾くこと、孤立セルは平ら、NaN にならないこと）、renderer 向け flow descriptor（水源 / 平坦面はゼロ、水と溶岩の低い隣接へ向く、対角方向を正規化、落下フラグ、1 段下への流れ、ロード済み / 未ロード境界、側面に descriptor を重複させない）、どの面が出るか（**上面 + 側面 4 枚。下面は無い**、不透明な蓋は隠すがガラスは隠さない、上に流体があれば別種でも隠す、**流体も植物も遮蔽しない**（不透明隣接の対照つき）、同高の 2 セルは壁を作らない、**側面の下端は隣接の水面**、AO は常に 0）、6 パスとの関係（**立方体の面を 1 枚も出さない**、流体表を外すと立方体に戻ること、`totalQuadArea` / `totalQuadCount` に入らないこと、湖底の面は消えないこと）、チャンク境界（**4 辺すべて**で継ぎ目に壁ができないこと + 隣接なしの対照、隣接の**レベル**が隅の平均に届くこと）、注入される表（キーが集合であること、省略時は流体なし、範囲外の記述）、両メッシャの一致・**被覆同値性が成立し続けること**・**マージしないこと**（プロパティ 3 本）、`lx → y → lz` の順序、LOD 素通し |
+| `test/fluid-mesh.test.ts` | セルの高さ（水源 = `14/16`、レベルごとの段が**注入された `maxLevel`** で決まること —— 水 1/8 と溶岩 1/4 を**別の値で**検査、段の下限、水没セルは満水、`FluidView` 欠如時は満水）、4 隅の平均による水面形状（空いている側へ傾くこと、孤立セルは平ら、NaN にならないこと）、renderer 向け flow descriptor（水源 / 平坦面はゼロ、水と溶岩の低い隣接へ向く、対角方向を正規化、落下フラグ、1 段下への流れ、ロード済み / 未ロード境界、側面に descriptor を重複させない）、どの面が出るか（**下面を含む 6 方向。下面は固体または流体で隠れる**、不透明な蓋は隠すがガラスは隠さない、上に流体があれば別種でも隠す、**流体も植物も遮蔽しない**（不透明隣接の対照つき）、同高の 2 セルは壁を作らない、**側面の下端は隣接の水面**、AO は常に 0）、6 パスとの関係（**立方体の面を 1 枚も出さない**、流体表を外すと立方体に戻ること、`totalQuadArea` / `totalQuadCount` に入らないこと、湖底の面は消えないこと）、チャンク境界（**4 辺すべて**で継ぎ目に壁ができないこと + 隣接なしの対照、隣接の**レベル**が隅の平均に届くこと）、注入される表（キーが集合であること、省略時は流体なし、範囲外の記述）、両メッシャの一致・**被覆同値性が成立し続けること**・**マージしないこと**（プロパティ 3 本）、`lx → y → lz` の順序、LOD 素通し |
 
 ## 7. ベンチマーク（`pnpm bench`）
 
@@ -248,7 +257,7 @@ fixture がその名前である理由でもある。
 地形より上の空気の列を走査しない）が効いている。
 `solidCeiling` を強制的に無効化して測り直すと:
 
-| fixture | 素朴（256 走査） | マージ（256 走査） | マージのみの比 |
+| fixture | 素朴（fixture の高さを走査） | マージ（fixture の高さを走査） | マージのみの比 |
 | --- | ---: | ---: | ---: |
 | flat | 1.378 ms | 1.604 ms | **1.16x 遅い** |
 | rolling | 1.403 ms | 1.678 ms | **1.20x 遅い** |
@@ -294,8 +303,9 @@ fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-
 | **guard** | 同一プロセス・同一データ上での 2 実装の A/B 比 | **無い**（機械が約分される） | 1.30x。ただし shipped-vs-frozen は 1.15x |
 | **workload** | 実測値 ÷ 同じ run 内で測った yardstick | 近似的にしか無い | 2.00x |
 
-`scripts/bench-baseline.json` がコミットされた baseline である。
-記録は **5 回の通し実行の中央値**であり、1 回の実行ではない。
+`scripts/bench-baseline.json` が現在の比較に使う baseline である。
+通常の `bench` 1 回は、warmup 後の **7 回の timed sample の中央値**を各 workload に記録する。
+現在の baseline は flake の devShell（Node.js 24.18.0）で記録している。
 
 ### guard の 2 つの役割
 
@@ -307,7 +317,7 @@ fixture 自体は `scripts/bench-fixtures.ts` に切り出してある（`bench-
 - **price list（値札）** —— 「HashSet にしたら何倍か」を数字で示す。
   レビューで「native `Set` でいい理由」を問われたときに出す答えがこれである。
 
-### 実測値（Apple M4 Max / Node 22.23.1、5 回通しの中央値）
+### 旧記録（Apple M4 Max / Node 22.23.1、5 回通しの中央値）
 
 | guard | 比 |
 | --- | --- |
@@ -335,14 +345,18 @@ baseline を取り直さなければこのゲートは落ちていた。**
 ヘッダの主張どおりに静かである。tolerance を動かすかどうかは人間の判断であり、
 ここでは baseline を手順どおり中央値で記録し、事実だけを残す。
 
+上の表と AO の記述は履歴であり、現在の gate は `scripts/bench-baseline.json` の
+Node.js 24 baseline と比較する。Node の major version や実行環境を変えた場合は、
+同じ環境で baseline を再記録してから比較すること。
+
 ### Node のメジャー版をまたいで比べてはならない
 
-同じベンチマークを Node 24.13.0 で走らせると workload 比が 22-32% 上、
-HashSet 系の guard が 16-18% 上に出る。baseline の記録環境は
-**flake の devShell の Node 22.23.1**（CI と同じ）であり、記録も検査も
-`nix develop --command pnpm bench` で行うこと。
+旧記録の Node 22 と Node 24.13.0 の測定値は、現行 baseline の比較対象ではない。
+Node の major version をまたぐ比較は無効なので、現行の比較は
+**flake の devShell の Node.js 24.18.0**で `nix develop --command pnpm bench` を実行して
+記録すること。
 
-いずれも 1 チャンク分の 393,216 回（6 面 × 16×16×256）のルックアップ上での測定である。
+いずれも 1 チャンク分のルックアップ上での測定であり、走査高さは各 fixture の `height` に従う。
 
 **M-1 の記述の訂正**: `opacity.ts` は Effect の `HashSet` を native `Set` より
 「桁違いに遅い」と書いているが、**実測は 1.9 倍**であって桁違いではない。
@@ -379,9 +393,10 @@ wall-clock は粗い道具である。tolerance より安い書き換えはす�
 かつ共有ランナーの実時間は**負荷で揺れる**——つまり workload 比は CI ではここで測ったより不安定になる。
 
 **推奨**: いま CI ジョブを足すべきではない —— ただし**理由は 1 つ減った**。
-旧記述は「グリーディメッシングが未実装で baseline がこれから大きく動くこと」と
+旧記述は「実装途中で baseline がこれから大きく動くこと」と
 「落ちたときに人間が読んで判断する必要があること」の 2 つを挙げていた。
-前者はもう当てはまらない（着地し、baseline は取り直した）。後者は残る。
+現行実装と Node 24 devShell の baseline は記録済みだが、実装または toolchain を変更した場合は
+理由を明記して再記録する必要がある。後者は残る。
 
 足すなら `push` on `main` か nightly（`pull_request` ではなく）で、
 `--workload-tolerance` を緩めて **guard だけ**を見る形が妥当である。
@@ -398,7 +413,13 @@ $ pnpm bench --update-baseline
 ```
 
 `BENCH_MACHINE` 環境変数に機械の説明を入れると `recordedOn` に記録される。
-**更新は必ず、何がどう動いたかをコミットメッセージに書いて行うこと。**
+flake の devShell で実行する場合は次の形にする。
+
+```console
+$ BENCH_MACHINE='flake devShell, Node 24.18.0' nix develop --command pnpm bench --update-baseline
+```
+
+**更新は必ず、何がどう動いたかを変更説明に書いて行うこと。**
 baseline を黙って上書きするのは、ベンチマークを削除するのと同じである。
 
 ## 直前のカバレッジ拡張について — コミットメッセージの数字が誤っている

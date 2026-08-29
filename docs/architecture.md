@@ -191,11 +191,10 @@ org 標準としては個別リポジトリの裁量に委ねられており、�
 ## 7. 依存宣言とkernel境界
 
 `@nerima-games/mc-kernel` は `dependencies` に固定され、メッシュ入力の
-`Chunk` 型を直接消費する。mc-meshing固有の `ChunkView` はレンダラー向けの固定高さ
-ビューとして残し、`chunkViewOf` がkernelの可変高さチャンクを検証しながら変換する。
-高さが一致しない場合は暗黙の切り詰め・パディングをせず、明示的に失敗する。
+`Chunk` 型とブロック定義を直接消費する。mc-meshing 固有の `ChunkView` は
+kernel のチャンクと同じ動的な高さ・ストレージレイアウトを扱い、変換用アダプターを挟まない。
 
-この依存境界により、共有語彙はmc-kernel、チャンク表現の変換と面生成はmc-meshingが
+この依存境界により、共有語彙とブロック能力は mc-kernel、チャンク走査と面生成は mc-meshing が
 所有する。依存グラフの制約は `DEPENDENCY_POLICY.md` の roster に従う。
 
 ## 参照

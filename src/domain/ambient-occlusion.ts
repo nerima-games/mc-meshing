@@ -84,8 +84,8 @@
  * neighbours. A loaded diagonal is consulted; an absent one keeps the same
  * "mesh as open" answer as every other unloaded boundary.
  */
-import { AIR, type ChunkNeighbours, type ChunkView, getBlockAcrossBoundary } from './chunk-view'
-import { type FaceDirection, type QuadAxis, faceOf, tangentAxes } from './faces'
+import { AIR, type ChunkNeighbours, type ChunkView, getBlockAcrossBoundary } from './chunk-view.js'
+import { type FaceDirection, type QuadAxis, faceOf, tangentAxes } from './faces.js'
 
 /**
  * Distinct ambient-occlusion values a face can carry: 0, 1, 2, 3.
@@ -236,8 +236,8 @@ const AO_OFFSETS = {
  * second reason: a loop would read each offset through a VARIABLE index, which
  * `noUncheckedIndexedAccess` types as `number | undefined` and which would need
  * `?? 0` fallbacks no input can reach — unreachable branches in a hot function,
- * and permanently uncoverable lines in a report this repository intends to gate
- * at 99% (docs/testing.md §3). The indices here are `const` literals, so
+ * and permanently uncoverable lines in a report this repository gates at 100%
+ * (docs/testing.md §3). The indices here are `const` literals, so
  * TypeScript narrows each to its own literal type and indexing stays total.
  */
 

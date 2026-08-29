@@ -251,12 +251,33 @@
       }
     },
     {
-      "files": ["src/domain/fluid-mesh.ts"],
+      "files": ["src/domain/mesh-common.ts"],
       "rules": {
-        // `pushSide`, the per-cell, per-side skirt emitter: quads sink +
-        // chunk + neighbours + context + lx, y, lz + blockId + here +
-        // direction + the two corner heights the caller already computed.
-        // The largest genuine case in this repository.
+        // `isFaceExposed`: three lookup tables plus the two block ids.
+        "max-params": ["warn", { "max": 5 }]
+      }
+    },
+    {
+      "files": ["src/domain/mesh-region.ts"],
+      "rules": {
+        // `meshAllRegionFaces`: chunk/neighbour state, four lookup arrays,
+        // owned bounds and the output sink.
+        "max-params": ["warn", { "max": 8 }]
+      }
+    },
+    {
+      "files": ["src/domain/fluid-state.ts"],
+      "rules": {
+        // `flowContributionAt`/`cornerHeight` carry scalar cell coordinates
+        // through the hot fluid sampling path without allocating wrappers.
+        "max-params": ["warn", { "max": 10 }]
+      }
+    },
+    {
+      "files": ["src/domain/fluid-geometry.ts"],
+      "rules": {
+        // `pushSide`: sink + chunk context + cell position + fluid state +
+        // direction and the two already-computed top corner heights.
         "max-params": ["warn", { "max": 12 }]
       }
     },

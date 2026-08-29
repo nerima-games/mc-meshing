@@ -7,9 +7,9 @@
 
 ## 依存
 
-`effect` と `@nerima-games/mc-kernel` に依存する。`Chunk` 型と能力フラグは
-mc-kernel が所有し、`chunkViewOf` が kernel の可変高さチャンクをメッシング専用の
-固定高さビューへ変換する。
+`effect` と `@nerima-games/mc-kernel` に依存する。`Chunk` 型、ブロック ID、能力フラグ、
+ブロックレジストリは mc-kernel が所有し、メッシャーはその `Chunk` の storage layout と
+`height` を直接利用する。変換アダプターや別のブロック定義テーブルは持たない。
 意図されたグラフは [`DEPENDENCY_POLICY.md`](https://github.com/nerima-games/.github/blob/main/DEPENDENCY_POLICY.md)
 （org 標準）と [`docs/architecture.md`](./docs/architecture.md) に記録してある。実効機構は
 `.oxlintrc.json` の `no-restricted-imports`（Tier1: `mc-kernel` 以外の `@nerima-games/*` への依存を禁止）である。
@@ -69,9 +69,10 @@ Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
 | `pnpm lint:fix` | oxlint の自動修正 |
 | `pnpm test` | vitest（`@effect/vitest` の `it.effect` が主 API） |
 | `pnpm test:watch` | vitest watch |
-| `pnpm test:coverage` | カバレッジ計測(4 指標 99% 閾値。TEST_STANDARD.md §3) |
+| `pnpm test:coverage` | カバレッジ計測（statements / branches / functions / lines の 100% 閾値） |
 | `pnpm bench` | `scripts/bench-harness.ts` による自作ベンチマーク(`pnpm verify` / CI には含まれない。PERFORMANCE_STANDARD.md) |
-| `pnpm verify` | `typecheck && lint && test`。CI と同じ内容 |
+| `pnpm build` | 宣言ファイルと実行用 ESM バンドルを `dist/` に生成 |
+| `pnpm verify` | `typecheck && lint && test && build`。CI と同じ内容 |
 
 ## 使い方
 
@@ -95,7 +96,7 @@ for (const quad of fluids) {
 
 流体上面の `flow.direction` は正規化された chunk-local X/Z ベクトルで、静水は `[0, 0]`。
 `flow.falling` は `ChunkView.fluid.falling` の非ゼロ値を渡す。`falling` 配列と
-`FluidQuad.flow` は後方互換のため optional であり、側面 quad には `flow` が付かない。
+`FluidQuad.flow` は流体状態が存在する入力でのみ付く optional な描画記述子であり、側面 quad には `flow` が付かない。
 方向は同種流体の水面高の勾配から決定論的に計算し、空いた隣接セルの 1 段下に同種流体がある場合は
 段差を越える流れとして扱う。未ロード隣接チャンクは流れを捏造せず静止側として扱う。
 
@@ -112,7 +113,7 @@ for (const quad of fluids) {
 
 ## 現状
 
-**このリポジトリはまだ第一版（叩き台）である。**
+**現行実装は mc-kernel のブロック定義を基準にした出荷可能なメッシング基盤である。**
 
 - **opaque 限定のグリーディマージは実装済み。これがこのリポジトリの本体である。**
   同一スライス・同一方向・同一 `blockId`・同一 AO の opaque 面だけを最大矩形にまとめる
@@ -142,14 +143,19 @@ for (const quad of fluids) {
   故障ではなく**吸収**である。`renderDistance = 4` で LOD 1 が買うのは quad の約 1.2% であり、
   その代金は約 11 px の水平方向のずれである —— 4 / 8 という定数どころか
   LOD 1 という段そのものが疑わしい。判断は mc-render のもの（`responsibility.md` §3.4 / §3.5）。
-- **`ChunkView` はメッシング専用の固定高さビュー。** `Chunk` を所有するのは mc-kernel であり、
-  `chunkViewOf` が境界で高さを検証して変換する。異なる高さは暗黙に切り詰めたりゼロ埋めしたりしない。
-  ストレージレイアウト（`blockIndex`）は参照実装と**同一**にしてあり、
-  参照実装の chunk fixture をそのままゴールデン入力に使えるようにしてある。
-- **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、植生メッシュ（十字板）。
+- **`ChunkView` は mc-kernel の `Chunk` と同じ可変高さの layout を使う。** `height` が単一の真実であり、
+  メッシャーは kernel の chunk を構造的にそのまま受け取る。ストレージレイアウト（`blockIndex`）も
+  kernel と**同一**で、異なる高さを切り詰めたりゼロ埋めしたりする変換層はない。
+- **実装済みの追加形状**: アンビエントオクルージョン、流体の高さ、十字板、サボテン、レール、
+  lily pad。special render kind は mc-kernel のレジストリから構築される。
   AO と流体の角平均は optional な対角チャンクも参照し、未ロードなら従来どおり開境界として扱う。
   流体上面は renderer 向けの正規化された流れ方向と落下フラグも持つ。
-  **未実装**なのはアキュムレータプール。
+- **固定形状は kernel の能力表から接続し、状態依存形状は推測しない。** 現行 mc-kernel の
+  `collisionShape` を mc-meshing の公開 config に取り込み、状態を持たない slab は半ブロック、
+  pressure plate は 1/16 inset・1/16 high の固定形状として出力する。stairs とレールの向き、
+  slab の上下、pressure plate の押下状態は kernel が block state / 描画契約を公開していないため
+  未実装である。`collisionShape` を全ての描画形状とみなす推測はしない。
+  **未実装**なのはアキュムレータプールで、これは所有バッファの意味を変えるため別の性能検証が必要である。
   参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
@@ -159,13 +165,11 @@ for (const quad of fluids) {
   fluid corner が読む範囲を含む 1-cell halo（chunk 境界で clamp）を `ownedRegion` として返す。
   cube は安全な単位 face、plant / fluid もセル単位の独立所有バッファであり、呼び出し側は同じ
   `ownedRegion` の以前のバッファを丸ごと交換する。greedy な full-chunk mesh の quad を途中で splice
-  してはならない。空領域は空の所有バッファを返し、従来の `meshChunk` API と出力は不変である。
-- **ビルド／publish はまだない。** `exports` は TypeScript ソースを直接指している。
-  `version` は mc-render が実際に消費して契約を確認するまで `0.x` に留める。
-- **カバレッジ閾値は 4 指標 99% で有効化済み(TEST_STANDARD.md §3)。** 現状の実測は
-  statements 100% / functions 100% / lines 100% / **branches 95.89%** であり、
-  `branches` が未達のため CI のカバレッジステップは赤い。これは組織としての既知・受容済みの結果であり、
-  閾値の緩和では対処しない(未到達分岐を埋めるテスト追加、または到達不能な分岐そのものの削除で対処する)。
+  してはならない。空領域は空の所有バッファを返し、通常の `meshChunk` API と出力は不変である。
+- **ビルドは宣言ファイルと実行用 ESM バンドルを `dist/` に生成する。** mc-kernel の実装は
+  バンドルへ取り込み、`effect` は通常の実行時依存として外部化する。`exports` と `files` は
+  `dist/` を指し、`prepublishOnly` は `pnpm verify` を実行する。
+- **カバレッジ閾値は 4 指標すべて 100% で有効化済み**（`vitest.config.ts`）。
 
 ## License
 

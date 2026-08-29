@@ -33,21 +33,19 @@
  * consumer has to branch on — including `simplifyMesh`, which would then be
  * snapping something that has no extent to snap — or lying about its geometry.
  *
- * plan.md §3.3 specifies the output as `{opaque, water, transparentSolid}`, so
- * a fourth list IS a deviation from the stated API and is recorded as one; see
- * docs/design-notes.md M-11. The alternative is not "no deviation", it is a
- * deviation hidden inside `Quad`.
+ * The original plan's minimal output listed `{opaque, water, transparentSolid}`.
+ * Cross plates and other non-cube shapes now live in explicit typed lists beside
+ * those cube layers, keeping the cube contract honest and the extension visible.
  *
  * ---------------------------------------------------------------------------
  * Which blocks are plants is INJECTED, for the reason §3.2 already settled
  * ---------------------------------------------------------------------------
  *
  * The reference names them: `blockTypeToIndex('DANDELION')`, `'POPPY'`,
- * `'TALL_GRASS'` and six more (`plant-mesh.ts:18-28`). This repository has no
- * block registry on purpose — docs/responsibility.md §3.2 — so the set arrives
- * through `MeshConfig` exactly as `waterBlockIds` and `transparentSolidBlockIds`
- * do, and for the same three reasons: no extra edge in the dependency graph,
- * tests may use any ids, and a resource pack cannot break meshing.
+ * `'TALL_GRASS'` and six more (`plant-mesh.ts:18-28`). The default set is derived
+ * from mc-kernel's block registry; callers may still inject focused custom sets
+ * through `MeshConfig`, so tests and resource-pack extensions do not require a
+ * second registry in this package.
  *
  * It is a native `Set` and is flattened into a byte table before the inner loop,
  * for the reason `domain/opacity.ts` gives at length. It is consulted on the
@@ -77,9 +75,11 @@
  *    Recorded as a deviation in docs/design-notes.md M-11 and pinned by
  *    `test/plant-mesh.test.ts`.
  */
-import { CHUNK_SIZE, type ChunkView, getBlock } from './chunk-view'
-import { MAX_BLOCK_ID, type MeshConfig } from './opacity'
-import { type FaceRole } from './faces'
+import { BLOCK_ID_MAX, type MeshConfig } from './opacity.js'
+import { CHUNK_SIZE, type ChunkView, getBlock } from './chunk-view.js'
+import type { CrossPlantQuad } from './geometry-types.js'
+
+export type { CrossPlantQuad }
 
 /**
  * How far each plate is pulled in from the cell's four vertical walls.
@@ -104,55 +104,6 @@ export const PLANT_INSET = 0.1
 const CELL_SIZE = 1
 
 /**
- * A vertex of a plant plate, in chunk-local coordinates. FRACTIONAL, unlike
- * everything else this repository emits.
- */
-export type PlantVertex = readonly [number, number, number]
-
-/**
- * One diagonal pane. Two of these make a cross.
- *
- * The four vertices are given explicitly and in winding order, because there is
- * no origin-plus-extents description of a diagonal plane — which is exactly what
- * distinguishes this type from `Quad`.
- */
-export type CrossPlantQuad = {
-  readonly blockId: number
-  /**
-   * Always `'side'`. The reference passes `'side'` for both plates
-   * (`plant-mesh.ts:96-97`), because a plant has one texture and no top or
-   * bottom variant. Carried anyway so that a consumer's texture lookup is the
-   * same shape for a plate as for a face.
-   */
-  readonly role: FaceRole
-  readonly vertices: readonly [PlantVertex, PlantVertex, PlantVertex, PlantVertex]
-  /**
-   * The normal the reference hands the renderer — AXIS-ALIGNED, and therefore
-   * NOT the plate's true geometric normal.
-   *
-   * The first plate spans the `(x0,z0)`-`(x1,z1)` diagonal, so its true normal
-   * is `(1, 0, -1)/sqrt(2)`; the reference gives it `[0, 0, 1]`
-   * (`plant-mesh.ts:96`) and gives the second `[1, 0, 0]` (:97). This is
-   * transcribed rather than corrected. A cross plant is drawn with flat,
-   * unshaded lighting — the reference hands it `EMPTY_AO` (:16, :76) and a
-   * single voxel's light for all four corners (:51-62) — so the normal is not
-   * used for shading, and changing it here would be a change with no stated
-   * consumer. See docs/design-notes.md M-11.
-   */
-  readonly nx: number
-  readonly ny: number
-  readonly nz: number
-  /**
-   * Always 0. Plants take no ambient occlusion: `addQuad` is called with
-   * `EMPTY_AO` (`plant-mesh.ts:16`, used at :76). A cross plate has no face
-   * whose enclosure could be counted — `domain/ambient-occlusion.ts` samples the
-   * tangent neighbours of the air cell in front of an axis-aligned face, and a
-   * diagonal plate has neither.
-   */
-  readonly ao: number
-}
-
-/**
  * Flatten the cross-plant id set into a 256-entry byte table, `1` meaning "this
  * id is a cross plant".
  *
@@ -173,7 +124,7 @@ const TABLE_SIZE_OFFSET = 1
  * the comment above), and a shared size constant would be a needless coupling
  * for one arithmetic fact.
  */
-const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
+const BLOCK_ID_TABLE_SIZE = BLOCK_ID_MAX + TABLE_SIZE_OFFSET
 
 /** Marker written into the table for "this id is a cross plant". */
 const CROSS_PLANT_MARKER = 1
@@ -271,7 +222,7 @@ const platesFor = (blockId: number, lx: number, y: number, lz: number): Readonly
  *
  * Bounded by `yLimit` like the face passes, and for the same reason: a plant is
  * a non-air block, so none can exist above the highest one. The reference caps
- * the same way (`Math.min(CHUNK_HEIGHT, yLimit)`, :237).
+ * the same way by capping at the runtime chunk height, :237).
  *
  * NEIGHBOURS ARE NOT CONSULTED. A cross plate's geometry depends only on its own
  * cell — there is no culling to do, because there is no shared face to cull, and
@@ -302,7 +253,7 @@ export const meshCrossPlants = (
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
     for (let lz = minZ; lz < maxZ; lz += LOOP_STEP) {
       for (let y = minY; y < Math.min(yLimit, maxY); y += LOOP_STEP) {
-        const blockId = getBlock(chunk.blocks, lx, y, lz)
+        const blockId = getBlock(chunk, lx, y, lz)
         if (isCrossPlant(plantLookup, blockId)) {
           plates.push(...platesFor(blockId, lx, y, lz))
         }

@@ -61,7 +61,7 @@ export type GreedyMeshToMeshed = () => { opaque: MeshedChunk; water: MeshedChunk
 export const meshChunk = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
-  config: MeshConfig,
+  config?: MeshConfig,
 ): MeshLayers
 ```
 
@@ -80,9 +80,13 @@ export const MESH_LAYERS: ReadonlyArray<MeshLayer>           // ['opaque', 'wate
 export type MeshConfig = {
   readonly waterBlockIds: ReadonlySet<number>
   readonly transparentSolidBlockIds: ReadonlySet<number>
+  readonly crossPlantBlockIds?: ReadonlySet<number>
+  readonly fluidMaxLevels?: ReadonlyMap<number, number>
+  readonly renderKindByBlockId?: ReadonlyMap<number, RenderKind>
+  readonly collisionShapeByBlockId?: ReadonlyMap<number, CollisionShape>
 }
 export const EMPTY_MESH_CONFIG: MeshConfig
-export const MAX_BLOCK_ID = 255
+export { BLOCK_ID_MAX } from '@nerima-games/mc-kernel'
 
 export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer
 export const buildLayerLookup = (config: MeshConfig): Uint8Array
@@ -195,15 +199,18 @@ export const INDICES_PER_QUAD = 6
 
 ```typescript
 export const CHUNK_SIZE = 16
-export const CHUNK_HEIGHT = 256
-export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
 export const AIR = 0
 
-export const blockIndex = (lx: number, y: number, lz: number): number
-export type ChunkView = { readonly blocks: Readonly<Uint8Array> }
-export const emptyChunk = (): ChunkView
+export const blocksPerChunk = (height: number): number
+export const blockIndex = (lx: number, y: number, lz: number, height: number): number
+export type ChunkView = {
+  readonly height: number
+  readonly blocks: Readonly<Uint8Array>
+  readonly fluid?: FluidView
+}
+export const emptyChunk = (height: number): ChunkView
 
-export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number
+export const getBlock = (chunk: ChunkView, lx: number, y: number, lz: number): number
 
 export type ChunkNeighbours = {
   readonly xPos?: ChunkView; readonly xNeg?: ChunkView
@@ -224,21 +231,21 @@ export type FluidView = {
 
 ### ストレージレイアウト
 
-`y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE`。
+`y + lz * height + lx * height * CHUNK_SIZE`。
 参照実装 `greedy-meshing-ao.ts:8` と**同一**。
 
 y-major（カラム内で連続）にしてあるのは、メッシングも光伝播もカラムを縦に歩くからである。
-参照実装と同じにしてあるのは、参照実装の chunk fixture をゴールデン入力として
-そのまま使えるようにするためである。
+`ChunkView` は mc-kernel の `Chunk` と同じストレージレイアウトを直接読み、変換アダプターを置かない。
+高さはチャンクごとに保持するため、256 固定の前提はない。
 
 ### `getBlock` —— 3 つの意図的な選択（plan.md §5.2）
 
 参照実装 `greedy-meshing-ao.ts:6-9`（原文）:
 
 ```typescript
-export const getBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number => {
-  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) return AIR
-  return blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE]!
+export const getBlock = (chunk: ChunkView, lx: number, y: number, lz: number): number => {
+  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= chunk.height || lz < 0 || lz >= CHUNK_SIZE) return AIR
+  return chunk.blocks[y + lz * chunk.height + lx * chunk.height * CHUNK_SIZE]!
 }
 ```
 
@@ -267,9 +274,10 @@ export type MeshLayers = {
   readonly transparentSolid: ReadonlyArray<Quad>
   readonly crossPlants: ReadonlyArray<CrossPlantQuad>
   readonly fluids: ReadonlyArray<FluidQuad>
+  readonly specials: ReadonlyArray<SpecialQuad>
 }
 export const totalQuadCount = (layers: MeshLayers): number
-export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig): MeshLayers
+export const meshChunk = (chunk: ChunkView, neighbours: ChunkNeighbours, config?: MeshConfig): MeshLayers
 ```
 
 流体を `MeshConfig.fluidMaxLevels` で opt-in すると、`MeshLayers.fluids` に専用の
@@ -293,8 +301,8 @@ export type FluidQuad = {
 `flow.direction` は chunk-local X/Z の正規化ベクトルで、水平の勾配が無ければ `[0, 0]`。
 同種流体の隣接水面が低い方向へ向き、空いた隣接セルの 1 段下に同種流体があれば段差を越える方向へ向く。
 未ロード隣接チャンクは流れを作らない。`flow.falling` は復号済みの simulation state を写す。
-`falling` と `flow` は既存 caller/consumer の型を壊さないため optional だが、現行メッシャが出す上面には
-必ず `flow` があり、側面には無い。水と溶岩は同じ計算を使い、差は注入された `maxLevel` による。
+`flow` は流体状態がない面では省略できる。現行メッシャが出す上面には必ず `flow` があり、側面には無い。
+水と溶岩は同じ計算を使い、差は注入された `maxLevel` による。
 
 通常の不透明面にはグリーディマージが入り、`width` / `height` は 1 より大きくなり得る。
 一方、4 隅の高さを個別に持つ流体面は情報を失わずにマージできないため、セル単位で出力する。
@@ -311,19 +319,18 @@ export type FluidQuad = {
 
 ## 6. 参照実装の各部が本リポジトリでどうなったか
 
-**この表は長らく古かった。** グリーディマージ・AO・十字板・`yLimit` は着地しているのに
-「保留」「次の作業」「未実装」のまま残っていたので、流体の行を書き換えるついでに
-**実際のコードに突き合わせて直した**（`design-notes.md` M-9 / M-10 / M-11 / M-12）。
+**この表は現行コードと照合済みである。** グリーディマージ・AO・流体・特殊形状・`yLimit` の
+実装状況を、対応するソースと検証コマンドに合わせて記載している。
 
 | 項目 | 参照実装 | LOC | 扱い |
 | --- | --- | --- | --- |
 | グリーディマージ本体 | `greedy-meshing-algorithms.ts` + `-accumulator.ts` + `-passes.ts` | 616 | **移植済み**: `domain/mesh.ts`（M-9） |
 | アンビエントオクルージョン | `greedy-meshing-ao.ts` | 149 | **移植済み**: `domain/ambient-occlusion.ts`（M-10）。光サンプリング半分は未移植（ライトグリッドは mc-worldgen） |
-| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | **移植済み**: `domain/fluid-mesh.ts`（M-12）。renderer 向け flow descriptor を追加。バイト符号化と光は未移植 —— 継ぎ目は `FluidView`（復号済み） |
-| 植生メッシュ | `plant-mesh.ts` | 258 | **十字板のみ移植済み**: `domain/plant-mesh.ts`（M-11）。サボテン・レール・スイレンは未移植 |
+| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | 385 | **移植済み**: 公開入口 `domain/fluid-mesh.ts`、状態 `domain/fluid-state.ts`、頂点生成 `domain/fluid-geometry.ts`（M-12）。renderer 向け flow descriptor を追加。バイト符号化と光は未移植 —— 継ぎ目は `FluidView`（復号済み） |
+| 植生・特殊形状メッシュ | `plant-mesh.ts` | 258 | **移植済み**: 十字板は `domain/plant-mesh.ts`、サボテン・レール・スイレン・固定 slab / pressure plate は `domain/special-mesh.ts`。状態依存形状は kernel の state 契約待ち |
 | LOD 段の選択（`lodForDistance` + 距離定数） | `lod-simplification.ts` | 約 48 | **mc-render の責務**（`responsibility.md` §3.4）。簡約本体（約 240）は `domain/lod.ts` に移植済み |
-| subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | 382 | 保留。1 ブロック変更で全チャンクを再メッシュしない最適化 |
+| subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | 382 | **部分移植**: `domain/mesh-region.ts` が dirty+1-cell halo と owned buffer の交換契約を実装。既存の greedy quad を splice する renderer 統合は mc-render の責務 |
 | アキュムレータプール | `greedy-meshing-accumulator.ts` | 178 | ベンチマークを用意してから |
 | worker プール / プロトコル | `packages/worker/.../meshing-worker*.ts` | 795 | **mc-render の責務**（plan.md §3.9） |
 | マテリアル | `chunk-mesh-materials.ts` | 238 | **mc-render の責務** |
-| `yLimit`（最高の非 air ブロックまでで打ち切る） | `greedy-meshing.ts:94-101` | — | **移植済み**: `domain/mesh.ts` の `solidCeiling`。素朴実装には**意図的に入れていない** —— オラクルが `CHUNK_HEIGHT` を走ることが `solidCeiling` の off-by-one を捕まえる仕掛けである（M-9） |
+| `yLimit`（最高の非 air ブロックまでで打ち切る） | `greedy-meshing.ts:94-101` | — | **移植済み**: `domain/mesh.ts` の `solidCeiling`。素朴実装には**意図的に入れていない** —— オラクルが `chunk.height` を走ることが `solidCeiling` の off-by-one を捕まえる仕掛けである |

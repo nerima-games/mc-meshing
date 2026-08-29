@@ -18,8 +18,7 @@ describe('public API surface', () => {
         // Chunk-view
         'AIR',
         'CHUNK_SIZE',
-        'CHUNK_HEIGHT',
-        'BLOCKS_PER_CHUNK',
+        'blocksPerChunk',
         'blockIndex',
         'emptyChunk',
         'getBlock',
@@ -41,8 +40,10 @@ describe('public API surface', () => {
         // Opacity
         'MESH_LAYERS',
         'MESH_LAYER_PRIORITY',
-        'MAX_BLOCK_ID',
+        'BLOCK_ID_MAX',
         'EMPTY_MESH_CONFIG',
+        'MINECRAFT_MESH_CONFIG',
+        'buildMinecraftMeshConfig',
         'layerOfBlockId',
         'buildLayerLookup',
         'occludes',
@@ -124,8 +125,8 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
         waterBlockIds: new Set([2]),
       }
       const lookup = meshing.buildLayerLookup(config)
-      expect(lookup.length).toBe(meshing.MAX_BLOCK_ID + 1)
-      for (let blockId = 0; blockId <= meshing.MAX_BLOCK_ID; blockId += 1) {
+      expect(lookup.length).toBe(meshing.BLOCK_ID_MAX + 1)
+      for (let blockId = 0; blockId <= meshing.BLOCK_ID_MAX; blockId += 1) {
         expect(meshing.MESH_LAYERS[lookup[blockId] ?? -1]).toBe(meshing.layerOfBlockId(config, blockId))
       }
     }),

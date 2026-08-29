@@ -51,8 +51,8 @@
  * is only true for a mesh dominated by top faces. See docs/design-notes.md M-8
  * for what it actually measures at on this repository's bench fixtures.
  */
-import type { MeshLayers, Quad } from './mesh'
-import { type QuadAxis, faceOf, tangentAxes } from './faces'
+import type { MeshLayers, Quad } from './mesh.js'
+import { type QuadAxis, faceOf, tangentAxes } from './faces.js'
 import { Schema } from 'effect'
 
 /** Do not simplify: the level `simplifyMesh` returns its input unchanged for. */
@@ -424,6 +424,7 @@ export const simplifyMesh = (layers: MeshLayers, level: LodLevel): MeshLayers =>
     // Them, which is a hole in the world rather than a coarser world.
     fluids: layers.fluids,
     opaque,
+    specials: layers.specials,
     transparentSolid: layers.transparentSolid,
     water: layers.water,
   }

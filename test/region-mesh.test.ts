@@ -1,12 +1,15 @@
+import { blockIdOf, type RenderKind } from '@nerima-games/mc-kernel'
 import { describe, expect, it } from '@effect/vitest'
 import { Effect } from 'effect'
-import { BLOCKS_PER_CHUNK, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
+import { type ChunkView, emptyChunk } from '../src/domain/chunk-view'
 import { type MeshLayers, type MeshRegion, meshChunkNaive, meshChunkRegion } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 
 const STONE = 1
 const WATER = 2
 const FLOWER = 3
+const CACTUS = blockIdOf('cactus')
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set([FLOWER]),
   fluidMaxLevels: new Map([[WATER, 8]]),
@@ -14,17 +17,22 @@ const CONFIG: MeshConfig = {
   waterBlockIds: new Set([WATER]),
 }
 
+const SPECIAL_CONFIG: MeshConfig = {
+  ...CONFIG,
+  renderKindByBlockId: new Map<number, RenderKind>([[CACTUS, 'cactus']]),
+}
+
 const chunkWith = (
   cells: ReadonlyArray<readonly [number, number, number, number]>,
   fluidCells: ReadonlyArray<readonly [x: number, y: number, z: number, level: number]> = [],
 ): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-  for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z)] = id}
-  if (fluidCells.length === 0) {return { blocks }}
-  const levels = new Uint8Array(BLOCKS_PER_CHUNK)
-  const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  for (const [x, y, z, level] of fluidCells) {levels[blockIndex(x, y, z)] = level}
-  return { blocks, fluid: { levels, sources } }
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  for (const [x, y, z, id] of cells) {blocks[testBlockIndex(x, y, z)] = id}
+  if (fluidCells.length === 0) {return testChunk(blocks)}
+  const levels = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const sources = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  for (const [x, y, z, level] of fluidCells) {levels[testBlockIndex(x, y, z)] = level}
+  return testChunk(blocks, { levels, sources })
 }
 
 const inRegion = (region: MeshRegion, x: number, y: number, z: number): boolean =>
@@ -50,6 +58,7 @@ const project = (layers: MeshLayers, region: MeshRegion): MeshLayers => ({
   crossPlants: layers.crossPlants.filter((q) => inRegion(region, ...origin(q.vertices))),
   fluids: layers.fluids.filter((q) => inRegion(region, ...fluidOrigin(q))),
   opaque: layers.opaque.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
+  specials: layers.specials.filter((q) => inRegion(region, ...origin(q.vertices))),
   transparentSolid: layers.transparentSolid.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
   water: layers.water.filter((q) => inRegion(region, q.lx, q.y, q.lz)),
 })
@@ -97,14 +106,30 @@ describe('subregion meshing', () => {
     }),
   )
 
+  it.effect('meshes special geometry inside an owned region', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([[8, 64, 8, CACTUS]])
+      const result = meshChunkRegion(chunk, {}, SPECIAL_CONFIG, { max: [9, 65, 9], min: [8, 64, 8] })
+
+      expect(result.layers.specials).toHaveLength(6)
+      expect(result.layers.specials.every((quad) => quad.renderKind === 'cactus')).toBe(true)
+    }),
+  )
+
   it.effect('returns owned empty buffers for an empty or reversed region', () =>
     Effect.sync(() => {
-      const result = meshChunkRegion(emptyChunk(), {}, CONFIG, { max: [4, 4, 4], min: [9, 9, 9] })
+      const result = meshChunkRegion(emptyChunk(TEST_HEIGHT), {}, CONFIG, { max: [4, 4, 4], min: [9, 9, 9] })
       expect(result.dirtyRegion).toStrictEqual({ max: [9, 9, 9], min: [9, 9, 9] })
       expect(result.ownedRegion).toStrictEqual(result.dirtyRegion)
       expect(MESH_LAYERS.every((layer) => result.layers[layer].length === 0)).toBe(true)
       expect(result.layers.crossPlants).toStrictEqual([])
       expect(result.layers.fluids).toStrictEqual([])
+
+      const nonFinite = meshChunkRegion(emptyChunk(TEST_HEIGHT), {}, CONFIG, {
+        max: [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+        min: [Number.NaN, Number.NaN, Number.NaN],
+      })
+      expect(nonFinite.dirtyRegion).toStrictEqual({ max: [0, 0, 0], min: [0, 0, 0] })
     }),
   )
 })

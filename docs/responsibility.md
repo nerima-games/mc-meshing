@@ -16,7 +16,7 @@
 
 ## 2. 責務の言い換え
 
-**ブロック ID の配列と注入された設定だけを入力とし、3 つの面リストを返す純粋関数。**
+**ブロック ID の配列と注入された設定だけを入力とし、3 つのキューブ面リストと形状別の専用リストを返す純粋関数。**
 
 - 三値の不透明度モデル（`opaque` / `water` / `transparentSolid`）とその優先度
 - 正準な面方向順序（+X, -X, +Y, -Y, +Z, -Z）
@@ -37,6 +37,9 @@
   水面の形は 4 隅の傾き、renderer 用の流れ方向は上面の正規化済み `FluidFlow.direction` で運ぶ。
   入力は復号済みの `FluidView`（level / source / optional falling）、`maxLevel` は `config` で注入する
   （`design-notes.md` M-12）
+- **特殊形状（実装済み）** —— `domain/special-mesh.ts`。
+  サボテン、レール、lily pad、固定 slab、pressure plate は `MeshLayers.specials` の専用形状として出力する。
+  対応する render kind とブロック ID は `mc-kernel` のレジストリから `MeshConfig` に構築する。
 
 ## 3. 明示的にスコープ外のもの
 
@@ -49,13 +52,14 @@
 | メッシュ更新の発火（dirty 購読） | mc-render（`WorldRenderer`）が mc-worldgen の `ChunkStore.subscribeDirty` を購読する | plan.md §3.9 |
 | **座標の語彙**（`ChunkCoord` / チャンク座標系） | mc-kernel（型）+ mc-worldgen（キーとしての運用） | §3.3 |
 | ワーカープールの実装 | mc-render | plan.md §3.9。mc-meshing は worker の中で**呼ばれる**側 |
-| ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は読むだけ（現時点では未対応） |
+| ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は光グリッドを生成・所有せず、mc-render がメッシュ後のサンプルと色合成を行う |
 | **LOD 簡約**（`simplifyMesh` / `packQuadKey` / `LodLevel`） | **mc-meshing**（決着。§3.4。**実装済み**: `domain/lod.ts`） | 参照実装の `lod-simplification.ts` のうち約 240 LOC。`MeshLayers → MeshLayers` で、距離を 1 つも取らない。削減の実測は `design-notes.md` M-8 |
 | **LOD 段の選択**（`lodForDistance` / `LOD*_DISTANCE_CHUNKS`） | **mc-render**（決着。§3.4） | 同ファイルの残り。プレイヤーのチャンクと対象チャンクの距離が要る = §3.3 が禁じているもの。**4 / 8 を正当化するために測るべきことは §3.5** |
 | **`three` のジオメトリ / マテリアル生成**（`block-mesh.ts` 91 LOC） | **mc-render**（決着。§3.4） | `import * as THREE` が 8 箇所。本リポジトリは `three` に依存しない |
 | **アンビエントオクルージョン** | **mc-meshing**（決着。**実装済み**: `domain/ambient-occlusion.ts`） | 参照実装の `greedy-meshing-ao.ts` 149 LOC のうち **AO の半分**（`aoXPos` .. `aoZNeg`、:15-87）。「まず基本を固める」の基本＝グリーディマージは着地した（M-9）ので保留の理由は消えた。**面ごとに 1 値**（頂点ごとではない。参照実装がそうである根拠は M-10）で、**マージキーに入る**。残り半分の光サンプリング（:95-149）は `LightGrids` を読むので**移植していない** —— 下の「ライトグリッド」の行に従う |
-| **植生メッシュ（十字板）** | **mc-meshing**（決着。**実装済み**: `domain/plant-mesh.ts`） | 参照実装の `plant-mesh.ts` 258 LOC のうち `addCrossPlant`（:79-98）と id 表（:18-28）。**十字板だけ**であり、同ファイルのサボテン・レール・スイレンは移植していない —— 特にレールは形状が物理側の `game/domain/rail-shape.ts` を鏡写しにしており、ここで 2 つ目の綴りを作るのは §3.3 が座標について禁じたのと同じ形になる（M-11）。十字板は `Quad` になれない（対角・小数・ブロック面を 0 枚しか覆わない）ので、`MeshLayers` に 4 つ目のリスト `crossPlants` が生えた |
-| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / optional falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
+| **植生・特殊形状** | **mc-meshing**（決着。**実装済み**: `domain/plant-mesh.ts`, `domain/special-mesh.ts`） | 十字板、lily pad、cactus、rail を専用 `Quad` として出力する。レールの向きや傾斜は kernel のブロック能力に含まれないため、現行の形状は方向に依存しない基本形状とする |
+| **slab / pressure plate / stairs の描画形状** | **mc-meshing（kernel の能力表を入力にする）** | 状態を持たない slab は半ブロック、pressure plate は 1/16 inset・1/16 high の固定形状を出力する。stairs、レールの向き、slab の上下、pressure plate の押下状態は kernel が block state / 描画契約を公開していないため未実装。`collisionShape` 全体を描画形状と推測しない |
+| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: 公開入口 `domain/fluid-mesh.ts`、状態 `domain/fluid-state.ts`、頂点生成 `domain/fluid-geometry.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / optional falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
 
 ### 3.3 このリポジトリは座標を持たない（意図的）
 
@@ -342,7 +346,7 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
   §3.2 が `waterBlockIds` について定めたのと同じ 3 つの理由である。
 
 `FluidCell` / `FluidWorkItem` / `FluidKind` は流体の伝播規則を所有する `mx-gameplay` に属する。
-この `FluidView` は gameplay の状態をメッシュ生成へ渡す geometry-neutral な adapter であり、
+この `FluidView` は gameplay の復号済み状態をメッシュ生成へ渡す geometry-neutral な入力境界であり、
 メッシュ側は流体の伝播や tick scheduling を所有しない。
 
 #### (d) 移植した中身と、その出典
@@ -356,11 +360,11 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | 同種流体が上にあれば高さ 1 | 同 :74-87 | 出典あり |
 | 面の露出規則（ガラス越しの水槽は見える） | 同 :129-134 | 出典あり |
 | 側面の下端が隣接流体の高さに合う | `greedy-meshing-fluids.ts:94-97` | 出典あり |
-| 上面と側面 4 枚のみ。**下面は無い** | 同 :70, 92, 120, 148, 176 | **転記のみ。正当化されていない** |
+| 下面を含む 6 方向。下面は固体または流体で隠れる | 公式 `LiquidBlockRenderer` の方向別 face-culling 契約 | **実装済み** |
 
 **そして流体 quad は `Quad` にはなれない** —— 4 隅の Y が別々の小数なので、
-矩形記述子では表せない。十字板（M-11）と同じ理由で、`MeshLayers` に
-5 つ目のリスト（`fluids`）が生えた。**十字板でその形は既に通してあるので、そこは新しい問題ではない。**
+矩形記述子では表せない。十字板（M-11）と特殊形状で同じ境界を既に通しているため、`MeshLayers` に
+専用リスト（`fluids`）が生えている。**ここは新しい API 形状ではない。**
 
 **マージとの関係も同じ理由で決まる**（M-12）—— N セルをまとめた走りは辺ごとに N+1 個の隅の高さを持ち、
 `Quad` には両端の 2 つぶんしか場所が無い。**マージは「高い」のではなく「表現できない」。**
@@ -377,16 +381,17 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | 子（依存元） | `mc-render` のみ |
 
 `mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。
-`domain/kernel-adapter.ts` の `chunkViewOf` が、kernelの可変高さデータを
-meshingの256高さビューへ変換する責務を持つ。高さが一致しない入力は拒否し、
-暗黙の切り詰め・ゼロ埋めでワールドデータを破壊しない。
+`domain/chunk-view.ts` は kernel の `height` と `y + lz * height + lx * height * 16` の
+レイアウトをそのまま扱う。高さを 256 に変換する境界や別のアダプターは存在しない。
 
 ## 5. 完成条件
 
 `testing.md` §4 に詳細。要約:
 
-- ゴールデンテスト（chunk fixture → バッファのハッシュ比較）—— **未達**
+- 決定論的ゴールデンテスト（ローカル chunk fixture → canonical `MeshLayers` JSON の SHA-256）—— **達成**（`test/mesh-golden.test.ts`、`test/golden/mesh-goldens.json`）。参照実装の chunk fixture と renderer の GPU buffer hash は外部連携の確認項目として未達 |
 - 性質テスト（面数上限、隣接チャンク境界の整合）—— **達成**
+- mc-kernel 登録ブロックの経路網羅 —— **達成**（`test/kernel-registry-coverage.test.ts`）。
+  `BLOCK_IDS` 全件を `propertyOfBlockId` と照合し、メッシュ層・特殊形状・流体最大レベルを検証する。
 - **グリーディメッシングの実装** —— **達成**。AO 着地後の現行値で flat -99.8%、rolling -82.7%、
   checkerboard 0.0%（マージできる対が 1 つも無い形なので、これが正しい値である）、
   layered -99.3%。被覆面積は 4 shape すべてで素朴実装と一致する。
