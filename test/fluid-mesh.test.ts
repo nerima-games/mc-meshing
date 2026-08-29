@@ -16,12 +16,9 @@
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
 import {
-  BLOCKS_PER_CHUNK,
-  CHUNK_HEIGHT,
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
-  blockIndex,
 } from '../src/domain/chunk-view'
 import { type QuadAxis, tangentAxes } from '../src/domain/faces'
 import {
@@ -33,6 +30,7 @@ import {
 import { simplifyMesh } from '../src/domain/lod'
 import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
@@ -76,22 +74,22 @@ type BlockCell = readonly [number, number, number, number]
 type FluidCell = readonly [number, number, number, number, number, number?]
 
 const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<FluidCell> = []): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[testBlockIndex(lx, y, lz)] = blockId
   }
   if (fluidCells.length === 0) {
-    return { blocks }
+    return testChunk(blocks)
   }
-  const levels = new Uint8Array(BLOCKS_PER_CHUNK)
-  const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
+  const levels = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const sources = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const falling = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, level, source, isFalling = 0] of fluidCells) {
-    levels[blockIndex(lx, y, lz)] = level
-    sources[blockIndex(lx, y, lz)] = source
-    falling[blockIndex(lx, y, lz)] = isFalling
+    levels[testBlockIndex(lx, y, lz)] = level
+    sources[testBlockIndex(lx, y, lz)] = source
+    falling[testBlockIndex(lx, y, lz)] = isFalling
   }
-  return { blocks, fluid: { falling, levels, sources } }
+  return testChunk(blocks, { falling, levels, sources })
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -206,13 +204,13 @@ describe('the height of one cell', () => {
       //    `test/mesh.test.ts`'s `the Y scan ceiling` group exists for.
       // 2. `heightIn` carries NO y-range check, because `getBlock` already
       //    Answers out-of-range with `AIR`. This is the case that exercises it:
-      //    The corner averaging probes `y + 1`, which is `CHUNK_HEIGHT` here.
+      //    The corner averaging probes `y + 1`, which is the height boundary here.
       //    A statement of the behaviour, not a guard being defended.
-      const top = CHUNK_HEIGHT - 1
+      const top = TEST_HEIGHT - 1
       const chunk = chunkWith([[8, top, 8, WATER]], [[8, top, 8, 0, 1]])
       const layers = meshChunk(chunk, {}, CONFIG)
 
-      expect(layers.fluids.length).toBe(5)
+      expect(layers.fluids.length).toBe(6)
       const surface = faceOfDirection(layers.fluids, 'yPos')
       expect(ysOf(surface as FluidQuad)).toStrictEqual([
         top + 0.875,
@@ -249,12 +247,9 @@ describe('the height of one cell', () => {
         // Wholly-missing-`FluidView` case above does: `FLUID_BYTE_UNSET`, i.e. full
         // And not a source. This is that default, witnessed with the `FluidView`
         // Present but truncated to one entry instead of absent entirely.
-        const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-        blocks[blockIndex(8, 64, 8)] = WATER
-        const chunk: ChunkView = {
-          blocks,
-          fluid: { levels: new Uint8Array(1), sources: new Uint8Array(1) },
-        }
+        const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+        blocks[testBlockIndex(8, 64, 8)] = WATER
+        const chunk = testChunk(blocks, { levels: new Uint8Array(1), sources: new Uint8Array(1) })
 
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
         expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
@@ -432,25 +427,45 @@ describe('the renderer flow descriptor', () => {
 })
 
 describe('which fluid faces exist', () => {
-  it.effect('an isolated cell emits a top and four sides — five faces, never six', () =>
+  it.effect('an isolated cell emits all six directions', () =>
     Effect.sync(() => {
-      // FIVE, NOT SIX. The reference's fluid pass has no `yNeg` case at all
-      // (`greedy-meshing-fluids.ts:70, 92, 120, 148, 176` and nothing else), so
-      // The underside of a lake is not drawn and a swimmer below one sees
-      // Through it. Transcribed rather than endorsed — docs/design-notes.md M-12
-      // Records it as the one visible gap this port did not invent geometry to
-      // Close. This test exists so that the gap is a decision on the record and
-      // Not something a later reader discovers in a renderer.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]]), {}, CONFIG)
-      expect(layers.fluids.length).toBe(5)
+      expect(layers.fluids.length).toBe(6)
       expect(layers.fluids.map((quad) => quad.direction).sort()).toStrictEqual([
         'xNeg',
         'xPos',
+        'yNeg',
         'yPos',
         'zNeg',
         'zPos',
       ])
-      expect(layers.fluids.some((quad) => quad.direction === 'yNeg')).toBe(false)
+      expect(faceOfDirection(layers.fluids, 'yNeg')?.vertices).toStrictEqual([
+        [8, 64, 8],
+        [9, 64, 8],
+        [9, 64, 9],
+        [8, 64, 9],
+      ])
+    }),
+  )
+
+  it.effect('a solid or fluid block below hides the bottom; glass does not', () =>
+    Effect.sync(() => {
+      const below = (blockId: number): ReadonlyArray<FluidQuad> =>
+        meshChunk(
+          chunkWith(
+            [
+              [8, 63, 8, blockId],
+              [8, 64, 8, WATER],
+            ],
+            [[8, 64, 8, 0, 1]],
+          ),
+          {},
+          CONFIG,
+        ).fluids.filter((quad) => quad.blockId === WATER)
+
+      expect(below(STONE).some((quad) => quad.direction === 'yNeg')).toBe(false)
+      expect(below(LAVA).some((quad) => quad.direction === 'yNeg')).toBe(false)
+      expect(below(GLASS).some((quad) => quad.direction === 'yNeg')).toBe(true)
     }),
   )
 
@@ -615,7 +630,7 @@ describe('what a fluid does to the six cube passes', () => {
 
       const withFluid = meshChunk(chunk, {}, CONFIG)
       expect(withFluid.water).toStrictEqual([])
-      expect(withFluid.fluids.length).toBe(5)
+      expect(withFluid.fluids.length).toBe(6)
 
       // And the control, which is what fixes that it is the CONFIG deciding this
       // And not the block id: the same chunk, the same id, no fluid table.
@@ -625,12 +640,10 @@ describe('what a fluid does to the six cube passes', () => {
     }),
   )
 
-  it.effect('an absent fluid table changes nothing whatsoever', () =>
+  it.effect('an absent fluid table selects the ordinary mesh path', () =>
     Effect.sync(() => {
-      // The compatibility claim `domain/opacity.ts` makes for `fluidMaxLevels`,
-      // And the reason docs/design-notes.md M-9 and M-10 keep their recorded
-      // `layered-water-glass` figures unamended. A config written before this
-      // File existed must produce byte-identical output.
+      // An absent fluid table selects no variable-height fluid geometry. The
+      // Ordinary cube path must therefore remain the only source of these faces.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -658,7 +671,7 @@ describe('what a fluid does to the six cube passes', () => {
       // A puddle — exactly the argument M-11 made for cross plates.
       const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]])
       const layers = meshChunk(chunk, {}, CONFIG)
-      expect(layers.fluids.length).toBe(5)
+      expect(layers.fluids.length).toBe(6)
       expect(totalQuadCount(layers)).toBe(0)
       expect(totalQuadArea(layers)).toBe(0)
     }),
@@ -858,15 +871,15 @@ const arbitraryFluidChunk = FastCheck.array(
   }),
   { maxLength: 8, minLength: 1 },
 ).map((boxes): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-  const levels = new Uint8Array(BLOCKS_PER_CHUNK)
-  const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const levels = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const sources = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+  const falling = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const box of boxes) {
     for (let {lx} = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
-      for (let {y} = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
+      for (let {y} = box; y < Math.min(box.y + box.sy, TEST_HEIGHT); y += 1) {
         for (let {lz} = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
-          const index = blockIndex(lx, y, lz)
+          const index = testBlockIndex(lx, y, lz)
           blocks[index] = box.blockId
           levels[index] = box.level
           sources[index] = box.source
@@ -875,7 +888,7 @@ const arbitraryFluidChunk = FastCheck.array(
       }
     }
   }
-  return { blocks, fluid: { falling, levels, sources } }
+  return testChunk(blocks, { falling, levels, sources })
 })
 
 /** A fluid quad as a string, for multiset comparison. */

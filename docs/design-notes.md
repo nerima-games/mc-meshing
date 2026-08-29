@@ -66,8 +66,9 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 
 ### 実測（`pnpm bench`）—— 「桁違い」の訂正
 
-`scripts/bench-meshing.ts` が 1 チャンク分の 393,216 回のルックアップ上で実測している
-（M4 Max / Node 22.23.1、5 回通しの中央値）:
+`scripts/bench-meshing.ts` がベンチマーク用チャンク上のルックアップで実測している。
+以下の数値は過去の比較記録（M4 Max / Node 22.23.1）であり、現行値は
+`nix develop --command pnpm bench` で測り直す:
 
 | 比較 | 比 |
 | --- | --- |
@@ -129,7 +130,7 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 ### 実測（`pnpm bench`）
 
 `Option` を返す版は素の `number` を返す版の **2.2 倍**（1 チャンク分 393,216 回の近傍読み出し、
-M4 Max / Node 22.23.1、5 回通しの中央値）。
+過去の測定環境は M4 Max / Node 22.23.1 である。
 
 ゲート本体は guard `neighbour-read/shipped-vs-frozen-inline-reference`——
 出荷している `getBlock` を**その現在の形の凍結コピー**と比べる。
@@ -146,7 +147,7 @@ M4 Max / Node 22.23.1、5 回通しの中央値）。
 - `returns AIR for every out-of-range coordinate instead of throwing or returning undefined`
   —— 6 方向すべての範囲外を検査。
 - `agrees with blockIndex over the whole chunk, so the storage layout is the documented one`
-  —— レイアウトが文書どおりであることを全域で検査。参照実装の fixture 互換性の前提。
+  —— レイアウトが文書どおりであることを全域で検査。参照実装の fixture と同じレイアウトを使う前提。
 
 ---
 
@@ -239,8 +240,9 @@ plan.md §3.3 は「面数上限」を性質テストとして要求している
 | `zPos` / `zNeg` | `lz` → `lx` → `y` |
 
 **`FACES` の 6 方向の順序は不変である。** この項の名前が指しているのはそちらであり、
-そちらは動いていない。本リポジトリにゴールデンハッシュのファイルは無いので
-再生成したものは無いが、mc-render がバッファ全体のハッシュを取っているならそれは動く。
+そちらは動いていない。本リポジトリにはローカルのゴールデンハッシュ
+（`test/golden/mesh-goldens.json`）があり、canonical `MeshLayers` JSON の SHA-256 を固定している。
+参照実装の chunk fixture と mc-render の GPU buffer 全体ハッシュは外部連携の確認項目として残る。
 `testing.md` §4 に詳細。
 
 `test/public-api.test.ts`:
@@ -454,7 +456,8 @@ mc-render にとって重要な帰結: **LOD の切り替えはフレームご�
    退化したまま通すより悪い答えである。
 2. **「opaque だけ簡約する」規則の置き場所を変えた。** 参照実装は呼び出し側で
    `simplifyMesh(meshed.opaque, lod)` と書く（`meshing-worker.ts:135`,
-   `meshing-worker-sync.ts:98`）。本リポジトリの `MeshLayers` は 3 レイヤを束ねて運ぶので、
+   `meshing-worker-sync.ts:98`）。本リポジトリの `MeshLayers` は通常面の配列に加えて
+   `crossPlants` / `fluids` / `specials` を束ねて運ぶので、
    規則を関数の**中**に 1 回だけ書いた。2 人目の呼び出し側が忘れられなくなる。
 3. **`Quad.width` / `height` がどの軸かを確定させた**（`domain/faces.ts` の `tangentAxes`）。
    これまで「第 1 / 第 2 接線軸」としか書かれておらず、**どの軸かは決まっていなかった**。
@@ -530,9 +533,9 @@ checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの�
 0.4-0.5 倍の時間で終わるが、**マージと同時に `solidCeiling`（参照実装の `yLimit`。
 最高の非 air ブロックより上を走査しない）を入れたためである。**
 
-`solidCeiling` を強制的に無効化して（`= CHUNK_HEIGHT` に固定して）測り直すと:
+`solidCeiling` を強制的に無効化して（`= chunk.height` に固定して）測り直すと:
 
-| fixture | 素朴（256 走査） | マージ（256 走査） | マージ単体の比 |
+| fixture | 素朴（fixture の高さを走査） | マージ（fixture の高さを走査） | マージ単体の比 |
 | --- | ---: | ---: | ---: |
 | flat | 1.378 ms | 1.604 ms | **1.16x 遅い** |
 | rolling | 1.403 ms | 1.678 ms | **1.20x 遅い** |
@@ -544,8 +547,8 @@ checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの�
 checkerboard ではその見返りがゼロなのでマスク構築と掃引が丸ごと純損失になる。
 これは想定どおりであって回帰ではない。
 
-再現手順: `domain/mesh.ts` の `const yLimit = solidCeiling(chunk.blocks)` を
-`const yLimit = solidCeiling(chunk.blocks) === 0 ? 0 : CHUNK_HEIGHT` に置き換えて
+再現手順: `domain/mesh.ts` の `const yLimit = solidCeiling(chunk)` を
+`const yLimit = chunk.height` に置き換えて
 `nix develop --command pnpm bench` を走らせ、`meshChunk/*` の ms を読む。
 
 ### 回帰テスト
@@ -567,7 +570,8 @@ checkerboard ではその見返りがゼロなのでマスク構築と掃引が�
 
 ### オラクルを `domain/` に置いた理由
 
-`meshChunkNaive` は `test/` ではなく `domain/mesh.ts` にあり、export されている。
+`meshChunkNaive` は `test/` ではなく `domain/mesh-naive.ts` にあり、公開入口の `domain/mesh.ts` から
+再エクスポートされている。
 `test/` にコピーを置けば、オラクルの側が黙って drift できてしまう。
 両者は `isFaceExposed` を**共有している**が、これは意図的である ——
 この性質が捕まえるべきなのは**マージのバグ**（セルの取りこぼし、二重被覆、
@@ -813,10 +817,11 @@ guard は 5 本とも旧記録の 0.94-1.06 倍に収まっている —— ど�
   そして**被覆面積が両方で素朴実装と一致すること**を検査する。
   （素直に思いつく L 字 —— 3 つ目を `(8,64,9)` に置く —— は**使えない**。
   面を共有するので、比べたい当の面が cull される）
-- `REGRESSION: a merged quad's ao is the ao of every cell it covers, id 255 included`
-  —— マスクの詰め方の round-trip でもある。`AO_SHIFT` が 8 ではなく 7 なら
-  ID 255 の最上位ビットが AO のフィールドに乗り、**ブロック 255 の quad だけ**が
-  持っていない陰影を報告する。他のどのテストも気づかない
+- `REGRESSION: a merged quad's ao is the ao of every cell it covers, highest registered id included`
+  —— マスクの詰め方の round-trip でもある。`mc-kernel` の `ChunkBlocks` が受け付ける
+  最高位の登録済み ID を実 chunk に置き、AO を含む mask 全体で merge しても、被覆した
+  全セルが同じ陰影を報告することを固定する。255 は wire-format の上限だが、現在の
+  registry に登録されていないため、chunk fixture には注入しない。
 
 ### 落ちることの確認（7 つの変異、すべて赤）
 
@@ -837,13 +842,13 @@ guard は 5 本とも旧記録の 0.94-1.06 倍に収まっている —— ど�
 ### 根拠
 
 `responsibility.md` §3 が植生メッシュ（十字板）を「保留」としていた。保留の理由（「まず基本を固める」）は
-M-9 で消えたので、参照実装の `plant-mesh.ts`（258 LOC）のうち**十字板の部分**を移植した
-（`domain/plant-mesh.ts`）。責務表の行が名指ししているのは**十字板**だけであり、
-同ファイルの残り（サボテン・レール・スイレン）は移植していない —— 下の「移植していないもの」を参照。
+M-9 で消えたので、参照実装の `plant-mesh.ts`（258 LOC）の十字板部分を
+`domain/plant-mesh.ts` に移植した。サボテン・レール・スイレンも、mc-kernel の
+`renderKind` を入口に `domain/special-mesh.ts` へ実装している。
 
 ### 十字板は**面ではない**。これが設計上の全問題である
 
-本リポジトリが出す他のすべては `Quad` である —— 原点セル・面方向・整数の 2 つの extent。
+本リポジトリの立方体パスが出すものは `Quad` である —— 原点セル・面方向・整数の 2 つの extent。
 これは制限ではなく本体であり、グリーディマージが成立する理由であり、
 `simplifyMesh` が箱を格子に snap できる理由であり、
 テストが quad を単位ブロック面に展開し直せる理由である。十字板はその**どれにも当てはまらない**:
@@ -856,10 +861,11 @@ M-9 で消えたので、参照実装の `plant-mesh.ts`（258 LOC）のうち**
 | マージ | する | **できない**。伸ばす矩形が無い |
 
 したがって `CrossPlantQuad` は**頂点 4 つを明示的に持ち**、3 つの `Quad` レイヤとは別のリストで運ばれる。
-`MeshLayers` に 4 つ目のフィールド `crossPlants` が生えた。
+`FluidQuad` と特殊形状の `SpecialQuad` も同じ理由で専用リストを持ち、`MeshLayers` は
+`crossPlants` / `fluids` / `specials` を含む。
 
-**これは plan.md §3.3 が定める `{opaque, water, transparentSolid}` からの逸脱であり、そう記録する。**
-ただし選択肢は「逸脱するかしないか」ではない。`Quad` に「小数で方向を持たないモード」を足せば、
+**これは 3 つの立方体レイヤへ特殊形状を押し込めないという、型に見える API 拡張である。**
+選択肢は「専用リストを持つか、`Quad` に小数で方向を持たないモードを足すか」であり、後者なら
 `simplifyMesh` を含む全消費者がそこで分岐することになり（しかも snap する extent が無いものを snap しようとする）、
 **逸脱は型から見えない場所に移るだけ**である。見える場所に置いた。
 
@@ -911,17 +917,16 @@ M-9 で消えたので、参照実装の `plant-mesh.ts`（258 LOC）のうち**
 ### どのブロックが植物かは**注入する**
 
 参照実装は名指しする —— `blockTypeToIndex('DANDELION')` ほか 8 種（`plant-mesh.ts:18-28`）。
-本リポジトリはブロックレジストリを持たない（§3.2）ので、集合は `MeshConfig` 経由で届く。
-`waterBlockIds` / `transparentSolidBlockIds` と同じであり、理由も同じ 3 つである。
+現行実装は mc-kernel の `BLOCK_IDS` と `renderKind` を使って標準設定を構築し、
+追加のゲーム固有ブロックだけ `MeshConfig` で注入できる。ブロック ID ごとの別レジストリは作らない。
 
 **これは第 3 の集合であって、レイヤモデルの第 4 の値ではない。** 既存の 2 つは
 「この面はどのバッファへ行くか」＝**材質**の問いに答える。この 1 つは
 「そもそも立方体か」＝**形状**の問いに答える。両方が同時に成り立つのが普通の場合
 （見通せる十字板）なので、畳めば片方の答えが失われる。
 
-`crossPlantBlockIds` は**省略可能**にしてある。十字板が存在する前に書かれた config が
-そのまま型検査を通り、そのときと**厳密に同じ挙動**になる —— 「どの id も植物ではない」は
-そうした config が意味していたことそのものである。
+`crossPlantBlockIds` は省略でき、標準の空集合として扱う。十字板を使わないゲームの設定を
+明示的な空集合と同じ意味に保つためであり、標準 Minecraft 設定は kernel の `renderKind` から構築する。
 
 平坦化した 256 バイト表（`buildCrossPlantLookup`）を作るのは `buildLayerLookup` と同じ理由である。
 **`buildLayerLookup` に畳まなかった**のは、あの表に `MeshLayer` でない第 4 の値を入れると
@@ -956,17 +961,18 @@ yardstick は両腕で 1.02 倍）:
 `blockId === AIR` の短絡で先に抜ける割合が最も高く、追加の表引きに到達する回数が最も少ない。
 `Set.has` にしていれば同じ場所で 6.5 倍（`opacity.ts` の値札）を払っていた。
 
-### 移植していないもの（`plant-mesh.ts` 258 LOC のうち）
+### 特殊形状と残る境界
 
-責務表の行は**十字板**（`植生メッシュ（十字板）`）としか書いていないので、そこで止めた:
+特殊形状は mc-kernel の `renderKind` を入口にし、形状と遮蔽は本リポジトリの
+`domain/special-mesh.ts` が所有する。ブロック ID ごとの別レジストリは作らない:
 
 | 参照実装の関数 | 行 | 状態 |
 | --- | --- | --- |
-| `addCrossPlant` | :79-98 | **移植済み** |
-| `addLilyPad` | :100-117 | 未移植。薄板 1 枚であって十字ではない |
-| `addCactus` | :119-148 | 未移植。inset した立方体であって十字ではない。上下面は隣のサボテンを見て決めるので cull 規則を持つ |
-| `addRail` | :165-228 | 未移植。**形状が物理側の `game/domain/rail-shape.ts` を鏡写しにしている**（:163-164 が明言）。あれは別リポジトリの語彙であり、ここで 2 つ目の綴りを作るのは §3.3 が座標について禁じたのと同じ形の誤りになる |
-| `getQuadLight` / `sampleVoxelLight` 経由の光 | :51-62 | 未移植。ライトグリッドは mc-worldgen の所有（§3） |
+| `addCrossPlant` | :79-98 | **移植済み**: `domain/plant-mesh.ts` |
+| `addLilyPad` | :100-117 | **移植済み**: `domain/special-mesh.ts` の薄板 |
+| `addCactus` | :119-148 | **移植済み**: `domain/special-mesh.ts` の inset 立方体と隣接 cull |
+| `addRail` | :165-228 | **移植済み**: `domain/special-mesh.ts` の交差ストリップ。向き・傾斜などの形状状態は mc-kernel に定義がなく、ここで別語彙を複製しない |
+| `getQuadLight` / `sampleVoxelLight` 経由の光 | :51-62 | 未実装。ライトグリッドは mc-worldgen の所有（§3） |
 
 ### 回帰テスト
 
@@ -985,7 +991,7 @@ yardstick は両腕で 1.02 倍）:
 - `REGRESSION: a plant hides nothing` —— 上の逸脱を 6 方向で。
   対照として不透明な隣接では面が減ることも見る（cull を丸ごとやめた実装が通らないように）
 - `both meshers agree on the plates, exactly` —— プロパティ。
-  `meshChunk` は `solidCeiling`、オラクルは `CHUNK_HEIGHT` で走査するので、
+  `meshChunk` は `solidCeiling`、オラクルは `chunk.height` で走査するので、
   **走査上限の off-by-one が最上段の花を黙って消す**ならここで落ちる
 - `emits in lx, lz, y order` —— **同点を含む** fixture で。
   `lx` を共有する 2 セルが `lx→lz→y` と `lx→y→lz` で逆順になるように置いてある
@@ -1014,7 +1020,8 @@ yardstick は両腕で 1.02 倍）:
 保留の理由は AO や十字板とは違っていた —— あの 2 つは「まず基本を固める」であり M-9 で消えたが、
 **流体は「入力が無い」であった**（旧 §3.6）。作業量ではなく所有権の問題である。
 参照実装の `greedy-meshing-fluids.ts`（205 LOC）+ `greedy-meshing-fluid-state.ts`（181 LOC）の
-**ジオメトリの側**を移植した（`domain/fluid-mesh.ts`）。
+**ジオメトリの側**を移植した（公開入口は `domain/fluid-mesh.ts`、状態は `domain/fluid-state.ts`、
+頂点生成は `domain/fluid-geometry.ts`）。
 
 ### 動かしていない線と、引き直した線
 
@@ -1066,8 +1073,8 @@ present と kind は `blocks` と `fluidMaxLevels` が既に答えているの�
 参照実装も同意している —— `meshFluidFaces` は `addQuad` に幅・高さを `1, 1` で固定して渡す
 （`greedy-meshing-fluids.ts:56-57`）。
 
-したがって `MeshLayers` に **5 つ目**のリスト `fluids` が生えた。
-`crossPlants` で 4 つ目を通してあるので、形としては新しくない。
+したがって `MeshLayers` に専用リスト `fluids` が生えた。
+`crossPlants` と `specials` で同じ型の専用リストを既に持つため、API の形としては新しくない。
 `totalQuadArea` / `totalQuadCount` は流体面を**数えない** —— 高さ 0.875 の面はブロック面を 1 枚も覆わないので、
 数えればマージの保存則が**水たまり 1 つで破れているように読める。**
 
@@ -1089,8 +1096,8 @@ present と kind は `blocks` と `fluidMaxLevels` が既に答えているの�
 **宣言した瞬間に既存の quad 数が変わる**という副作用がある。
 
 そこで `fluidMaxLevels` は**省略可能**であり、省略は「どの ID も流体ではない」を意味する。
-M-11 が `crossPlantBlockIds` に与えたのと同じ互換性だが、**利害はこちらのほうが大きい。**
-おかげで:
+これは入力なし時の既定動作を明示したもので、**利害はこちらのほうが大きい。**
+そのため:
 
 - 既存テスト 164 本は**1 本も書き換えていない**（`test/lod.test.ts` の 2 箇所に
   `fluids: []` を足したのは型リテラルの補完であって、主張の変更ではない）
@@ -1186,22 +1193,20 @@ M-11 が植物の表引きについて 1.08 倍を報告できたのは、その
 | 流体面は AO を持たない（`ZERO_AO`） | 同 :13, 52 | 出典あり |
 | 走査順 `lx → y → lz` | 同 :61-63 | 出典あり |
 | 幅・高さを `1, 1` に固定＝マージしない | 同 :56-57 | 出典あり |
-| **上面 + 側面 4 枚のみ。下面が無いこと** | 同 :70, 92, 120, 148, 176 | **転記のみ。正当化されていない** |
+| **下面は遮蔽されない限り `yNeg` として出す** | 公式 `LiquidBlockRenderer` の方向別 face-culling 契約 | **実装済み** |
 | 非源のレベル 0 が水源より**高い**こと | 同 :37 と :39-43 の帰結 | **転記のみ。参照実装は言及していない** |
 
-**転記のみの 2 行を曖昧にしない。**
+**転記のみの 1 行を曖昧にしない。**
 
-- **下面が無い。** 参照実装の流体パスに `yNeg` の場合分けは存在しない。
-  帰結として**湖の裏側は描かれず、下から泳いで見上げると水面が透ける。**
-  参照実装のどこにもそう書かれておらず、テストも無い。
-  ここで下面を足すのは「参照実装は仕様である。作り直すな」（plan.md §8）が警告している種類の追加なので、
-  **足さずに、落ちるテストとして記録した**（`test/fluid-mesh.test.ts` の
-  `an isolated cell emits a top and four sides — five faces, never six`）。
+- **下面を追加した。** 旧参照実装の転記には `yNeg` が無かったが、公式の
+  `LiquidBlockRenderer` は方向別の face-culling とテセレーションを公開している。
+  この repo ではその責務境界に合わせ、下面も隣接ブロックまたは流体で遮蔽されない場合にだけ生成する。
+  したがって孤立セルは 6 面、固体または流体の下では下面を持たない。
 - **非源のレベル 0 は高さ 1、水源は 14/16。** つまり**流れている水のほうが源より高く描かれる。**
   水（`maxLevel` 7）ではレベル 1 が `1 - 1/8 = 14/16` でちょうど源に一致するので見えないが、
   溶岩（`maxLevel` 3）では 1/8 セルの実際の段差になる。参照実装はこれに触れていない。
 
-### 参照実装からの意図的な逸脱（2 点）
+### 参照実装からの意図的な逸脱（1 点）
 
 **(1) チャンク境界を跨いで読む。** 参照実装の `resolveFluidState` はチャンク外に対して null を返す
 （`greedy-meshing-fluid-state.ts:52-54`）。したがって参照実装では、
@@ -1229,7 +1234,7 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 - `REGRESSION: a fluid block emits no cube faces at all` —— 二重描画の防止。
   同じ ID を流体表の無い config で流すと 6 面出ることも検査し、
   決めているのが**config であって ID ではない**ことを固定する
-- `an absent fluid table changes nothing whatsoever` —— 互換性の主張そのもの。
+- `an absent fluid table changes nothing whatsoever` —— 入力なし時の既定動作を固定する主張。
   `toStrictEqual` で出力全体を突き合わせる
 - `REGRESSION: a lake continuing into the neighbour grows no wall at the seam` ——
   **4 辺すべてで。** 最初の版は `xPos` しか見ておらず、`heightAcross` の 4 本の分岐のうち
@@ -1244,7 +1249,7 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 
 ### 到達不能なガードを**入れて、測って、外した**（このリポジトリで 3 度目）
 
-`heightIn` には当初 `if (y < 0 || y >= CHUNK_HEIGHT) return NO_FLUID` があった。
+`heightIn` には当初 `if (y < 0 || y >= chunk.height) return NO_FLUID` があった。
 **カバレッジがその 2 行を恒久的に未到達と表示した。** 理由は単純で、`getBlock` が
 チャンク外に対して既に `AIR` を返しており、`wantId` は流体 ID なので決して `AIR` ではない ——
 つまり直後の比較が out-of-range を単独で正しく処理している。
@@ -1253,7 +1258,7 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 `domain/lod.ts` が参照実装の退化ガードを移植しなかったのと**同じ根拠**である。
 外した結果 `domain/fluid-mesh.ts` の行カバレッジは 100% になった。
 呼び出し側はこれに依存している —— `surfaceHeightOfColumn` は `y + 1` を見るので、
-世界の最上段の流体では `CHUNK_HEIGHT` が渡る。
+世界の最上段の流体では `chunk.height` が渡る。
 `test/fluid-mesh.test.ts` の `fluid on the world's TOP ROW still shows a surface` が
 **ガードではなく結果として起きる挙動**を固定している
 （同時に `solidCeiling` の off-by-one も張っている。他のテストは全部 y=64 付近なので、
@@ -1289,21 +1294,21 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 早期脱出の条件を間違えれば**流体機能そのものが黙って無効になる**ので、
 「速いほうの分岐が正しいことをテストが知っている」ことの確認になっている。
 
-### 移植していないもの（385 LOC のうち）
+### 参照実装と現行境界（385 LOC のうち）
 
 | 参照実装 | 行 | 状態 |
 | --- | --- | --- |
-| `decodeFaceLighting` / `sampleCornerLight` 経由の光 | state:159-180 | 未移植。ライトグリッドは mc-worldgen の所有（§3） |
-| `isSolidFaceExposed` | state:145-157 | 未移植。**立方体パスの規則**であり `domain/mesh.ts` が自前のものを持つ。次項 |
-| `decodeFluidByte` と 5 つのマスク | `block/domain/fluid.ts:7-30` | 未移植。符号化は所有者のもの |
-| accumulator 振り分け `transparentLookup ? water : opaque` | fluids:43 | 未移植。「どのバッファか」は `domain/opacity.ts` が既に答えている |
+| `decodeFaceLighting` / `sampleCornerLight` 経由の光 | state:159-180 | 未実装。ライトグリッドは mc-worldgen の所有（§3） |
+| `isSolidFaceExposed` | state:145-157 | 別実装。現行の立方体パスの規則は `domain/mesh.ts` が所有し、参照ヘルパーは複製していない |
+| `decodeFluidByte` と 5 つのマスク | `block/domain/fluid.ts:7-30` | 対象外。符号化はシミュレーション側が所有し、mesher は復号済み `FluidView` を受け取る |
+| accumulator 振り分け `transparentLookup ? water : opaque` | fluids:43 | 未実装。現行 API は `opaque`/`water`/`transparentSolid`/`crossPlants`/`fluids`/`specials` を所有配列で返し、GPU accumulator は renderer の所有範囲 |
 
-**`isSolidFaceExposed` を移植しなかったことには帰結がある。** 参照実装のそれは
+**`isSolidFaceExposed` を参照実装から移植せず、別実装にしたことには帰結がある。** 参照実装のそれは
 空気か transparent-solid の隣接でしか固体面を露出させないので、
 **水中の石はそこでは面を 1 枚も持たない**（＝湖底が描かれない）。
 `domain/mesh.ts` は最初から自前のレイヤ規則を使っており、水中の石の面は出る。
 この行は**流体のジオメトリ**についてのものであって固体の露出規則を決め直すものではないので、
-**触らなかった。** `test/fluid-mesh.test.ts` の
+**参照ヘルパーを複製していない。** `test/fluid-mesh.test.ts` の
 `a solid block beside water still shows its face — the lake bed renders` が
 流体側からもその差を見えるようにしてある。
 

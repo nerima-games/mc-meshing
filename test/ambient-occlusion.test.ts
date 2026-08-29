@@ -12,20 +12,23 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
+import { BLOCK_IDS } from '@nerima-games/mc-kernel'
 import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../src/domain/ambient-occlusion'
 import {
-  BLOCKS_PER_CHUNK,
-  CHUNK_HEIGHT,
   CHUNK_SIZE,
   type ChunkView,
-  blockIndex,
   emptyChunk,
 } from '../src/domain/chunk-view'
 import { FACE_DIRECTIONS, type FaceDirection } from '../src/domain/faces'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 
 const STONE = 1
 const WATER = 2
 const GLASS = 3
+if (BLOCK_IDS.length === 0) {
+  throw new Error('mc-kernel block registry must contain at least one block')
+}
+const HIGHEST_REGISTERED_BLOCK_ID = BLOCK_IDS.at(-1)!
 
 /** Well clear of every chunk face, so no test below is measuring a boundary by accident. */
 const CENTRE = [8, 64, 8] as const
@@ -33,11 +36,11 @@ const CENTRE = [8, 64, 8] as const
 type Cell = readonly [number, number, number]
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[testBlockIndex(lx, y, lz)] = blockId
   }
-  return { blocks }
+  return testChunk(blocks)
 }
 
 const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, number] => [
@@ -361,7 +364,7 @@ describe('what counts as an occluder', () => {
       // OCCLUDES a face. Nothing in this repository has measured whether that is
       // Right; this test pins the rule as ported so that changing it has to be a
       // Decision rather than a drift. See docs/design-notes.md M-10.
-      for (const blockId of [STONE, WATER, GLASS, 255]) {
+      for (const blockId of [STONE, WATER, GLASS, HIGHEST_REGISTERED_BLOCK_ID]) {
         const chunk = chunkWith([
           [...CENTRE, STONE],
           [CENTRE[0], CENTRE[1] + 1, CENTRE[2] + 1, blockId],
@@ -373,7 +376,7 @@ describe('what counts as an occluder', () => {
 
   it.effect('the emitting block is not its own occluder, whatever it is made of', () =>
     Effect.sync(() => {
-      for (const blockId of [STONE, WATER, GLASS, 255]) {
+      for (const blockId of [STONE, WATER, GLASS, HIGHEST_REGISTERED_BLOCK_ID]) {
         const chunk = chunkWith([[...CENTRE, blockId]])
         for (const direction of FACE_DIRECTIONS) {
           expect(ambientOcclusionAt(chunk, {}, direction, ...CENTRE)).toBe(AO_NONE)
@@ -456,7 +459,7 @@ describe('chunk boundaries', () => {
       // Y is not a chunk axis with a neighbour — chunks are full-height columns
       // (`domain/chunk-view.ts`) — so the samples above y=255 and below y=0 have
       // Nowhere to come from at all.
-      const roof = [8, CHUNK_HEIGHT - 1, 8] as const
+      const roof = [8, TEST_HEIGHT - 1, 8] as const
       const floor = [8, 0, 8] as const
       const chunk = chunkWith([
         [...roof, STONE],
@@ -475,7 +478,7 @@ describe('chunk boundaries', () => {
       // Could reorder the exposure check and the AO computation.
       const chunk = chunkWith([[9, 64, 8, STONE]])
       expect(ambientOcclusionAt(chunk, {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
-      expect(ambientOcclusionAt(emptyChunk(), {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
+      expect(ambientOcclusionAt(emptyChunk(TEST_HEIGHT), {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
     }),
   )
 })

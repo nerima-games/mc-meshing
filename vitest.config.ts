@@ -33,14 +33,7 @@ export default defineConfig({
       all: true,
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
-      // TEST_STANDARD.md §3: 4-metric 99% gate, enabled org-wide with no
-      // staged rollout. As of the org-standard migration, real measured
-      // coverage here is statements 100% / branches 95.89% / functions 100% /
-      // lines 100% (see coverage/coverage-final.json), so this gate makes CI
-      // red on `branches` until that gap is closed. That is the expected,
-      // accepted result of turning the gate on (TEST_STANDARD.md §3), not a
-      // reason to defer or lower the threshold.
-      thresholds: { branches: 99, functions: 99, lines: 99, statements: 99 },
+      thresholds: { branches: 100, functions: 100, lines: 100, statements: 100 },
     },
   },
   esbuild: {

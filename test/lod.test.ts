@@ -18,7 +18,7 @@
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck, Schema } from 'effect'
 import { AO_NONE } from '../src/domain/ambient-occlusion'
-import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
+import { CHUNK_SIZE, type ChunkView, emptyChunk } from '../src/domain/chunk-view'
 import { FACES, FACE_DIRECTIONS, type FaceDirection, faceOf, tangentAxes } from '../src/domain/faces'
 import { LOD_LEVELS, type LodLevel, LodLevelSchema, STEP_FOR_LOD, packQuadKey, simplifyMesh } from '../src/domain/lod'
 import {
@@ -30,6 +30,7 @@ import {
   totalQuadCount,
 } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 
 const STONE = 1
 const GRASS = 2
@@ -42,11 +43,11 @@ const CONFIG: MeshConfig = {
 }
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[testBlockIndex(lx, y, lz)] = blockId
   }
-  return { blocks }
+  return testChunk(blocks)
 }
 
 /** A solid `side` x `side` x 1 slab of stone at y=64, anchored at the origin. */
@@ -132,7 +133,7 @@ describe('packQuadKey', () => {
       // Per component where aliasing can occur at all: the two ends and the
       // First step off zero. 3^9 = 19,683 packings, every one distinct.
       const coordinates = [0, 1, CHUNK_SIZE]
-      const heights = [0, 1, CHUNK_HEIGHT]
+      const heights = [0, 1, TEST_HEIGHT]
       const normals = [-1, 0, 1]
       const keys = new Set<number>()
       let packed = 0
@@ -192,7 +193,7 @@ describe('LOD 0 and the empty cases', () => {
 
   it.effect('returns the same object when there is no opaque geometry to simplify', () =>
     Effect.sync(() => {
-      const empty = meshChunk(emptyChunk(), {}, CONFIG)
+      const empty = meshChunk(emptyChunk(TEST_HEIGHT), {}, CONFIG)
       for (const level of LOD_LEVELS) {
         expect(simplifyMesh(empty, level)).toBe(empty)
       }
@@ -312,14 +313,14 @@ describe('what snapping does to one quad', () => {
 
       // An x-facing side spans (y, z): `width` runs along Y and is left alone,
       // `height` runs along Z and is snapped from [3, 8] out to [2, 8].
-      const [side] = simplifyMesh({ crossPlants: [], fluids: [], opaque: [oblong({})], transparentSolid: [], water: [] }, 1).opaque
+      const [side] = simplifyMesh({ crossPlants: [], fluids: [], opaque: [oblong({})], specials: [], transparentSolid: [], water: [] }, 1).opaque
       expect([side?.lx, side?.y, side?.lz]).toStrictEqual([5, 7, 2])
       expect([side?.width, side?.height]).toStrictEqual([3, 6])
 
       // A top face spans (x, z): both are snapped. [3, 6] -> [2, 6] and
       // [5, 10] -> [4, 10].
       const [top] = simplifyMesh(
-        { crossPlants: [], fluids: [], opaque: [oblong({ direction: 'yPos', role: 'top', lx: 3, y: 64, lz: 5, width: 3, height: 5 })], transparentSolid: [], water: [] },
+        { crossPlants: [], fluids: [], opaque: [oblong({ direction: 'yPos', role: 'top', lx: 3, y: 64, lz: 5, width: 3, height: 5 })], specials: [], transparentSolid: [], water: [] },
         1,
       ).opaque
       expect([top?.lx, top?.y, top?.lz]).toStrictEqual([2, 64, 4])

@@ -1,8 +1,6 @@
 /**
  * The three-valued opacity model, and why a boolean will not do.
  *
- * FIRST CUT (叩き台).
- *
  * ---------------------------------------------------------------------------
  * A boolean `transparent` flag is INSUFFICIENT. This is measured, not opined.
  * ---------------------------------------------------------------------------
@@ -46,7 +44,14 @@
  * `MESH_LAYER_PRIORITY` exists so the order is a value that can be tested, not
  * a shape baked into a conditional that a future edit can silently reorder.
  */
-import { AIR } from './chunk-view'
+import {
+  AIR_BLOCK_ID as AIR,
+  BLOCK_ID_MAX,
+  type CollisionShape,
+  type RenderKind,
+} from '@nerima-games/mc-kernel'
+
+export { BLOCK_ID_MAX }
 
 /**
  * Which geometry buffer a face belongs to.
@@ -110,9 +115,8 @@ export type MeshConfig = {
    * about SHAPE. A block can be both — a see-through cross plate is the normal
    * case — so collapsing them would lose one of the two answers.
    *
-   * Optional, so that a config written before cross plates existed still
-   * typechecks and behaves exactly as it did: absent means no id is a plant,
-   * which is what every such config meant.
+   * Optional so a custom configuration can intentionally select no cross-plate
+   * blocks; an absent table means that shape family is disabled.
    */
   readonly crossPlantBlockIds?: ReadonlySet<number>
   /**
@@ -120,8 +124,8 @@ export type MeshConfig = {
    * the highest LEVEL that fluid's propagation can reach. See
    * `domain/fluid-mesh.ts`.
    *
-   * A FOURTH ENTRY, and a MAP where the other three are sets, because a fluid id
-   * on its own is not enough to place a surface. The height of a cell is
+   * A separate MAP rather than a Set, because a fluid id on its own is not
+   * enough to place a surface. The height of a cell is
    * `1 - level / (maxLevel + 1)` (`greedy-meshing-fluid-state.ts:39-43`), and
    * `maxLevel` differs per fluid: the reference has 7 for water and 3 for lava
    * (`fluid-model.ts:15-16`). Naming those two numbers here would be a second
@@ -137,12 +141,17 @@ export type MeshConfig = {
    * whether the block is a cube at all. Water is normally in both, and lava is
    * normally in this one only — it is a fluid, but it is not blended.
    *
-   * Optional for the same compatibility reason as `crossPlantBlockIds`, and here
-   * the stakes are higher: declaring an id a fluid removes its cube faces, so an
-   * absent map is what keeps every existing quad count and recorded baseline in
-   * this repository unchanged.
+   * Optional so a custom configuration can intentionally select no variable-
+   * height fluids; an absent map means every block keeps cube geometry.
    */
   readonly fluidMaxLevels?: ReadonlyMap<number, number>
+  /**
+   * Shape information derived from the kernel block registry. An absent table
+   * intentionally disables the shape-specific meshers for special render kinds.
+   */
+  readonly renderKindByBlockId?: ReadonlyMap<number, RenderKind>
+  /** Fixed collision-derived shapes whose geometry does not require block state. */
+  readonly collisionShapeByBlockId?: ReadonlyMap<number, CollisionShape>
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
@@ -151,9 +160,6 @@ export const EMPTY_MESH_CONFIG: MeshConfig = {
   transparentSolidBlockIds: new Set<number>(),
   waterBlockIds: new Set<number>(),
 }
-
-/** Largest block id representable in the chunk's `Uint8Array` storage. */
-export const MAX_BLOCK_ID = 255
 
 /**
  * Classify one block id. Total: every id lands in exactly one layer.
@@ -190,11 +196,11 @@ const TABLE_SIZE_OFFSET = 1
 const BLOCK_ID_STEP = 1
 
 /** Size of a byte-indexed table covering every representable block id. */
-const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
+const BLOCK_ID_TABLE_SIZE = BLOCK_ID_MAX + TABLE_SIZE_OFFSET
 
 export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
   const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
-  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += BLOCK_ID_STEP) {
+  for (let blockId = 0; blockId <= BLOCK_ID_MAX; blockId += BLOCK_ID_STEP) {
     lookup[blockId] = MESH_LAYERS.indexOf(layerOfBlockId(config, blockId))
   }
   return lookup

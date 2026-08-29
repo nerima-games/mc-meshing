@@ -19,15 +19,13 @@
  */
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
+import { BLOCK_IDS } from '@nerima-games/mc-kernel'
 import { AO_MAX } from '../src/domain/ambient-occlusion'
 import {
   AIR,
-  BLOCKS_PER_CHUNK,
-  CHUNK_HEIGHT,
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
-  blockIndex,
   emptyChunk,
   getBlock,
   getBlockAcrossBoundary,
@@ -43,11 +41,16 @@ import {
 } from '../src/domain/faces'
 import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
 const WATER = 2
 const GLASS = 3
+if (BLOCK_IDS.length === 0) {
+  throw new Error('mc-kernel block registry must contain at least one block')
+}
+const HIGHEST_REGISTERED_BLOCK_ID = BLOCK_IDS.at(-1)!
 
 /**
  * Every unit block-face a quad covers, as `direction:lx,y,lz:blockId:ao` strings.
@@ -98,11 +101,11 @@ const everyQuad = (layers: MeshLayers): ReadonlyArray<Quad> => [
 ]
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[testBlockIndex(lx, y, lz)] = blockId
   }
-  return { blocks }
+  return testChunk(blocks)
 }
 
 const CONFIG: MeshConfig = {
@@ -161,7 +164,7 @@ const scatteredSortedBy = (first: CellAxis, second: CellAxis, third: CellAxis): 
 describe('face count', () => {
   it.effect('an empty chunk produces no faces at all', () =>
     Effect.sync(() => {
-      const layers = meshChunk(emptyChunk(), {}, EMPTY_MESH_CONFIG)
+      const layers = meshChunk(emptyChunk(TEST_HEIGHT), {}, EMPTY_MESH_CONFIG)
       expect(totalQuadCount(layers)).toBe(0)
     }),
   )
@@ -257,7 +260,7 @@ describe('face count', () => {
           FastCheck.array(
             FastCheck.tuple(
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-              FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+              FastCheck.integer({ max: TEST_HEIGHT - 1, min: 0 }),
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
               FastCheck.constantFrom(STONE, WATER, GLASS),
             ),
@@ -267,8 +270,8 @@ describe('face count', () => {
             const chunk = chunkWith(cells.map(([lx, y, lz, id]) => [lx, y, lz, id] as const))
             const layers = meshChunk(chunk, {}, CONFIG)
             let solidCells = 0
-            for (let index = 0; index < BLOCKS_PER_CHUNK; index += 1) {
-              if ((chunk.blocks[index] ?? AIR) !== AIR) {
+            for (let index = 0; index < TEST_BLOCKS_PER_CHUNK; index += 1) {
+              if (chunk.blocks.get(index) !== AIR) {
                 solidCells += 1
               }
             }
@@ -396,7 +399,7 @@ describe('quad extent and role', () => {
     [6, 30, 9, WATER],
     [11, 200, 4, GLASS],
     [0, 0, 0, STONE],
-    [CHUNK_SIZE - 1, CHUNK_HEIGHT - 1, CHUNK_SIZE - 1, STONE],
+    [CHUNK_SIZE - 1, TEST_HEIGHT - 1, CHUNK_SIZE - 1, STONE],
   ])
 
   it.effect('an unmerged quad still covers exactly one block, and a merged one covers its whole rectangle', () =>
@@ -585,11 +588,11 @@ describe('chunk boundaries', () => {
 
   it.effect('a present neighbour occludes across the boundary, so seams do not double up', () =>
     Effect.sync(() => {
-      const neighbourBlocks = new Uint8Array(BLOCKS_PER_CHUNK)
-      neighbourBlocks[blockIndex(CHUNK_SIZE - 1, 64, 0)] = STONE
+      const neighbourBlocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+      neighbourBlocks[testBlockIndex(CHUNK_SIZE - 1, 64, 0)] = STONE
       const layers = meshChunk(
         chunkWith([[0, 64, 0, STONE]]),
-        { xNeg: { blocks: neighbourBlocks } },
+        { xNeg: testChunk(neighbourBlocks) },
         EMPTY_MESH_CONFIG,
       )
       expect(layers.opaque.length).toBe(5)
@@ -838,7 +841,7 @@ describe('result ownership', () => {
       expect(layers.opaque).not.toBe(layers.transparentSolid)
       // An empty layer must be its own empty array too, not one shared constant
       // That a future pooled implementation could hand out and then fill in.
-      const empty = meshChunk(emptyChunk(), {}, CONFIG)
+      const empty = meshChunk(emptyChunk(TEST_HEIGHT), {}, CONFIG)
       expect(empty.opaque).not.toBe(empty.water)
     }),
   )
@@ -872,17 +875,17 @@ const arbitraryChunkOfBoxes = FastCheck.array(
   ),
   { maxLength: 10, minLength: 1 },
 ).map((boxes) => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, dx, dy, dz, blockId] of boxes) {
     for (let x = lx; x < Math.min(lx + dx, CHUNK_SIZE); x += 1) {
       for (let z = lz; z < Math.min(lz + dz, CHUNK_SIZE); z += 1) {
-        for (let height = y; height < Math.min(y + dy, CHUNK_HEIGHT); height += 1) {
-          blocks[blockIndex(x, height, z)] = blockId
+        for (let height = y; height < Math.min(y + dy, TEST_HEIGHT); height += 1) {
+          blocks[testBlockIndex(x, height, z)] = blockId
         }
       }
     }
   }
-  return { blocks } as ChunkView
+  return testChunk(blocks)
 })
 
 /** Some of the four horizontal neighbours present, some absent. */
@@ -1019,7 +1022,7 @@ describe('the greedy merge against the naive oracle', () => {
             unitFacesOf(quad).every((face) => {
               const [, position] = face.split(':')
               const [lx, y, lz] = (position ?? '').split(',').map(Number)
-              return getBlock(chunk.blocks, lx ?? -1, y ?? -1, lz ?? -1) === quad.blockId
+              return getBlock(chunk, lx ?? -1, y ?? -1, lz ?? -1) === quad.blockId
             }),
           )
         }),
@@ -1117,30 +1120,27 @@ describe('the greedy merge against the naive oracle', () => {
     }),
   )
 
-  it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, id 255 included', () =>
+  it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, highest registered id included', () =>
     Effect.sync(() => {
       // The mask packs `blockId | (ao << 8)` into one cell and merges on the
-      // Whole cell, so this is also the round-trip test for that packing. Id 255
-      // Is the largest a `Uint8Array` holds: were the shift 7 rather than 8, its
-      // Top bit would land in the AO field and every quad of block 255 would
-      // Report a shade it does not have — and no other id in this file would
-      // Notice.
+      // Whole cell, so this is also the round-trip test for the highest ID that
+      // `mc-kernel` currently permits in a chunk.
       //
-      // A 4x4 plate of id 255 with a wall along one side, so the plate's top
+      // A 4x4 plate of the highest registered ID with a wall along one side, so the plate's top
       // Face carries two AO values and both are non-zero somewhere.
       const cells: Array<readonly [number, number, number, number]> = []
       for (let lx = 4; lx < 8; lx += 1) {
         for (let lz = 4; lz < 8; lz += 1) {
-          cells.push([lx, 64, lz, 255])
+          cells.push([lx, 64, lz, HIGHEST_REGISTERED_BLOCK_ID])
         }
       }
       for (let lz = 4; lz < 8; lz += 1) {
-        cells.push([3, 65, lz, 255])
+        cells.push([3, 65, lz, HIGHEST_REGISTERED_BLOCK_ID])
       }
       const chunk = chunkWith(cells)
       const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
 
-      expect(layers.opaque.every((quad) => quad.blockId === 255)).toBe(true)
+      expect(layers.opaque.every((quad) => quad.blockId === HIGHEST_REGISTERED_BLOCK_ID)).toBe(true)
       expect(layers.opaque.every((quad) => quad.ao >= 0 && quad.ao <= AO_MAX)).toBe(true)
       // The wall at lx=3, y=65 darkens the lx=4 column of the plate's top face
       // And nothing further in, so the top splits into exactly two quads.
@@ -1185,9 +1185,9 @@ describe('the Y scan ceiling', () => {
       // `solidCeiling` exists to skip the empty air column above the terrain,
       // And an off-by-one in it removes the topmost layer of the world silently:
       // Every other test in this file uses y=64 or below and would stay green.
-      const layers = meshChunk(chunkWith([[3, CHUNK_HEIGHT - 1, 3, STONE]]), {}, EMPTY_MESH_CONFIG)
+      const layers = meshChunk(chunkWith([[3, TEST_HEIGHT - 1, 3, STONE]]), {}, EMPTY_MESH_CONFIG)
       expect(layers.opaque.length).toBe(6)
-      expect(new Set(layers.opaque.map(positionOf))).toStrictEqual(new Set([`3,${CHUNK_HEIGHT - 1},3`]))
+      expect(new Set(layers.opaque.map(positionOf))).toStrictEqual(new Set([`3,${TEST_HEIGHT - 1},3`]))
     }),
   )
 
@@ -1201,7 +1201,7 @@ describe('the Y scan ceiling', () => {
       const withTower = meshChunk(
         chunkWith([
           [8, 4, 8, STONE],
-          [0, CHUNK_HEIGHT - 1, 0, STONE],
+          [0, TEST_HEIGHT - 1, 0, STONE],
         ]),
         {},
         EMPTY_MESH_CONFIG,
@@ -1217,7 +1217,7 @@ describe('the Y scan ceiling', () => {
 
   it.effect('an all-air chunk short-circuits to three empty layers that are still distinct arrays', () =>
     Effect.sync(() => {
-      const layers = meshChunk(emptyChunk(), {}, CONFIG)
+      const layers = meshChunk(emptyChunk(TEST_HEIGHT), {}, CONFIG)
       expect(totalQuadCount(layers)).toBe(0)
       expect(totalQuadArea(layers)).toBe(0)
       // The early return for an empty chunk must not start handing out one
@@ -1227,35 +1227,35 @@ describe('the Y scan ceiling', () => {
     }),
   )
 
-  it.effect('REGRESSION: short block storage treats missing in-bounds cells as AIR in canonical order', () =>
-    Effect.sync(() => {
-      // ChunkView is structural, so a producer can temporarily expose a short
-      // Typed array. The hot passes may read directly only if they retain
-      // GetBlock's missing-cell-as-AIR behavior and the emitted sequence.
-      const blocks = new Uint8Array(1)
-      blocks[0] = STONE
-      const chunk: ChunkView = { blocks }
-      expect(meshChunk(chunk, {}, EMPTY_MESH_CONFIG)).toStrictEqual(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))
-    }),
-  )
 })
 
 describe('getBlock', () => {
+  it.effect('returns AIR when the block accessor has no value', () =>
+    Effect.sync(() => {
+      const chunk = {
+        blocks: { get: () => null },
+        height: TEST_HEIGHT,
+      } as unknown as ChunkView
+      expect(getBlock(chunk, 0, 0, 0)).toBe(AIR)
+    }),
+  )
+
   it.effect('returns AIR for every out-of-range coordinate instead of throwing or returning undefined', () =>
     Effect.sync(() => {
-      const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-      blocks[blockIndex(0, 0, 0)] = STONE
+      const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+      blocks[testBlockIndex(0, 0, 0)] = STONE
+      const chunk = testChunk(blocks)
       for (const [lx, y, lz] of [
         [-1, 0, 0],
         [CHUNK_SIZE, 0, 0],
         [0, -1, 0],
-        [0, CHUNK_HEIGHT, 0],
+        [0, TEST_HEIGHT, 0],
         [0, 0, -1],
         [0, 0, CHUNK_SIZE],
       ] as const) {
-        expect(getBlock(blocks, lx, y, lz)).toBe(AIR)
+        expect(getBlock(chunk, lx, y, lz)).toBe(AIR)
       }
-      expect(getBlock(blocks, 0, 0, 0)).toBe(STONE)
+      expect(getBlock(chunk, 0, 0, 0)).toBe(STONE)
     }),
   )
 
@@ -1264,12 +1264,12 @@ describe('getBlock', () => {
       FastCheck.assert(
         FastCheck.property(
           FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-          FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+          FastCheck.integer({ max: TEST_HEIGHT - 1, min: 0 }),
           FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
           (lx, y, lz) => {
-            const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-            blocks[blockIndex(lx, y, lz)] = STONE
-            return getBlock(blocks, lx, y, lz) === STONE
+            const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
+            blocks[testBlockIndex(lx, y, lz)] = STONE
+            return getBlock(testChunk(blocks), lx, y, lz) === STONE
           },
         ),
         { numRuns: 200 },

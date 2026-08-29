@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           # Full history: `pnpm changeset status --since=origin/main` (below)
@@ -28,12 +28,12 @@ jobs:
           fetch-depth: 0
 
       - name: Setup pnpm
-        # Pinned to a commit, not the mutable v4 tag: this is a third-party action
+        # Pinned to a commit, not the mutable v6 tag: this is a third-party action
         # and a tag can be repointed at new code without any change here.
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           cache: "pnpm"
@@ -62,10 +62,10 @@ jobs:
 
       # oxlint's no-restricted-imports (.oxlintrc.json) is the enforcement
       # mechanism for the Tier dependency policy (DEPENDENCY_POLICY.md §5).
-      # `pnpm verify` chains typecheck/lint/test in one step (unlike the org
+      # `pnpm verify` chains typecheck/lint/test/build in one step (unlike the org
       # template's separate Lint step), so the whole step runs under
       # `nix develop` to put oxlint on PATH for the `pnpm lint` it invokes.
-      - name: Verify (typecheck && lint && test)
+      - name: Verify (typecheck && lint && test && build)
         run: nix develop --command pnpm verify
 
       # RELEASE_STANDARD.md §1.2: every user-facing PR must add a changeset.
@@ -76,7 +76,7 @@ jobs:
         run: pnpm changeset status --since=origin/main
 
       # Coverage gate (TEST_STANDARD.md §3): statements/branches/functions/lines
-      # all thresholded at 99% in vitest.config.ts. Run as its own required CI
+      # all thresholded at 100% in vitest.config.ts. Run as its own required CI
       # step, separate from `pnpm verify`, so the report-generation overhead
       # doesn't slow down the fast verify loop.
       - name: Coverage
@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage
           path: coverage/

@@ -2,7 +2,7 @@
 
 - 上位仕様: plan.md §6 Step 0 / Step 3、§9
 
-## 1. 現在のバージョン: `0.1.0`
+## 1. 現在のバージョン: `0.1.4`
 
 **1.0.0 にするのは、上流の消費者が実際にこのリポジトリを消費して契約を確認したときである。**
 
@@ -32,22 +32,25 @@
 
 したがって現在の `package.json` は:
 
-- `dependencies` に `effect` だけを宣言する。`@nerima-games/*` は 1 つも入っていない。
-- `exports` は **TypeScript ソースを直接指す**（`./src/index.ts`）。ビルド成果物ではない。
-- ビルド / publish パイプラインは存在しない。
+- `dependencies` に `effect` と `@nerima-games/mc-kernel` を宣言する。ブロック定義と `Chunk` は
+  mc-kernel の公開 API を直接利用する。
+- `exports` は型を `dist/index.d.ts`、実行時エントリを `dist/index.js` に向ける。
+- `prepublishOnly` は型検査・lint・テスト・ビルドを含む `pnpm verify` を実行する。
 
-## 3. ビルドと publish は完成条件到達時に追加する
+## 3. ビルドと公開の現在の実装
 
-`tsconfig.base.json` は `"noEmit": true` である（コメントで理由を明記している）。
-`.gitignore` の `dist/` には `# Build outputs (none yet — the build pipeline is added at completion)` と書いてある。
+`tsconfig.base.json` は通常の型検査では `"noEmit": true` のままだが、出荷用の
+`tsconfig.build.json` は宣言ファイルだけを `dist/` に出力する。
+`prebuild` は前回の生成物を消去し、同じコマンドで古いファイルが残らないようにする。
 
-完成条件（`testing.md` §4）に到達した時点で追加するもの:
+`pnpm build` は次を順に実行する:
 
-1. `tsconfig.build.json` の `noEmit` を外し、`dist/` に `.js` + `.d.ts` + source map を出す
-2. `package.json` の `exports` を `dist/` に向ける（`files` も同様）
-3. `prepublishOnly` で `pnpm verify` を強制
-4. CI に publish job を追加（`.github/workflows/ci.yaml` は現在 typecheck / lint / test / coverage のみ。
-   RELEASE_STANDARD.md §3 が publish job の設計を定める）
+1. `tsc` で公開型の `.d.ts` と source map を生成する。
+2. `esbuild` で platform-neutral な ESM バンドルを生成する。mc-kernel の実装はバンドルへ
+   取り込み、`effect` は実行時依存として外部化する。
+3. `package.json` の `exports` と `files` は `dist/` の型・実行ファイルだけを公開対象にする。
+4. CI は `pnpm verify` とカバレッジを実行する。公開操作は自動化せず、GitHub Packages への
+   リリースは maintainer の明示的な操作と changeset による変更記録で行う。
 5. changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x → 1.0.0 の昇格判断
    （§2, §5 参照）も同じ changeset ワークフローに乗せる
 
@@ -72,22 +75,21 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
-（本リポジトリの `.npmrc` には**この設定は入っていない**。今は誰も `@nerima-games/*` を
-解決しないためである。現在の `.npmrc` の中身は `fast-check` / `pure-rand` の hoist だけで、
-これは `effect/FastCheck` の型解決のために必要な設定である。）
+本リポジトリの `.npmrc` にはレジストリ割当があり、認証トークンは含めていない。
+`fast-check` / `pure-rand` の hoist も `effect/FastCheck` の型解決のために維持している。
 
 ## 5. 何が破壊的変更なのか
 
 > **`0.x` の間の読み替え（全 16 リポジトリ共通の方針）**
 >
-> 本リポジトリは `0.1.0` であり、下流が契約を実際に消費して確認するまで `0.x` から出ない。
-> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**（`0.1.0` → `0.2.0`）。
+> 本リポジトリは `0.1.4` であり、下流が契約を実際に消費して確認するまで `0.x` から出ない。
+> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**（`0.1.4` → `0.2.0`）。
 > したがって以下の MAJOR / MINOR / PATCH は **`1.0.0` 到達後の分類**であり、
 > `0.x` の間は次のように読み替える。
 >
 > | 分類 | `1.0.0` 到達後 | `0.x` の間（現在） |
 > | --- | --- | --- |
-> | MAJOR | major bump | **minor bump**（`0.1.0` → `0.2.0`） |
+> | MAJOR | major bump | **minor bump**（`0.1.4` → `0.2.0`） |
 > | MINOR | minor bump | patch bump |
 > | PATCH | patch bump | patch bump |
 >
@@ -100,7 +102,7 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 - `FACES` の順序または法線の変更 —— ゴールデンハッシュがすべて無効になる
   （`domain/faces.ts` に「変更は意図的な speed bump である」と明記）
 - `MESH_LAYER_PRIORITY` の変更（`transparentSolid > water > opaque`）
-- `MeshLayers` の形（3 レイヤ）の変更
+- `MeshLayers` の形（面リストと `crossPlants` / `fluids` / `specials` の集合）の変更
 - `blockIndex` のストレージレイアウト変更 —— 参照実装の chunk fixture が
   ゴールデン入力として使えなくなる
 - `occludes` の意味論の変更（どのレイヤが遮蔽するか）
@@ -140,7 +142,7 @@ API_STANDARD.md §4 および mc-kernel の `docs/versioning.md`）。
 そのものを捕まえるのは `pnpm typecheck` と個々の domain テスト（ゴールデンハッシュ等）であり、
 `test/public-api.test.ts` は「barrel が何を re-export しているか」という名前の面だけを見る。
 
-なお `MeshLayers` の形（3 レイヤ）や `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
+なお `MeshLayers` の形（面リストと特殊形状配列）や `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
 であることのような、上の §5 で MAJOR に分類した型レベルの契約は、`pnpm typecheck` が
 `tsconfig.build.json` を通して検証する。`FACES` の順序や `MESH_LAYER_PRIORITY` の値のような
 「型には出ないが意味を持つ」契約は、引き続きゴールデンハッシュのテストの仕事である。

@@ -44,13 +44,12 @@
 import { HashSet, Option } from 'effect'
 import {
   AIR,
-  BLOCKS_PER_CHUNK,
-  CHUNK_HEIGHT,
   CHUNK_SIZE,
   FACES,
   LOD_LEVELS,
   type LodLevel,
   MESH_LAYERS,
+  type ChunkView,
   type MeshLayers,
   buildLayerLookup,
   getBlock,
@@ -60,7 +59,17 @@ import {
   totalQuadArea,
   totalQuadCount,
 } from '../src/index'
-import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, GLASS, LAKE, ROLLING, WATER } from './bench-fixtures'
+import {
+  BENCH_BLOCKS_PER_CHUNK,
+  BENCH_FIXTURES,
+  BENCH_HEIGHT,
+  CONFIG,
+  FLUID_CONFIG,
+  GLASS,
+  LAKE,
+  ROLLING,
+  WATER,
+} from './bench-fixtures'
 import {
   type Baseline,
   type Guard,
@@ -96,7 +105,7 @@ const RUNS = 7
  * guards below spend exactly that many lookups, so what they report is the
  * per-chunk cost and not a scaled-up microbenchmark.
  */
-const MASK_CELLS = FACES.length * CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT
+const MASK_CELLS = FACES.length * CHUNK_SIZE * CHUNK_SIZE * BENCH_HEIGHT
 
 /**
  * Anything a measured loop computes has to be observed somewhere, or a
@@ -119,11 +128,11 @@ let sink = 0
  * see the harness header on why workload ratios carry a looser tolerance than
  * guard ratios do.
  */
-const yardstickOver = (blocks: Readonly<Uint8Array>) => (): void => {
+const yardstickOver = (chunk: ChunkView) => (): void => {
   let total = 0
   for (let pass = 0; pass < FACES.length; pass += 1) {
-    for (let index = 0; index < BLOCKS_PER_CHUNK; index += 1) {
-      total += blocks[index] ?? 0
+    for (let index = 0; index < BENCH_BLOCKS_PER_CHUNK; index += 1) {
+      total += chunk.blocks.get(index)
     }
   }
   sink += total
@@ -207,15 +216,15 @@ const lookupTableArm = (): void => {
  * the arm below unwraps with the same `AIR` default.
  */
 const getBlockOption = (
-  blocks: Readonly<Uint8Array>,
+  chunk: ChunkView,
   lx: number,
   y: number,
   lz: number,
 ): Option.Option<number> => {
-  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) {
+  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= chunk.height || lz < 0 || lz >= CHUNK_SIZE) {
     return Option.none()
   }
-  return Option.fromNullable(blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE])
+  return Option.some(chunk.blocks.get(y + lz * chunk.height + lx * chunk.height * CHUNK_SIZE))
 }
 
 /**
@@ -227,13 +236,13 @@ const getBlockOption = (
  * Both walk every cell's neighbour across every face — the same 393,216 reads,
  * including the same 1-cell out-of-bounds shell, that meshing performs.
  */
-const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const plainWalkArm = (chunk: ChunkView) => (): void => {
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          total += getBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz)
+        for (let y = 0; y < chunk.height; y += 1) {
+          total += getBlock(chunk, lx + face.nx, y + face.ny, lz + face.nz)
         }
       }
     }
@@ -257,20 +266,20 @@ const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
  * — an Option-returning rewrite of it measures 0.39 here, far outside the 1.5x
  * guard tolerance.
  */
-const frozenGetBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number => {
-  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) {
+const frozenGetBlock = (chunk: ChunkView, lx: number, y: number, lz: number): number => {
+  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= chunk.height || lz < 0 || lz >= CHUNK_SIZE) {
     return AIR
   }
-  return blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE] ?? AIR
+  return chunk.blocks.get(y + lz * chunk.height + lx * chunk.height * CHUNK_SIZE)
 }
 
-const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const frozenWalkArm = (chunk: ChunkView) => (): void => {
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          total += frozenGetBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz)
+        for (let y = 0; y < chunk.height; y += 1) {
+          total += frozenGetBlock(chunk, lx + face.nx, y + face.ny, lz + face.nz)
         }
       }
     }
@@ -278,14 +287,14 @@ const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
   sink += total
 }
 
-const optionWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const optionWalkArm = (chunk: ChunkView) => (): void => {
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
-        for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
+        for (let y = 0; y < chunk.height; y += 1) {
           total += Option.getOrElse(
-            getBlockOption(blocks, lx + face.nx, y + face.ny, lz + face.nz),
+            getBlockOption(chunk, lx + face.nx, y + face.ny, lz + face.nz),
             () => AIR,
           )
         }
@@ -431,15 +440,15 @@ const main = async (): Promise<number> => {
   const rolling = ROLLING
 
   console.log('mc-meshing benchmark — median of 7 timed runs after warmup, per the reference implementation\n')
-  console.log(`  mask cells per chunk: ${String(MASK_CELLS)}  (6 faces x 16 x 16 x 256)`)
+  console.log(`  mask cells per chunk: ${String(MASK_CELLS)}  (6 faces x 16 x 16 x ${String(BENCH_HEIGHT)})`)
   console.log(`  load-time framing:    x81 chunks at renderDistance=4\n`)
 
   const nativeMs = measure(nativeSetArm, options(10, 20))
   const lookupMs = measure(lookupTableArm, options(10, 20))
   const hashMs = measure(hashSetArm, options(5, 10))
-  const plainMs = measure(plainWalkArm(rolling.blocks), options(20, 40))
-  const frozenMs = measure(frozenWalkArm(rolling.blocks), options(20, 40))
-  const optionMs = measure(optionWalkArm(rolling.blocks), options(20, 40))
+  const plainMs = measure(plainWalkArm(rolling), options(20, 40))
+  const frozenMs = measure(frozenWalkArm(rolling), options(20, 40))
+  const optionMs = measure(optionWalkArm(rolling), options(20, 40))
 
   const guards: ReadonlyArray<Guard> = [
     {
@@ -499,7 +508,7 @@ const main = async (): Promise<number> => {
 
   // Deliberately more iterations than any other case: the yardstick divides
   // Every workload figure, so its noise is every workload's noise.
-  const yardstickMs = measure(yardstickOver(rolling.blocks), options(200, 400))
+  const yardstickMs = measure(yardstickOver(rolling), options(200, 400))
 
   const meshWorkloads: ReadonlyArray<Workload> = BENCH_FIXTURES.map(({ name, chunk }) => {
     const msPerUnit = measure(() => {
@@ -562,8 +571,8 @@ const main = async (): Promise<number> => {
   /**
    * The fluid surface pass, on its own fixture and its own config.
    *
-   * ONE workload rather than a fifth column in every table above, because fluid
-   * meshing is priced by how much FLUID there is and the other four shapes have
+   * ONE dedicated workload rather than another fixture column in every table above, because fluid
+   * meshing is priced by how much FLUID there is and the cube-oriented fixtures have
    * none. Folding a lake into `BENCH_FIXTURES` would have moved every recorded
    * figure in docs/design-notes.md M-8, M-9 and M-10 for no measurement anyone
    * asked for.

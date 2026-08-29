@@ -1,10 +1,9 @@
 /**
  * @nerima-games/mc-meshing — chunk data to geometry, as a pure function.
  *
- * FIRST CUT (叩き台). See README.md 現状.
- *
  * A tier-1 stable library (plan.md §2.2). Input is block ids plus an injected
- * `MeshConfig`; output is three face lists. No Three.js, no WebGL, no DOM, no
+ * `MeshConfig`; output is three merged cube-face lists plus dedicated plant,
+ * fluid, and special-geometry lists. No Three.js, no WebGL, no DOM, no
  * services, no I/O — meshing runs in a worker in production and under plain
  * Node in tests, and the same code must serve both.
  *
@@ -16,12 +15,13 @@
  *   - `getBlock` inlines its bounds checks and never allocates an `Option`
  */
 
-export * from './domain/ambient-occlusion'
-export * from './domain/chunk-view'
-export * from './domain/kernel-adapter'
-export * from './domain/faces'
-export * from './domain/fluid-mesh'
-export * from './domain/lod'
-export * from './domain/mesh'
-export * from './domain/opacity'
-export * from './domain/plant-mesh'
+export * from './domain/ambient-occlusion.js'
+export * from './domain/chunk-view.js'
+export * from './domain/faces.js'
+export * from './domain/fluid-mesh.js'
+export * from './domain/kernel-mesh-config.js'
+export * from './domain/lod.js'
+export * from './domain/mesh.js'
+export * from './domain/opacity.js'
+export * from './domain/plant-mesh.js'
+export * from './domain/special-mesh.js'

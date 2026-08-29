@@ -1,9 +1,14 @@
 {
-  // Shipped source only. `types: []` (inherited) is deliberate: if a Node type
-  // ever leaks into domain code this project fails, which is what keeps
-  // mc-kernel usable from browser, worker and server repos alike.
+  // The declaration build preserves the platform-agnostic domain surface while
+  // the executable entry point is bundled separately by the package script.
   "extends": "./tsconfig.base.json",
-  "include": ["src/index.ts", "src/domain/**/*.ts"],
+  "compilerOptions": {
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
   "exclude": [
     "node_modules",
     "coverage",

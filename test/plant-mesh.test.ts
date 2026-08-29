@@ -13,16 +13,14 @@
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, FastCheck } from 'effect'
 import {
-  BLOCKS_PER_CHUNK,
-  CHUNK_HEIGHT,
   CHUNK_SIZE,
   type ChunkView,
-  blockIndex,
   emptyChunk,
 } from '../src/domain/chunk-view'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 import { type CrossPlantQuad, PLANT_INSET, buildCrossPlantLookup, isCrossPlant } from '../src/domain/plant-mesh'
+import { TEST_BLOCKS_PER_CHUNK, TEST_HEIGHT, testBlockIndex, testChunk } from './chunk-fixtures'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const STONE = 1
@@ -38,11 +36,11 @@ const CONFIG: MeshConfig = {
 }
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint8Array(TEST_BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[testBlockIndex(lx, y, lz)] = blockId
   }
-  return { blocks }
+  return testChunk(blocks)
 }
 
 const cornersOf = (plate: CrossPlantQuad): ReadonlyArray<string> =>
@@ -176,7 +174,7 @@ describe('the two plates', () => {
 
   it.effect('both meshers agree on the plates, exactly', () =>
     Effect.sync(() => {
-      // The oracle bounds its scan at CHUNK_HEIGHT and `meshChunk` at
+      // The oracle bounds its scan at the fixture height and `meshChunk` at
       // `solidCeiling`, so this is also where an off-by-one in the ceiling would
       // Silently drop the topmost row of flowers.
       FastCheck.assert(
@@ -184,7 +182,7 @@ describe('the two plates', () => {
           FastCheck.array(
             FastCheck.tuple(
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-              FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+              FastCheck.integer({ max: TEST_HEIGHT - 1, min: 0 }),
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
               FastCheck.constantFrom(STONE, GLASS, WATER, FLOWER, GRASS_TUFT),
             ),
@@ -208,14 +206,14 @@ describe('the two plates', () => {
 
   it.effect('a plant at the very top of the chunk is still meshed', () =>
     Effect.sync(() => {
-      const layers = meshChunk(chunkWith([[3, CHUNK_HEIGHT - 1, 3, FLOWER]]), {}, CONFIG)
+      const layers = meshChunk(chunkWith([[3, TEST_HEIGHT - 1, 3, FLOWER]]), {}, CONFIG)
       expect(layers.crossPlants.length).toBe(2)
     }),
   )
 
   it.effect('an empty chunk has an empty, distinct plate list', () =>
     Effect.sync(() => {
-      const layers = meshChunk(emptyChunk(), {}, CONFIG)
+      const layers = meshChunk(emptyChunk(TEST_HEIGHT), {}, CONFIG)
       expect(layers.crossPlants).toStrictEqual([])
       expect(layers.crossPlants).not.toBe(layers.opaque)
     }),
@@ -388,7 +386,7 @@ describe('the injected set', () => {
 
   it.effect('a block can be BOTH a plant and a transparent solid: shape and material are separate questions', () =>
     Effect.sync(() => {
-      // The reason this is a third set rather than a fourth layer. The reference
+      // The reason this is a dedicated config set rather than another cube layer. The reference
       // Routes every plant into the transparent-solid accumulator
       // (`plant-mesh.ts:245`), i.e. a cross plate is normally see-through — so
       // The two classifications must be able to hold at once.
