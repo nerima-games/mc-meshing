@@ -1,8 +1,14 @@
 {
-  // Shipped source only. `types: []` (inherited) is deliberate: if a Node type
-  // ever leaks into domain code this project fails, which is what keeps
-  // mc-kernel usable from browser, worker and server repos alike.
+  // The package emits browser/worker/server-safe ESM and declarations. NodeNext
+  // resolution checks the same explicit ESM specifiers used by the package.
   "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false
+  },
   "include": ["src/index.ts", "src/domain/**/*.ts"],
   "exclude": [
     "node_modules",

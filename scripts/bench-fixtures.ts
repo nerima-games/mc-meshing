@@ -18,26 +18,30 @@
  * repository's addition: the reference's benchmark only ever fed opaque blocks,
  * so the three-valued layer routing would otherwise never be measured.
  *
- * They are fully deterministic: no PRNG, no clock, no input. Block ids are local
- * constants because mc-meshing deliberately has no block registry — ids are
- * opaque numbers injected through `MeshConfig` — where the reference reached its
- * via `blockTypeToIndex('STONE')`.
+ * They are fully deterministic: no PRNG, no clock, no input. Block ids remain
+ * local constants so the benchmark describes stable synthetic workloads rather
+ * than depending on the production registry; the production configuration is
+ * available as `MINECRAFT_MESH_CONFIG`.
  */
 import {
   BLOCKS_PER_CHUNK,
+  CHUNK_HEIGHT,
   CHUNK_SIZE,
   type ChunkView,
   type MeshConfig,
   blockIndex,
 } from '../src/index'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 
-/** Opaque ids. mc-meshing has no registry; `MeshConfig` is the only source of truth. */
+/** Synthetic ids used only by the benchmark fixtures. */
 export const STONE = 1
 export const GRASS = 2
 export const WATER = 3
 export const GLASS = 4
 
 export const CONFIG: MeshConfig = {
+  crossPlantBlockIds: new Set(),
+  fluidMaxLevels: new Map(),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
 }
@@ -45,7 +49,7 @@ export const CONFIG: MeshConfig = {
 const newBlocks = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
 
 const set = (blocks: Uint8Array, lx: number, y: number, lz: number, value: number): void => {
-  blocks[blockIndex(lx, y, lz)] = value
+  blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = value
 }
 
 /** Solid stone to y=62, grass at 63, air above. Few faces — best case. */
@@ -59,7 +63,7 @@ const flatChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GRASS)
     }
   }
-  return { blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** Per-column height varying 56..72. A realistic surface — moderate faces. */
@@ -74,7 +78,7 @@ const rollingChunk = (): ChunkView => {
       set(blocks, lx, height, lz, GRASS)
     }
   }
-  return { blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** Every cell in a 16^3 volume alternates solid/air. Worst case — maximum faces. */
@@ -89,7 +93,7 @@ const checkerChunk = (): ChunkView => {
       }
     }
   }
-  return { blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -112,7 +116,7 @@ const layeredChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GLASS)
     }
   }
-  return { blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -148,6 +152,7 @@ export const LAYERED: ChunkView = layeredChunk()
  */
 const lakeChunk = (): ChunkView => {
   const blocks = newBlocks()
+  const falling = newBlocks()
   const levels = newBlocks()
   const sources = newBlocks()
   for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
@@ -160,13 +165,13 @@ const lakeChunk = (): ChunkView => {
         set(blocks, lx, y, lz, WATER)
         // Level 0 below the surface and a stepped level at the top, so that the
         // Surface tilts and the submerged-cell rule is exercised underneath it.
-        const index = blockIndex(lx, y, lz)
+        const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
         levels[index] = y === 56 ? lx % 8 : 0
         sources[index] = y === 56 ? 0 : 1
       }
     }
   }
-  return { blocks, fluid: { levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 export const LAKE: ChunkView = lakeChunk()
@@ -180,6 +185,7 @@ export const LAKE: ChunkView = lakeChunk()
  * `fluidMaxLevels` is injected.
  */
 export const FLUID_CONFIG: MeshConfig = {
+  crossPlantBlockIds: new Set(),
   fluidMaxLevels: new Map([[WATER, 7]]),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),

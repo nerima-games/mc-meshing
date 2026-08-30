@@ -2,7 +2,7 @@
 
 - 上位仕様: plan.md §6 Step 0 / Step 3、§9
 
-## 1. 現在のバージョン: `0.1.0`
+## 1. 現在のバージョン: `0.1.4`
 
 **1.0.0 にするのは、上流の消費者が実際にこのリポジトリを消費して契約を確認したときである。**
 
@@ -30,26 +30,26 @@
 16 リポジトリの clone を `repos/` 配下に並べて 1 つの pnpm workspace として束ねる薄いリポジトリ。
 開発中は `workspace:*` 解決でモノレポ同等の DX が得られ、bump 連鎖が構造的に発生しない。
 
-したがって現在の `package.json` は:
+現在の `package.json` は、ビルド済み成果物を検証可能にする段階まで進んでいる:
 
-- `dependencies` に `effect` だけを宣言する。`@nerima-games/*` は 1 つも入っていない。
-- `exports` は **TypeScript ソースを直接指す**（`./src/index.ts`）。ビルド成果物ではない。
-- ビルド / publish パイプラインは存在しない。
+- `dependencies` に `effect` と `@nerima-games/mc-kernel@0.4.0` を宣言する。
+- `exports` は **`dist/` の ESM と declaration** を指し、開発用の `src/` / `test/` は tarball に含めない。
+- `pnpm build` が `dist/` を生成し、`pnpm verify:package` が tarball の内容と展開後の import を検証する。
+- `prepublishOnly` は `pnpm verify` を実行する。GitHub Packages への自動 publish job はまだ有効化していない。
 
-## 3. ビルドと publish は完成条件到達時に追加する
+## 3. ビルドと publish の現在地
 
-`tsconfig.base.json` は `"noEmit": true` である（コメントで理由を明記している）。
-`.gitignore` の `dist/` には `# Build outputs (none yet — the build pipeline is added at completion)` と書いてある。
+開発時の型検査は `tsconfig.base.json` の `noEmit` を維持し、公開用の `tsconfig.build.json` だけが
+`dist/` に JavaScript と declaration を出力する。`pnpm verify` は次の順に全ゲートを通す:
 
-完成条件（`testing.md` §4）に到達した時点で追加するもの:
+1. `pnpm typecheck`
+2. `pnpm lint`
+3. `pnpm test:coverage`（4 指標 100%）
+4. `pnpm build`
+5. `pnpm verify:package`（tarball を作成し、公開形と同じ展開済み成果物を import）
 
-1. `tsconfig.build.json` の `noEmit` を外し、`dist/` に `.js` + `.d.ts` + source map を出す
-2. `package.json` の `exports` を `dist/` に向ける（`files` も同様）
-3. `prepublishOnly` で `pnpm verify` を強制
-4. CI に publish job を追加（`.github/workflows/ci.yaml` は現在 typecheck / lint / test / coverage のみ。
-   RELEASE_STANDARD.md §3 が publish job の設計を定める）
-5. changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x → 1.0.0 の昇格判断
-   （§2, §5 参照）も同じ changeset ワークフローに乗せる
+changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x → 1.0.0 の昇格判断
+（§2, §5 参照）は、上流 consumer がこの公開形を import して契約を確認した後に行う。
 
 ## 4. 公開先: GitHub Packages
 
@@ -80,14 +80,14 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 
 > **`0.x` の間の読み替え（全 16 リポジトリ共通の方針）**
 >
-> 本リポジトリは `0.1.0` であり、下流が契約を実際に消費して確認するまで `0.x` から出ない。
-> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**（`0.1.0` → `0.2.0`）。
+> 本リポジトリは `0.1.4` であり、下流が契約を実際に消費して確認するまで `0.x` から出ない。
+> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**（`0.1.4` → `0.2.0`）。
 > したがって以下の MAJOR / MINOR / PATCH は **`1.0.0` 到達後の分類**であり、
 > `0.x` の間は次のように読み替える。
 >
 > | 分類 | `1.0.0` 到達後 | `0.x` の間（現在） |
 > | --- | --- | --- |
-> | MAJOR | major bump | **minor bump**（`0.1.0` → `0.2.0`） |
+> | MAJOR | major bump | **minor bump**（`0.1.4` → `0.2.0`） |
 > | MINOR | minor bump | patch bump |
 > | PATCH | patch bump | patch bump |
 >
@@ -100,7 +100,7 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 - `FACES` の順序または法線の変更 —— ゴールデンハッシュがすべて無効になる
   （`domain/faces.ts` に「変更は意図的な speed bump である」と明記）
 - `MESH_LAYER_PRIORITY` の変更（`transparentSolid > water > opaque`）
-- `MeshLayers` の形（3 レイヤ）の変更
+- `MeshLayers` の出力コレクションと形状別分類の変更
 - `blockIndex` のストレージレイアウト変更 —— 参照実装の chunk fixture が
   ゴールデン入力として使えなくなる
 - `occludes` の意味論の変更（どのレイヤが遮蔽するか）
@@ -128,7 +128,8 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 自前の公開 API スナップショット機構があったが、org 標準の策定に伴い撤去された
 （API_STANDARD.md §4「自動 APIロック／スナップショットツールは使わない」。同節に歴史的経緯の詳細がある）。
 
-「公開 API」とは `src/index.ts` が re-export するものそのものであり（API_STANDARD.md §1）、
+「公開 API」とはソース上では `src/index.ts` が re-export し、パッケージ上では `dist/index.js` と
+`dist/index.d.ts` が提供するものそのものであり（API_STANDARD.md §1）、
 破壊的変更の検出は上の §5 の MAJOR/MINOR/PATCH 基準に基づく人間のレビューで行う。
 新しくスナップショット/diff ツール（`@microsoft/api-extractor` を含む）を追加する提案は
 org 標準に反する。`@microsoft/api-extractor` は mc-kernel の実コードで試したうえで
@@ -140,7 +141,7 @@ API_STANDARD.md §4 および mc-kernel の `docs/versioning.md`）。
 そのものを捕まえるのは `pnpm typecheck` と個々の domain テスト（ゴールデンハッシュ等）であり、
 `test/public-api.test.ts` は「barrel が何を re-export しているか」という名前の面だけを見る。
 
-なお `MeshLayers` の形（3 レイヤ）や `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
+なお `MeshLayers` の出力コレクションや `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
 であることのような、上の §5 で MAJOR に分類した型レベルの契約は、`pnpm typecheck` が
 `tsconfig.build.json` を通して検証する。`FACES` の順序や `MESH_LAYER_PRIORITY` の値のような
 「型には出ないが意味を持つ」契約は、引き続きゴールデンハッシュのテストの仕事である。

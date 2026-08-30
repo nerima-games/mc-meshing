@@ -15,11 +15,20 @@
  *   lod-preserves-emission-order
  *   lod-reduction-is-anisotropic
  */
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck, Schema } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_NONE } from '../src/domain/ambient-occlusion'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
-import { FACES, FACE_DIRECTIONS, type FaceDirection, faceOf, tangentAxes } from '../src/domain/faces'
+import {
+  FACES,
+  FACE_DIRECTIONS,
+  type FaceDirection,
+  type FacePlacementFor,
+  faceOf,
+  facePlacementOf,
+  tangentAxes,
+} from '../src/domain/faces'
 import { LOD_LEVELS, type LodLevel, LodLevelSchema, STEP_FOR_LOD, packQuadKey, simplifyMesh } from '../src/domain/lod'
 import {
   type MeshLayers,
@@ -37,6 +46,8 @@ const WATER = 3
 const GLASS = 4
 
 const CONFIG: MeshConfig = {
+  crossPlantBlockIds: new Set(),
+  fluidMaxLevels: new Map(),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
 }
@@ -44,9 +55,9 @@ const CONFIG: MeshConfig = {
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { blocks }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
 }
 
 /** A solid `side` x `side` x 1 slab of stone at y=64, anchored at the origin. */
@@ -297,29 +308,43 @@ describe('what snapping does to one quad', () => {
       // `ao` is 0 here for the same reason every other field is a fixed literal:
       // This is a test of `simplifyMesh`, which carries `ao` through untouched
       // (`snapQuad` spreads the quad) and never reads it.
-      const oblong = (overrides: Partial<Quad>): Quad => ({
+      type QuadGeometry = Omit<Quad, 'direction' | 'role'>
+      type QuadForDirection<Direction extends FaceDirection> = QuadGeometry & FacePlacementFor<Direction>
+      const oblong = <Direction extends FaceDirection>(
+        direction: Direction,
+        overrides: Partial<QuadGeometry> = {},
+      ): QuadForDirection<Direction> => ({
         ao: AO_NONE,
         blockId: STONE,
-        direction: 'xPos',
         height: 5,
         lx: 5,
         lz: 3,
-        role: 'side',
         width: 3,
         y: 7,
+        ...facePlacementOf(direction),
         ...overrides,
       })
 
       // An x-facing side spans (y, z): `width` runs along Y and is left alone,
       // `height` runs along Z and is snapped from [3, 8] out to [2, 8].
-      const [side] = simplifyMesh({ crossPlants: [], fluids: [], opaque: [oblong({})], transparentSolid: [], water: [] }, 1).opaque
+      const [side] = simplifyMesh(
+        { crossPlants: [], fluids: [], opaque: [oblong('xPos')], specialBlocks: [], transparentSolid: [], water: [] },
+        1,
+      ).opaque
       expect([side?.lx, side?.y, side?.lz]).toStrictEqual([5, 7, 2])
       expect([side?.width, side?.height]).toStrictEqual([3, 6])
 
       // A top face spans (x, z): both are snapped. [3, 6] -> [2, 6] and
       // [5, 10] -> [4, 10].
       const [top] = simplifyMesh(
-        { crossPlants: [], fluids: [], opaque: [oblong({ direction: 'yPos', role: 'top', lx: 3, y: 64, lz: 5, width: 3, height: 5 })], transparentSolid: [], water: [] },
+        {
+          crossPlants: [],
+          fluids: [],
+          opaque: [oblong('yPos', { lx: 3, y: 64, lz: 5, width: 3, height: 5 })],
+          specialBlocks: [],
+          transparentSolid: [],
+          water: [],
+        },
         1,
       ).opaque
       expect([top?.lx, top?.y, top?.lz]).toStrictEqual([2, 64, 4])

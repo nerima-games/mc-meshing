@@ -16,7 +16,7 @@
 
 ## 2. 責務の言い換え
 
-**ブロック ID の配列と注入された設定だけを入力とし、3 つの面リストを返す純粋関数。**
+**ブロック ID の配列と注入された設定だけを入力とし、形状別の面リストを返す純粋関数。**
 
 - 三値の不透明度モデル（`opaque` / `water` / `transparentSolid`）とその優先度
 - 正準な面方向順序（+X, -X, +Y, -Y, +Z, -Z）
@@ -24,7 +24,7 @@
 - チャンク境界の扱い（隣接チャンク未ロード時の規約）
 - ホットパスのブロック読み出し（`getBlock`）
 - **グリーディマージ（実装済み。このリポジトリの本体）** —— `domain/mesh.ts`。
-  同一スライス・同一方向・同一 `blockId` **かつ同一 `ao`** の面を最大矩形にまとめる。
+  同一スライス・同一方向・同一 `blockId`・同一 `ao`・同一四隅光量の面を最大矩形にまとめる。
   素朴実装は `meshChunkNaive` としてオラクル用に残してある（`testing.md` §2）
 - **アンビエントオクルージョン（実装済み）** —— `domain/ambient-occlusion.ts`。
   面ごとに 1 値 `[0, 3]`。面前の空気セルの接線 4 近傍のうち非 air の数。
@@ -32,10 +32,20 @@
 - **十字板の植生（実装済み）** —— `domain/plant-mesh.ts`。
   対角 2 枚の小数座標パネル。ブロック面ではないので `Quad` ではなく
   `MeshLayers.crossPlants` で運ぶ。どの ID が植物かは `config` で注入する（`design-notes.md` M-11）
+- **kernel 宣言の専用形状（実装済み）** —— `domain/special-mesh.ts`。
+ cactus、slab、pressure plate、rail、lily pad の形状を `MeshLayers.specialBlocks` で運ぶ。
+ registry の render kind を専用 geometry に変換し、rail だけは `ChunkView.railShapes` の復号済み
+ sidecar から vanilla の 10 状態を選択する層である。state の格納形式と復号は呼び出し側が所有する。
+- **resource-pack JSON の検証、解決とモデルメッシュ（実装済み）** —— `domain/resource-pack-schema.ts`、
+  `domain/resource-pack-resolver.ts`、`domain/resource-pack-mesh.ts`。対応する JSON subset を検証して
+  `ResourcePackAssets` に変換し、blockstate の variant /
+  multipart、model の親継承・テクスチャ変数、旧来および X → Y → Z の要素回転・UV・UV lock・face metadata を解決し、
+  回転後ジオメトリの正規化済み法線を含む `ResourceModelQuad` に変換する。ファイル／zip／PNG の読み込み、atlas /
+  material / tint は含めない。
 - **流体の水面高と流れ方向（実装済み）** —— `domain/fluid-mesh.ts`。
   4 隅の Y が別々の小数なので `Quad` ではなく `MeshLayers.fluids` で運ぶ。
   水面の形は 4 隅の傾き、renderer 用の流れ方向は上面の正規化済み `FluidFlow.direction` で運ぶ。
-  入力は復号済みの `FluidView`（level / source / optional falling）、`maxLevel` は `config` で注入する
+  入力は復号済みの `FluidView`（level / source / falling）、`maxLevel` は `config` で注入する
   （`design-notes.md` M-12）
 
 ## 3. 明示的にスコープ外のもの
@@ -43,28 +53,30 @@
 | 項目 | どこが所有するか | 理由 |
 | --- | --- | --- |
 | **Three.js のあらゆる型** | mc-render | typed array を `BufferGeometry` にするのはレンダラの仕事。§3.1 |
-| マテリアル（水シェーダ・アトラス・アルファブレンド） | mc-render | 「どう描くか」は「どこに面があるか」とは別 |
+| **asset loader / PNG / texture atlas / material / tint** | mc-render または asset pipeline | 「どう読み込み、どう描くか」は「どこに面があるか」とは別 |
 | どのブロックが水 / ガラスか | mc-kernel（能力フラグ）+ 消費側 | `config` で注入する。§3.2 |
 | チャンクのロード / アンロード / dirty 管理 | mc-worldgen（`ChunkStore` = plan.md §3.7 の `ChunkManager`） | plan.md §3.7。実装済み |
 | メッシュ更新の発火（dirty 購読） | mc-render（`WorldRenderer`）が mc-worldgen の `ChunkStore.subscribeDirty` を購読する | plan.md §3.9 |
 | **座標の語彙**（`ChunkCoord` / チャンク座標系） | mc-kernel（型）+ mc-worldgen（キーとしての運用） | §3.3 |
 | ワーカープールの実装 | mc-render | plan.md §3.9。mc-meshing は worker の中で**呼ばれる**側 |
-| ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は読むだけ（現時点では未対応） |
+| ライトグリッド（BFS 光伝播）の**生成** | mc-worldgen | plan.md §3.7。mc-meshing は `ChunkView.light` に注入されたグリッドを読む |
 | **LOD 簡約**（`simplifyMesh` / `packQuadKey` / `LodLevel`） | **mc-meshing**（決着。§3.4。**実装済み**: `domain/lod.ts`） | 参照実装の `lod-simplification.ts` のうち約 240 LOC。`MeshLayers → MeshLayers` で、距離を 1 つも取らない。削減の実測は `design-notes.md` M-8 |
 | **LOD 段の選択**（`lodForDistance` / `LOD*_DISTANCE_CHUNKS`） | **mc-render**（決着。§3.4） | 同ファイルの残り。プレイヤーのチャンクと対象チャンクの距離が要る = §3.3 が禁じているもの。**4 / 8 を正当化するために測るべきことは §3.5** |
 | **`three` のジオメトリ / マテリアル生成**（`block-mesh.ts` 91 LOC） | **mc-render**（決着。§3.4） | `import * as THREE` が 8 箇所。本リポジトリは `three` に依存しない |
-| **アンビエントオクルージョン** | **mc-meshing**（決着。**実装済み**: `domain/ambient-occlusion.ts`） | 参照実装の `greedy-meshing-ao.ts` 149 LOC のうち **AO の半分**（`aoXPos` .. `aoZNeg`、:15-87）。「まず基本を固める」の基本＝グリーディマージは着地した（M-9）ので保留の理由は消えた。**面ごとに 1 値**（頂点ごとではない。参照実装がそうである根拠は M-10）で、**マージキーに入る**。残り半分の光サンプリング（:95-149）は `LightGrids` を読むので**移植していない** —— 下の「ライトグリッド」の行に従う |
-| **植生メッシュ（十字板）** | **mc-meshing**（決着。**実装済み**: `domain/plant-mesh.ts`） | 参照実装の `plant-mesh.ts` 258 LOC のうち `addCrossPlant`（:79-98）と id 表（:18-28）。**十字板だけ**であり、同ファイルのサボテン・レール・スイレンは移植していない —— 特にレールは形状が物理側の `game/domain/rail-shape.ts` を鏡写しにしており、ここで 2 つ目の綴りを作るのは §3.3 が座標について禁じたのと同じ形になる（M-11）。十字板は `Quad` になれない（対角・小数・ブロック面を 0 枚しか覆わない）ので、`MeshLayers` に 4 つ目のリスト `crossPlants` が生えた |
-| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / optional falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
+| **アンビエントオクルージョン** | **mc-meshing**（決着。**実装済み**: `domain/ambient-occlusion.ts`） | 参照実装の AO と注入済みライトの四隅サンプリング（`domain/light-sampling.ts`）を実装。AO とライトはそれぞれ面のマージキー／頂点属性として保持する。ライトグリッドの生成・伝播は下の「ライトグリッド」の行に従う |
+| **植生メッシュ（十字板）** | **mc-meshing**（決着。**実装済み**: `domain/plant-mesh.ts`） | 参照実装の `plant-mesh.ts` 258 LOC のうち `addCrossPlant`（:79-98）と id 表（:18-28）。十字板は `Quad` になれない（対角・小数・ブロック面を 0 枚しか覆わない）ので `MeshLayers.crossPlants` で運ぶ（M-11） |
+| **kernel 宣言の専用形状** | **mc-meshing**（**実装済み**: `domain/special-mesh.ts`） | cactus、slab、pressure plate、rail、lily pad を `MeshLayers.specialBlocks` で運ぶ。rail は `ChunkView.railShapes` の復号済み sidecar から vanilla の 10 状態を選択し、平面・曲線・昇りを生成する。Java resource-pack の JSON 解決と純粋な model quad 化は `domain/resource-pack-resolver.ts` / `domain/resource-pack-mesh.ts` に実装済みだが、generic state の自動接続、loader、PNG atlas、material / tint は対象外 |
+| 流体の高さ / 流れ方向 | **mc-meshing**（決着。**実装済み**: `domain/fluid-mesh.ts`） | 参照実装の `greedy-meshing-fluids.ts` + `-fluid-state.ts`（385 LOC）のうち**ジオメトリの側**。流体伝播ルール自体は mx-gameplay であり、そこは動いていない。**保留の理由だった「入力が無い」は、入力の継ぎ目を*復号済みの状態*に引いて解いた** —— バイト符号化ではなく `FluidView`（セルごとの level / source / falling）を受け取り、水面形状と renderer 向け `FluidFlow` を出すので、5 つのマスクの 2 つ目の綴りはここに生まれない。`maxLevel`（水 7 / 溶岩 3）は伝播の性質なので `MeshConfig.fluidMaxLevels` で注入する。詳細と決着の内容は §3.6 |
 
-### 3.3 このリポジトリは座標を持たない（意図的）
+### 3.3 `ChunkView` は座標を持つが、隣接ルックアップは持たない
 
 `ChunkNeighbours`（`domain/chunk-view.ts`）は軸方向 4 つと対角方向 4 つの optional な `ChunkView` であり、
-「どの `ChunkView` がどの隣接チャンクか」を決める座標はここに無い。
+各 `ChunkView` は mc-kernel の `ChunkCoord` に対応する `coord` を持つ。ただし、
+「どの `ChunkView` がどの隣接スロットに入るか」を決める座標ルックアップはここに無い。
 縦切りスパイクはこれを穴として指摘した — 座標をキーにしたストアから
 `ChunkNeighbours` を埋めるには、呼び出し側が手でルックアップすることになる、と。
 
-**決着: 座標はここに入れない。ルックアップはキーを所有する側が持つ。**
+**決着: `ChunkView` に座標を保持し、ルックアップはキーを所有する側が持つ。**
 
 `mc-worldgen` の `ChunkStore.neighbours(coord)` がルックアップを行い、
 `{ xPos?, xNeg?, zPos?, zNeg?, xPosZPos?, xPosZNeg?, xNegZPos?, xNegZNeg? }` を返せる。
@@ -260,8 +272,9 @@ snap しても原点も範囲も動かない。checkerboard だけ数字が変�
 M-8 が引いていた参照実装のプロパティテストは「一様な光の下ではグリーディが平面を 1 枚にまとめるので
 LOD は何も回収できない。ライティングで面が割れて初めて効くようになる」と述べていた。
 AO はライティングそのものではないが、面を割るという一点で同じ働きをしており、
-**予告どおりの向きに数字を動かした**。したがって本当のライティング（`LightGrids`。§3 により
-mc-worldgen の所有）が入れば、この列はさらに上がる。
+**予告どおりの向きに数字を動かした**。さらに `ChunkView.light` に非一様なライトグリッドを
+注入すれば、光量の違いでも面が割れてこの列はさらに上がる。ライトグリッドの生成と伝播は
+引き続き `mc-worldgen` の所有である（§3）。
 
 **mc-render への含意はこうなる:** LOD 1 の値打ちは固定値ではなく、
 **メッシュがどれだけ細かく割れているかの関数**である。
@@ -311,10 +324,11 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | `0x08` | 水源か |
 | `0x07` | レベル（0-7） |
 
-**この符号化を所有しているのは流体シミュレーション側であり、mc-meshing ではない。**
+ **この符号化を所有しているのは流体シミュレーション側であり、mc-meshing ではない。**
 ここで 5 つのマスクを宣言すれば、**もう 1 つの綴り**がロスターに増える ——
-§3.3 が座標について、§3.4 が LOD 距離について、M-11 がレールの形状について
-それぞれ拒否したのと**同じ形の誤り**である。
+§3.3 が座標について、§3.4 が LOD 距離についてそれぞれ拒否したのと**同じ形の誤り**である。
+rail state は復号済みの renderer-facing sidecar として `ChunkView.railShapes` に置くため、
+物理側の state byte codec はここで複製しない。
 
 #### (c) どう引いたか —— 継ぎ目を**バイトではなく復号済みの状態**に置いた
 
@@ -377,15 +391,17 @@ AO（M-10）と十字板（M-11）は保留を解いた。**流体は、その�
 | 子（依存元） | `mc-render` のみ |
 
 `mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。
-`domain/kernel-adapter.ts` の `chunkViewOf` が、kernelの可変高さデータを
-meshingの256高さビューへ変換する責務を持つ。高さが一致しない入力は拒否し、
-暗黙の切り詰め・ゼロ埋めでワールドデータを破壊しない。
+公開する `ChunkView` は kernel の `coord` と可変 `height` を保持し、メッシング用の
+`Readonly<Uint8Array>` を `blocks` として受け取る。kernel の opaque な `Chunk.blocks` は、
+その `Chunk` を取得した呼び出し側が `copyTo` で byte view にコピーして渡す。
+`blockCount` が高さを検証して必要な長さを算出し、256 高さへの暗黙の切り詰め・ゼロ埋めは行わない。
 
 ## 5. 完成条件
 
 `testing.md` §4 に詳細。要約:
 
-- ゴールデンテスト（chunk fixture → バッファのハッシュ比較）—— **未達**
+- ゴールデンテスト（chunk fixture → バッファのハッシュ比較）—— **達成**（`test/mesh-golden.test.ts`。ローカル fixture の packed buffer と draw group）
+- 参照実装の chunk fixture と mc-render の既存ハッシュ契約との照合 —— **外部保留**（参照 checkout と fixture の取得元が現ツリーにない）
 - 性質テスト（面数上限、隣接チャンク境界の整合）—— **達成**
 - **グリーディメッシングの実装** —— **達成**。AO 着地後の現行値で flat -99.8%、rolling -82.7%、
   checkerboard 0.0%（マージできる対が 1 つも無い形なので、これが正しい値である）、

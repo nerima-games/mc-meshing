@@ -4,10 +4,10 @@
   // There is deliberately no prettier, no biome and no .editorconfig.
   //
   // NOTE on the `Date.now()` ban (see DEPENDENCY_POLICY.md / PACKAGE_STANDARD.md
-  // "scripts/check-dependency-whitelist.ts の廃止"): oxlint 0.12 does not implement
-  // `no-restricted-syntax` or `no-restricted-properties`, and while
-  // `no-restricted-globals` is listed by `oxlint --rules` it is not implemented either
-  // (no checkmark). Verified empirically against oxlint 0.12.0: a file containing
+  // "scripts/check-dependency-whitelist.ts の廃止"): the oxlint supplied by the current
+  // Nix devShell does not implement `no-restricted-syntax` or `no-restricted-properties`,
+  // and while `no-restricted-globals` is listed by `oxlint --rules` it is not implemented
+  // either (no checkmark). Verified empirically against that devShell: a file containing
   // `Date.now()` produces 0 diagnostics under all three rules. The org standard no
   // longer requires a bespoke replacement script for this check (org discretion); it is
   // left unenforced here until oxlint implements `no-restricted-syntax`.
@@ -75,7 +75,7 @@
 
     // Style
     // NOTE (discovered while fixing the `.oxlintrc.json` filename/discovery bug that this file's
-    // rename addresses -- see PR description): as of oxlint 1.76.0 the pure ESLint-core
+    // rename addresses -- see PR description): the current oxlint's pure ESLint-core
     // whitespace/formatting rules that used to be declared here (array-bracket-spacing,
     // block-spacing, brace-style, camelcase, comma-dangle, comma-spacing, comma-style,
     // computed-property-spacing, eol-last, func-call-spacing, indent, key-spacing,
@@ -128,7 +128,7 @@
     "max-params": ["warn", { "max": 4 }],
     // PERFORMANCE / CORRECTNESS EXCEPTION. Two distinct, verified uses in this
     // repository, both in `src/`:
-    //  - `src/domain/mesh.ts` packs a greedy-mesh face cell as `blockId | (ao
+    //  - `src/domain/mesh-greedy.ts` packs a greedy-mesh face cell as `blockId | (ao
     //    << AO_SHIFT)` and unpacks it with `& MAX_BLOCK_ID` / `>> AO_SHIFT`.
     //    The bit layout is the mask format `expandGreedy` scans per slice;
     //    rewriting it with arithmetic operators would change what "no face"
@@ -215,7 +215,7 @@
   //    The remaining rules are the same literal-heavy fixture style as
   //    test/**.
   //
-  // Verified empirically (oxlint 1.76.0, same as mc-noise's precedent):
+  // Verified empirically with the current Nix devShell oxlint (same as mc-noise's precedent):
   // `overrides[].files` glob-matches against paths relative to the config
   // file and layers rules on top of the base `rules` block above rather than
   // replacing it, so anything not listed per-override (e.g. `no-eval`, the
@@ -243,7 +243,7 @@
       }
     },
     {
-      "files": ["src/domain/lod.ts", "src/domain/mesh.ts"],
+      "files": ["src/domain/lod.ts", "src/domain/mesh.ts", "src/domain/mesh-greedy.ts"],
       "rules": {
         // `packQuadKey`/the greedy-merge inner helpers: chunk/lookup context
         // + face direction + lx, y, lz + the emitted quad's own fields.
@@ -258,6 +258,22 @@
         // direction + the two corner heights the caller already computed.
         // The largest genuine case in this repository.
         "max-params": ["warn", { "max": 12 }]
+      }
+    },
+    {
+      "files": ["src/domain/special-mesh.ts"],
+      "rules": {
+        // The inner-loop emitters keep their scalar position/context arguments
+        // separate to avoid allocating a cell object for every special block.
+        "max-params": ["warn", { "max": 8 }]
+      }
+    },
+    {
+      "files": ["src/domain/rail-geometry.ts"],
+      "rules": {
+        // Rail emission keeps scalar coordinates separate in the hot loop;
+        // this mirrors the face emitter contract and avoids a per-vertex tuple.
+        "max-params": ["warn", { "max": 5 }]
       }
     },
     {

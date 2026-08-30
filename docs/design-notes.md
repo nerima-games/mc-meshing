@@ -266,15 +266,21 @@ plan.md §3.3 は「面数上限」を性質テストとして要求している
 
 ### 本リポジトリの選択
 
-`meshChunk` は所有されたデータを返す。プールされた view ベースの高速経路は、
-**ベンチマークが用意できてから**明示的な opt-in として追加する。
+`meshChunk` は所有されたデータを返す。出力を次の呼び出しと共有する view ベースの
+アキュムレータプールは、出力のライフタイム契約を変えるためこの公開 API では採用しない。
+
+一方、出力へ逃がさない面マスク／ライト作業配列だけは `MeshScratch` に分離した。
+呼び出し元が `createMeshScratch()` を保持し、`meshChunk(..., scratch)` に渡すと、
+同じ呼び出し元の逐次処理で一時領域を再利用できる。scratch は並行呼び出しで共有してはならず、
+返り値のレイヤーと quad は毎回新規に所有される。この経路の cold / reused 比は
+`scripts/bench-meshing.ts` が fixture ごとに印字する。
 
 正しさが先、速さは後。しかも速い版は遅い版に対してテストできる。
 
 ### 回帰テスト
 
-現時点では view を返さないので、破れる不変条件が無い。
-プール版を入れるときに「所有版と同じ結果を返す」テストを追加すること。
+`test/mesh-scratch.test.ts` が所有版と scratch 版の同値性、次の呼び出し後も出力が変わらないこと、
+ライト付き経路の再利用を検証する。
 
 ---
 
@@ -423,8 +429,8 @@ AO はライティングではないが、**面を割るという一点で同じ
 （`packages/rendering/test/lod-simplification.property.test.ts`）: 一様な光の下では
 グリーディが平面を 1 枚にまとめてしまうので LOD は何も回収できず、
 ライティングで面が割れて初めて「LOD が効く」ようになる、と。
-**本リポジトリにはまだライティングが無い**ので、いまは「一様な光の下」に相当する。
-光が入れば面はまた割れ、この表の数字は上がる。
+この fixture は `ChunkView.light` を注入していないため、いまは「一様な光の下」に相当する。
+異なる光量を注入すれば、光量を merge key に含めることで面はまた割れる。
 
 `responsibility.md` §3.5(c) がこの数字を mc-render 向けの結論に引き直している
 （`renderDistance = 4` で LOD 1 が買うのは quad の 1.2%、代金は約 11 px のずれ）。
@@ -454,7 +460,8 @@ mc-render にとって重要な帰結: **LOD の切り替えはフレームご�
    退化したまま通すより悪い答えである。
 2. **「opaque だけ簡約する」規則の置き場所を変えた。** 参照実装は呼び出し側で
    `simplifyMesh(meshed.opaque, lod)` と書く（`meshing-worker.ts:135`,
-   `meshing-worker-sync.ts:98`）。本リポジトリの `MeshLayers` は 3 レイヤを束ねて運ぶので、
+   `meshing-worker-sync.ts:98`）。本リポジトリの `MeshLayers` は形状別の出力コレクションを
+   束ねて運ぶので、
    規則を関数の**中**に 1 回だけ書いた。2 人目の呼び出し側が忘れられなくなる。
 3. **`Quad.width` / `height` がどの軸かを確定させた**（`domain/faces.ts` の `tangentAxes`）。
    これまで「第 1 / 第 2 接線軸」としか書かれておらず、**どの軸かは決まっていなかった**。
@@ -493,19 +500,20 @@ mc-render にとって重要な帰結: **LOD の切り替えはフレームご�
 
 plan.md §3.3 の責務そのもの ——「チャンクデータ→ジオメトリバッファの純粋変換
 （**グリーディメッシング**）」。参照実装の `runGreedyExpansion`
-（`greedy-meshing-passes.ts:64-97`）を、AO と光のパッキングを外して移植した。
+（`greedy-meshing-passes.ts:64-97`）を、AO と注入済み光のパッキングまで含めて移植した。
 
-### マージ対象は opaque、キーは `blockId` と AO
+### マージ対象は opaque、キーは `blockId`、AO、注入光
 
 transparentSolid / water は描画順や将来のセル固有属性を矩形内部へ隠さないため、マスクへ入れず
 単位 quad のまま出力する。専用 fluid と plant もそれぞれの生成器で単位 primitive を維持する。
-opaque のうち同一方向・同一スライス・同一 `blockId`・同一 AO の面だけがまとまる。
+opaque のうち同一方向・同一スライス・同一 `blockId`・同一 AO・同一四隅光量の面だけがまとまる。
 
 | 禁止事項 | なぜ起きえないか |
 | --- | --- |
 | レイヤをまたぐ | opaque だけをマスクへ入れる。transparentSolid / water は単位 quad として直接出力する |
 | ブロック種別をまたぐ | ID そのものがキーである |
 | AO をまたぐ | AO は mask cell の bit 8-9 に入り、値が異なるセルでは矩形が止まる |
+| 光量をまたぐ | block/sky の四隅光量が mask cell のキーに入り、値が異なるセルでは矩形が止まる |
 | 遮蔽の違う面をまたぐ | 遮蔽はマスクを書く**前に**判定する。隠れている面はマスクに入らず、マスクの零値は `AIR` で、展開は `AIR` を突き抜けない |
 
 `role` は `direction` の関数で、方向ごと・slice ごとに別パスなので mask cell に重ねて持たない。
@@ -530,7 +538,7 @@ checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの�
 0.4-0.5 倍の時間で終わるが、**マージと同時に `solidCeiling`（参照実装の `yLimit`。
 最高の非 air ブロックより上を走査しない）を入れたためである。**
 
-`solidCeiling` を強制的に無効化して（`= CHUNK_HEIGHT` に固定して）測り直すと:
+`solidCeiling` を強制的に無効化して（デフォルト高さ 256 に固定して）測り直すと:
 
 | fixture | 素朴（256 走査） | マージ（256 走査） | マージ単体の比 |
 | --- | ---: | ---: | ---: |
@@ -544,8 +552,8 @@ checkerboard の 0.0% は欠陥ではない。`(lx+y+lz)%2` は同じ向きの�
 checkerboard ではその見返りがゼロなのでマスク構築と掃引が丸ごと純損失になる。
 これは想定どおりであって回帰ではない。
 
-再現手順: `domain/mesh.ts` の `const yLimit = solidCeiling(chunk.blocks)` を
-`const yLimit = solidCeiling(chunk.blocks) === 0 ? 0 : CHUNK_HEIGHT` に置き換えて
+再現手順: `domain/mesh.ts` の `const yLimit = solidCeiling(chunk.blocks, chunk.height)` を
+`const yLimit = solidCeiling(chunk.blocks, chunk.height) === 0 ? 0 : chunk.height` に置き換えて
 `nix develop --command pnpm bench` を走らせ、`meshChunk/*` の ms を読む。
 
 ### 回帰テスト
@@ -585,8 +593,9 @@ width と height の取り違え）であって、どの面が見えるかは別
 `greedy-meshing-ao.ts`（149 LOC）のうち **AO の半分**（`aoXPos` .. `aoZNeg`、:15-87）を
 移植した（`domain/ambient-occlusion.ts`）。
 残り半分の光サンプリング（`sampleVoxelLight` / `sampleCornerLight`、:95-149）は
-`LightGrids` を読むので**移植していない** —— ライトグリッドは §3 により mc-worldgen の所有であり、
-本リポジトリはまだ読むものを持たない。
+ライトグリッドの生成・伝播を所有しないため、入力境界を `ChunkView.light` として定義し、
+`domain/light-sampling.ts` で注入済みグリッドから面の四隅を読む形に実装した。グリッド生成・伝播は
+§3 により mc-worldgen の所有である。
 
 ### 最初に潰しておくべき誤解 —— 参照実装の AO は**頂点ごとではなく面ごと**である
 
@@ -697,8 +706,8 @@ water 1,024枚とglass 576枚を単位面で保つため1,612枚になる。
 本リポジトリでも参照実装でも**一度も測られていない**。
 `occludes()` に差し替えるのは 1 行で、見た目は整うが、それは plan.md §8 が
 「参照実装は仕様である。作り直すな」と警告している種類の整理である。
-決着させるべき時点はライティングが入るときで、そのとき参照実装は AO と光を同じマスクセルに詰めており、
-**両者は「何が光を止めるか」という 1 つの概念を共有したがる**。
+決着させるべき時点はライティングの入力が入るときであり、現在は AO とライトを別の型で保持しつつ、
+greedy mask では同じセルの merge key として比較している。
 テスト（`test/ambient-occlusion.test.ts` の
 `any non-air block occludes, water and glass included`）はこの規則を
 **移植したとおりに固定してある** —— 変えるなら意図的な決定として変えることになり、
@@ -839,7 +848,7 @@ guard は 5 本とも旧記録の 0.94-1.06 倍に収まっている —— ど�
 `responsibility.md` §3 が植生メッシュ（十字板）を「保留」としていた。保留の理由（「まず基本を固める」）は
 M-9 で消えたので、参照実装の `plant-mesh.ts`（258 LOC）のうち**十字板の部分**を移植した
 （`domain/plant-mesh.ts`）。責務表の行が名指ししているのは**十字板**だけであり、
-同ファイルの残り（サボテン・レール・スイレン）は移植していない —— 下の「移植していないもの」を参照。
+同ファイルの残り（サボテン・レール・スイレン）は `domain/special-mesh.ts` の専用形状経路へ分割して移植済みである。
 
 ### 十字板は**面ではない**。これが設計上の全問題である
 
@@ -956,17 +965,17 @@ yardstick は両腕で 1.02 倍）:
 `blockId === AIR` の短絡で先に抜ける割合が最も高く、追加の表引きに到達する回数が最も少ない。
 `Set.has` にしていれば同じ場所で 6.5 倍（`opacity.ts` の値札）を払っていた。
 
-### 移植していないもの（`plant-mesh.ts` 258 LOC のうち）
+### 参照 `plant-mesh.ts` のうち未対応または別経路にしたもの
 
 責務表の行は**十字板**（`植生メッシュ（十字板）`）としか書いていないので、そこで止めた:
 
 | 参照実装の関数 | 行 | 状態 |
 | --- | --- | --- |
 | `addCrossPlant` | :79-98 | **移植済み** |
-| `addLilyPad` | :100-117 | 未移植。薄板 1 枚であって十字ではない |
-| `addCactus` | :119-148 | 未移植。inset した立方体であって十字ではない。上下面は隣のサボテンを見て決めるので cull 規則を持つ |
-| `addRail` | :165-228 | 未移植。**形状が物理側の `game/domain/rail-shape.ts` を鏡写しにしている**（:163-164 が明言）。あれは別リポジトリの語彙であり、ここで 2 つ目の綴りを作るのは §3.3 が座標について禁じたのと同じ形の誤りになる |
-| `getQuadLight` / `sampleVoxelLight` 経由の光 | :51-62 | 未移植。ライトグリッドは mc-worldgen の所有（§3） |
+| `addLilyPad` | :100-117 | `domain/special-mesh.ts` に固定 geometry として実装済み。薄板 1 枚であって十字ではない |
+| `addCactus` | :119-148 | `domain/special-mesh.ts` に registry の render kind から生成する inset 立方体として実装済み |
+| `addRail` | :165-228 | `domain/special-mesh.ts` に vanilla の 10 rail shape として実装済み。`ChunkView.railShapes` の復号済み sidecar から状態を選択し、平面・曲線は平面 model、ascending は raised NE / SW model の上下 2 面として生成する |
+| `getQuadLight` / `sampleVoxelLight` 経由の光 | :51-62 | `domain/light-sampling.ts` に注入済み `ChunkView.light` の四隅サンプリングとして実装済み。ライトグリッドの生成・伝播は mc-worldgen の所有（§3） |
 
 ### 回帰テスト
 
@@ -985,7 +994,7 @@ yardstick は両腕で 1.02 倍）:
 - `REGRESSION: a plant hides nothing` —— 上の逸脱を 6 方向で。
   対照として不透明な隣接では面が減ることも見る（cull を丸ごとやめた実装が通らないように）
 - `both meshers agree on the plates, exactly` —— プロパティ。
-  `meshChunk` は `solidCeiling`、オラクルは `CHUNK_HEIGHT` で走査するので、
+  `meshChunk` は `solidCeiling`、オラクルは対象 `ChunkView.height` で走査するので、
   **走査上限の off-by-one が最上段の花を黙って消す**ならここで落ちる
 - `emits in lx, lz, y order` —— **同点を含む** fixture で。
   `lx` を共有する 2 セルが `lx→lz→y` と `lx→y→lz` で逆順になるように置いてある
@@ -1025,7 +1034,8 @@ mx-gameplay 側の `domain/fluid-frontier.ts` はそのままである。
 **引き直したのは入力の継ぎ目である。** 参照実装は `blocks` とは別に `fluid: Uint8Array` を読み、
 5 つのマスク（`packages/block/domain/fluid.ts:7-11`）で復号する。
 そのマスクをここで宣言すれば**もう 1 つの綴り**がロスターに増える ——
-§3.3（座標）、§3.4（LOD 距離）、M-11（レールの形状）が同じ形で拒否したものである。
+§3.3（座標）と §3.4（LOD 距離）が同じ理由で拒否したものである。レール状態は復号済みの
+renderer-facing sidecar として入力するため、物理側の state byte codec はここでも複製しない。
 
 旧 §3.6 が挙げていた決着案 (2) は「`ChunkView` の前例にしたがって `fluid?:` を宣言する」だった。
 **取ったのは (2) だが、字義どおりではない。** `fluid?: Readonly<Uint8Array>` を宣言しても、
@@ -1033,7 +1043,7 @@ mx-gameplay 側の `domain/fluid-frontier.ts` はそのままである。
 
 | 所有 | 内容 | 型 |
 | --- | --- | --- |
-| シミュレーション側 | 流体の有無・種類・**レベル**・**水源か**・**落下中か** | `FluidView { levels, sources, falling? }` |
+| シミュレーション側 | 流体の有無・種類・**レベル**・**水源か**・**落下中か** | `FluidView { levels, sources, falling }` |
 | mc-meshing | レベル→水面高、4 隅の平均、決定論的な水平 flow、露出規則、側面の形 | `domain/fluid-mesh.ts` |
 
 バイト配置の合意が 1 つも要らないので、**マスクはここに 1 つも無い。**
@@ -1056,7 +1066,7 @@ present と kind は `blocks` と `fluidMaxLevels` が既に答えているの�
 それとは別に、本実装は renderer が頂点から逆算せずテクスチャを流せるよう、同じ復号済み状態から
 正規化された X/Z の `FluidFlow.direction` を決定論的に導く。平坦または対称なら `[0, 0]`、
 低い同種流体へ向き、隣接セルが空で 1 段下に同種流体があれば段差を越える方向へ向く。
-`FluidFlow.falling` は simulation の optional な落下フラグを運ぶ。
+`FluidFlow.falling` は、復号済み `FluidView.falling` から導いた renderer 向けの落下フラグを運ぶ。
 
 **マージが「できない」のであって「高い」のではない。** N セルをまとめた走りは辺ごとに
 **N+1 個**の隅の高さを持ち、`Quad` には両端の 2 つぶんしか場所が無い。
@@ -1244,7 +1254,7 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 
 ### 到達不能なガードを**入れて、測って、外した**（このリポジトリで 3 度目）
 
-`heightIn` には当初 `if (y < 0 || y >= CHUNK_HEIGHT) return NO_FLUID` があった。
+`heightIn` には当初 `if (y < 0 || y >= chunk.height) return NO_FLUID` があった。
 **カバレッジがその 2 行を恒久的に未到達と表示した。** 理由は単純で、`getBlock` が
 チャンク外に対して既に `AIR` を返しており、`wantId` は流体 ID なので決して `AIR` ではない ——
 つまり直後の比較が out-of-range を単独で正しく処理している。
@@ -1253,7 +1263,7 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 `domain/lod.ts` が参照実装の退化ガードを移植しなかったのと**同じ根拠**である。
 外した結果 `domain/fluid-mesh.ts` の行カバレッジは 100% になった。
 呼び出し側はこれに依存している —— `surfaceHeightOfColumn` は `y + 1` を見るので、
-世界の最上段の流体では `CHUNK_HEIGHT` が渡る。
+世界の最上段の流体では `chunk.height` が渡る。
 `test/fluid-mesh.test.ts` の `fluid on the world's TOP ROW still shows a surface` が
 **ガードではなく結果として起きる挙動**を固定している
 （同時に `solidCeiling` の off-by-one も張っている。他のテストは全部 y=64 付近なので、
@@ -1293,10 +1303,10 @@ M-11 が「セルの 10 分の 1 を占める 2 枚の対角パネルは何も�
 
 | 参照実装 | 行 | 状態 |
 | --- | --- | --- |
-| `decodeFaceLighting` / `sampleCornerLight` 経由の光 | state:159-180 | 未移植。ライトグリッドは mc-worldgen の所有（§3） |
+| `decodeFaceLighting` / `sampleCornerLight` 経由の光 | state:159-180 | `domain/light-sampling.ts` に注入済み `ChunkView.light` の四隅サンプリングとして実装済み。ライトグリッドの生成・伝播は mc-worldgen の所有（§3） |
 | `isSolidFaceExposed` | state:145-157 | 未移植。**立方体パスの規則**であり `domain/mesh.ts` が自前のものを持つ。次項 |
-| `decodeFluidByte` と 5 つのマスク | `block/domain/fluid.ts:7-30` | 未移植。符号化は所有者のもの |
-| accumulator 振り分け `transparentLookup ? water : opaque` | fluids:43 | 未移植。「どのバッファか」は `domain/opacity.ts` が既に答えている |
+| `decodeFluidByte` と 5 つのマスク | `block/domain/fluid.ts:7-30` | 移植対象外。符号化は simulation / world-state 所有者のもの。meshing は `FluidView` の復号済み配列を受け取る |
+| accumulator 振り分け `transparentLookup ? water : opaque` | fluids:43 | `domain/opacity.ts` の layer lookup として表現済み。参照実装固有の accumulator API は公開しない |
 
 **`isSolidFaceExposed` を移植しなかったことには帰結がある。** 参照実装のそれは
 空気か transparent-solid の隣接でしか固体面を露出させないので、

@@ -13,8 +13,10 @@
  *   meshing-fluid-blocks-emit-no-cube-faces
  *   meshing-fluid-surfaces-never-merge
  */
-import { describe, expect, it } from '@effect/vitest'
+import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
+import { chunkCoord } from '@nerima-games/mc-kernel'
+import { MAX_BLOCK_ID } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -67,31 +69,32 @@ const CONFIG: MeshConfig = {
 /** The same config with the fluid table removed: water goes back to being a cube. */
 const CUBE_WATER_CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set([FLOWER]),
+  fluidMaxLevels: new Map(),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
 }
 
 type BlockCell = readonly [number, number, number, number]
-/** `lx, y, lz, level, source, falling?` — flags use the decoded 0/1 representation. */
+/** Coordinates plus decoded level/source; this fixture defaults omitted falling flags to zero. */
 type FluidCell = readonly [number, number, number, number, number, number?]
 
 const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<FluidCell> = []): ChunkView => {
   const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz)] = blockId
+    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
   if (fluidCells.length === 0) {
-    return { blocks }
+    return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
   }
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, level, source, isFalling = 0] of fluidCells) {
-    levels[blockIndex(lx, y, lz)] = level
-    sources[blockIndex(lx, y, lz)] = source
-    falling[blockIndex(lx, y, lz)] = isFalling
+    levels[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = level
+    sources[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = source
+    falling[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = isFalling
   }
-  return { blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -224,6 +227,35 @@ describe('the height of one cell', () => {
     }),
   )
 
+  it.effect('fluid on the top row of a short chunk still shows a surface', () =>
+    Effect.sync(() => {
+      const height = 8
+      const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+      const levels = new Uint8Array(blocks.length)
+      const sources = new Uint8Array(blocks.length)
+      const falling = new Uint8Array(blocks.length)
+      const top = height - 1
+      const index = blockIndex(8, top, 8, height)
+      blocks[index] = WATER
+      levels[index] = 0
+      sources[index] = 1
+
+      const layers = meshChunk(
+        { blocks, coord: chunkCoord(0, 0), height, fluid: { falling, levels, sources } },
+        {},
+        CONFIG,
+      )
+
+      expect(layers.fluids.length).toBe(5)
+      expect(ysOf(faceOfDirection(layers.fluids, 'yPos') as FluidQuad)).toStrictEqual([
+        top + 0.875,
+        top + 0.875,
+        top + 0.875,
+        top + 0.875,
+      ])
+    }),
+  )
+
   it.effect('a missing FluidView reads as full, non-source cells rather than as no fluid', () =>
     Effect.sync(() => {
       // A caller holding block ids but no simulation state yet gets flat
@@ -246,14 +278,16 @@ describe('the height of one cell', () => {
         // Nothing here can prove their length matches the chunk the way the
         // Internally-built lookup tables do. An index past a too-short array reads
         // Back `undefined`, and `levelIn`/`sourceIn` default that the same way the
-        // Wholly-missing-`FluidView` case above does: `FLUID_BYTE_UNSET`, i.e. full
+        // Wholly-missing-`FluidView` case above does: the lookup's zero sentinel, i.e. full
         // And not a source. This is that default, witnessed with the `FluidView`
         // Present but truncated to one entry instead of absent entirely.
         const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
-        blocks[blockIndex(8, 64, 8)] = WATER
+        blocks[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = WATER
         const chunk: ChunkView = {
+          coord: chunkCoord(0, 0),
+          height: CHUNK_HEIGHT,
           blocks,
-          fluid: { levels: new Uint8Array(1), sources: new Uint8Array(1) },
+          fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
         }
 
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
@@ -625,12 +659,10 @@ describe('what a fluid does to the six cube passes', () => {
     }),
   )
 
-  it.effect('an absent fluid table changes nothing whatsoever', () =>
+  it.effect('an absent fluid table leaves its ids in the solid layer', () =>
     Effect.sync(() => {
-      // The compatibility claim `domain/opacity.ts` makes for `fluidMaxLevels`,
-      // And the reason docs/design-notes.md M-9 and M-10 keep their recorded
-      // `layered-water-glass` figures unamended. A config written before this
-      // File existed must produce byte-identical output.
+      // An empty fluid table means that no block id has fluid geometry. The
+      // Explicit empty table remains a useful control for configuration tests.
       const chunk = chunkWith(
         [
           [8, 64, 8, WATER],
@@ -640,10 +672,12 @@ describe('what a fluid does to the six cube passes', () => {
         [[8, 64, 8, 0, 1]],
       )
       const before: MeshConfig = {
+        crossPlantBlockIds: new Set(),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set([GLASS]),
         waterBlockIds: new Set([WATER]),
       }
-      const after: MeshConfig = { ...before, fluidMaxLevels: new Map<number, number>() }
+      const after: MeshConfig = { ...before }
 
       expect(meshChunk(chunk, {}, after)).toStrictEqual(meshChunk(chunk, {}, before))
       expect(meshChunk(chunk, {}, before).fluids).toStrictEqual([])
@@ -802,9 +836,11 @@ describe('the injected fluid table', () => {
     }),
   )
 
-  it.effect('an absent map means no id is a fluid', () =>
+  it.effect('an empty map explicitly disables fluid geometry', () =>
     Effect.sync(() => {
       const lookup = buildFluidLookup({
+        crossPlantBlockIds: new Set(),
+        fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set([WATER]),
       })
@@ -814,25 +850,23 @@ describe('the injected fluid table', () => {
     }),
   )
 
-  it.effect('an out-of-byte id and an out-of-byte max level are DESCRIBED, not guarded', () =>
+  it.effect('represents the full level range and rejects invalid configuration', () =>
     Effect.sync(() => {
-      // The M-11 position, restated. A write past the end of a `Uint8Array` is
-      // Dropped by the array itself, by specification, so a bounds guard is
-      // Unreachable and permanently uncoverable. A max level of 255 stores
-      // 256, which truncates to 0 and reads back as "not a fluid".
-      //
-      // This test defends no guard. It records what the code does, so that a
-      // Future reader meeting invisible lava has somewhere to land.
-      const lookup = buildFluidLookup({
-        fluidMaxLevels: new Map([
-          [300, 7],
-          [WATER, 255],
-        ]),
-        transparentSolidBlockIds: new Set(),
-        waterBlockIds: new Set(),
-      })
-      expect(isFluidBlock(lookup, WATER)).toBe(false)
-      expect(lookup.length).toBe(256)
+      const lookup = buildFluidLookup({ ...CONFIG, fluidMaxLevels: new Map([[WATER, 255]]) })
+      expect(lookup).toBeInstanceOf(Uint16Array)
+      expect(lookup.length).toBe(MAX_BLOCK_ID + 1)
+      expect(lookup[WATER]).toBe(256)
+      expect(isFluidBlock(lookup, WATER)).toBe(true)
+      expect(isFluidBlock(lookup, STONE)).toBe(false)
+      expect(isFluidBlock(lookup, -1)).toBe(false)
+      expect(isFluidBlock(lookup, MAX_BLOCK_ID + 1)).toBe(false)
+
+      for (const blockId of [-1, 1.5, MAX_BLOCK_ID + 1]) {
+        expect(() => buildFluidLookup({ ...CONFIG, fluidMaxLevels: new Map([[blockId, 7]]) })).toThrow(RangeError)
+      }
+      for (const maxLevel of [-1, 1.5, 256]) {
+        expect(() => buildFluidLookup({ ...CONFIG, fluidMaxLevels: new Map([[WATER, maxLevel]]) })).toThrow(RangeError)
+      }
     }),
   )
 })
@@ -866,7 +900,7 @@ const arbitraryFluidChunk = FastCheck.array(
     for (let {lx} = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
       for (let {y} = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
         for (let {lz} = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
-          const index = blockIndex(lx, y, lz)
+          const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
           blocks[index] = box.blockId
           levels[index] = box.level
           sources[index] = box.source
@@ -875,7 +909,7 @@ const arbitraryFluidChunk = FastCheck.array(
       }
     }
   }
-  return { blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 })
 
 /** A fluid quad as a string, for multiset comparison. */

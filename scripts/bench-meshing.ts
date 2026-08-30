@@ -47,6 +47,7 @@ import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
+  createMeshScratch,
   FACES,
   LOD_LEVELS,
   type LodLevel,
@@ -228,12 +229,13 @@ const getBlockOption = (
  * including the same 1-cell out-of-bounds shell, that meshing performs.
  */
 const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+  const chunk = { blocks, height: CHUNK_HEIGHT }
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          total += getBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz)
+          total += getBlock(chunk, lx + face.nx, y + face.ny, lz + face.nz)
         }
       }
     }
@@ -257,11 +259,17 @@ const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
  * — an Option-returning rewrite of it measures 0.39 here, far outside the 1.5x
  * guard tolerance.
  */
-const frozenGetBlock = (blocks: Readonly<Uint8Array>, lx: number, y: number, lz: number): number => {
-  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) {
+const frozenGetBlock = (
+  blocks: Readonly<Uint8Array>,
+  lx: number,
+  y: number,
+  lz: number,
+  height: number
+): number => {
+  if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= height || lz < 0 || lz >= CHUNK_SIZE) {
     return AIR
   }
-  return blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE] ?? AIR
+  return blocks[y + lz * height + lx * height * CHUNK_SIZE] ?? AIR
 }
 
 const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
@@ -270,7 +278,7 @@ const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
       for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
         for (let y = 0; y < CHUNK_HEIGHT; y += 1) {
-          total += frozenGetBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz)
+          total += frozenGetBlock(blocks, lx + face.nx, y + face.ny, lz + face.nz, CHUNK_HEIGHT)
         }
       }
     }
@@ -513,6 +521,18 @@ const main = async (): Promise<number> => {
     }
   })
 
+  const scratchMeasurements = BENCH_FIXTURES.map(({ name, chunk }) => {
+    const coldMs = measure(() => {
+      sink += meshChunk(chunk, {}, CONFIG).opaque.length
+    }, options(60))
+    const scratch = createMeshScratch()
+    meshChunk(chunk, {}, CONFIG, scratch)
+    const reusedMs = measure(() => {
+      sink += meshChunk(chunk, {}, CONFIG, scratch).opaque.length
+    }, options(60))
+    return { coldMs, name, reusedMs }
+  })
+
   /**
    * The naive mesher, timed on the same fixtures.
    *
@@ -605,6 +625,17 @@ const main = async (): Promise<number> => {
   console.log(`  ${'yardstick/six-linear-byte-passes'.padEnd(44)} ${yardstickMs.toFixed(4)} ms/pass`)
   for (const workload of workloads) {
     console.log(formatWorkload(workload))
+  }
+  console.log('')
+
+  console.log('meshChunk scratch reuse — indicative cold versus same-caller workspace:\n')
+  for (const measurement of scratchMeasurements) {
+    const ratio = measurement.reusedMs / measurement.coldMs
+    console.log(
+      `  ${`meshChunk/${measurement.name}`.padEnd(44)} ` +
+        `${measurement.coldMs.toFixed(4)} -> ${measurement.reusedMs.toFixed(4)} ms/chunk ` +
+        `(${ratio.toFixed(3)}x)`,
+    )
   }
   console.log('')
 

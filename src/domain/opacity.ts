@@ -1,7 +1,7 @@
 /**
  * The three-valued opacity model, and why a boolean will not do.
  *
- * FIRST CUT (叩き台).
+ * Stable layer vocabulary for the current 0.x mesh format.
  *
  * ---------------------------------------------------------------------------
  * A boolean `transparent` flag is INSUFFICIENT. This is measured, not opined.
@@ -46,7 +46,14 @@
  * `MESH_LAYER_PRIORITY` exists so the order is a value that can be tested, not
  * a shape baked into a conditional that a future edit can silently reorder.
  */
-import { AIR } from './chunk-view'
+import {
+  AIR,
+  MAX_BLOCK_ID,
+  MINECRAFT_CROSS_PLANT_BLOCK_IDS,
+  MINECRAFT_FLUID_MAX_LEVELS,
+  MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS,
+  MINECRAFT_WATER_BLOCK_IDS,
+} from './block-data.js'
 
 /**
  * Which geometry buffer a face belongs to.
@@ -61,10 +68,18 @@ export type MeshLayer = 'opaque' | 'water' | 'transparentSolid'
  * Highest priority first. Read this as: "when a block id is claimed by more
  * than one set, the earliest layer in this list wins".
  */
-export const MESH_LAYER_PRIORITY: ReadonlyArray<MeshLayer> = ['transparentSolid', 'water', 'opaque']
+export const MESH_LAYER_PRIORITY = ['transparentSolid', 'water', 'opaque'] as const satisfies readonly [
+  MeshLayer,
+  MeshLayer,
+  MeshLayer,
+]
 
 /** Every layer, in buffer-emission order (opaque first — it is drawn first). */
-export const MESH_LAYERS: ReadonlyArray<MeshLayer> = ['opaque', 'water', 'transparentSolid']
+export const MESH_LAYERS = ['opaque', 'water', 'transparentSolid'] as const satisfies readonly [
+  MeshLayer,
+  MeshLayer,
+  MeshLayer,
+]
 
 /**
  * Meshing configuration, injected by the caller.
@@ -94,6 +109,10 @@ export const MESH_LAYERS: ReadonlyArray<MeshLayer> = ['opaque', 'water', 'transp
  * regression `meshing-transparency-sets-are-native`.
  *
  * Even a native Set is too slow in the innermost loop; see `buildLayerLookup`.
+ *
+ * The collection values are caller-owned and must be treated as immutable after
+ * first use by a mesher. Create new collections and a new config when changing
+ * block classification; internal lookup tables are memoized by collection identity.
  */
 export type MeshConfig = {
   /** Fluid surfaces. Rendered with the water shader. Typically just WATER. */
@@ -110,11 +129,8 @@ export type MeshConfig = {
    * about SHAPE. A block can be both — a see-through cross plate is the normal
    * case — so collapsing them would lose one of the two answers.
    *
-   * Optional, so that a config written before cross plates existed still
-   * typechecks and behaves exactly as it did: absent means no id is a plant,
-   * which is what every such config meant.
    */
-  readonly crossPlantBlockIds?: ReadonlySet<number>
+  readonly crossPlantBlockIds: ReadonlySet<number>
   /**
    * Blocks drawn as a variable-height fluid volume rather than a cube, mapped to
    * the highest LEVEL that fluid's propagation can reach. See
@@ -137,12 +153,8 @@ export type MeshConfig = {
    * whether the block is a cube at all. Water is normally in both, and lava is
    * normally in this one only — it is a fluid, but it is not blended.
    *
-   * Optional for the same compatibility reason as `crossPlantBlockIds`, and here
-   * the stakes are higher: declaring an id a fluid removes its cube faces, so an
-   * absent map is what keeps every existing quad count and recorded baseline in
-   * this repository unchanged.
    */
-  readonly fluidMaxLevels?: ReadonlyMap<number, number>
+  readonly fluidMaxLevels: ReadonlyMap<number, number>
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
@@ -152,8 +164,12 @@ export const EMPTY_MESH_CONFIG: MeshConfig = {
   waterBlockIds: new Set<number>(),
 }
 
-/** Largest block id representable in the chunk's `Uint8Array` storage. */
-export const MAX_BLOCK_ID = 255
+export const MINECRAFT_MESH_CONFIG: MeshConfig = {
+  crossPlantBlockIds: MINECRAFT_CROSS_PLANT_BLOCK_IDS,
+  fluidMaxLevels: MINECRAFT_FLUID_MAX_LEVELS,
+  transparentSolidBlockIds: MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS,
+  waterBlockIds: MINECRAFT_WATER_BLOCK_IDS,
+}
 
 /**
  * Classify one block id. Total: every id lands in exactly one layer.

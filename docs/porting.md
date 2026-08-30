@@ -85,25 +85,35 @@
 | `rendering/.../greedy-meshing-fluid-state.ts:37-43`（水面高） | `domain/fluid-mesh.ts` の `SOURCE_SURFACE_HEIGHT` / `heightForLevel` | `maxLevel` は注入（`design-notes.md` M-12） |
 | `rendering/.../greedy-meshing-fluid-state.ts:74-127`（4 隅の平均） | `domain/fluid-mesh.ts` の `cornerHeight` | 水面の幾何形状。renderer 向けの方向は復号済み状態から `FluidFlow` として追加 |
 | `rendering/.../greedy-meshing-fluid-state.ts:133-134`（`isFluidFaceOccluder`） | `domain/fluid-mesh.ts` の `hidesFluidFace` | `occludes()` で表現。植物も遮蔽しない（M-11 との整合） |
-| `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光とワールドオフセットを外した。側面 4 本は 1 つの関数に畳んだ |
-| `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植していない** | 符号化は所有者のもの。§3.2 |
+| `rendering/.../greedy-meshing-fluids.ts:15-205`（`meshFluidFaces`） | `domain/fluid-mesh.ts` の `meshFluidSurfaces` | 光の入力は `ChunkView.light` と `domain/light-sampling.ts` で復元。ワールドオフセットを外し、側面 4 本は 1 つの関数に畳んだ |
+| `rendering/.../plant-mesh.ts` の専用形状 | `domain/special-mesh.ts` の `meshSpecialBlocks` | kernel の render kind から cactus / slab / pressure plate / rail / lily pad の geometry を生成。rail は `ChunkView.railShapes` の復号済み sidecar から vanilla の 10 状態を選択する。resource-pack JSON の検証は `domain/resource-pack-schema.ts`、state / model 解決と純粋な quad 化は `domain/resource-pack-resolver.ts` / `domain/resource-pack-mesh.ts` に分離し、generic state の自動接続、loader / PNG atlas / material は対象外 |
+| `block/domain/fluid.ts:7-30`（5 つのマスクと `decodeFluidByte`） | **移植対象外** | 符号化は所有者のもの。§3.2 |
 
 ## 3. `ChunkView` と `FluidView` について —— 2 つの境界
 
 ### 3.1 `ChunkView`
 
-`domain/chunk-view.ts` の `ChunkView` は**メッシング専用の固定高さビュー**である:
+`domain/chunk-view.ts` の `ChunkView` は**メッシング専用の可変高さビュー**である。
+kernel のチャンクごとの高さを保持し、範囲検証とストレージの所有権だけをこの境界で確定する:
 
 ```typescript
+import type { ChunkCoord } from '@nerima-games/mc-kernel'
+
 export type ChunkView = {
+  readonly coord: ChunkCoord
+  readonly height: number
   readonly blocks: Readonly<Uint8Array>
   readonly fluid?: FluidView
+  readonly railShapes?: RailShapeView
+  readonly light?: LightView
 }
 ```
 
 `Chunk` を所有するのは mc-kernel（plan.md §3.1: 「`Chunk` データ構造とコーデック」）であり、
-mc-meshing は `@nerima-games/mc-kernel` に依存する。`chunkViewOf` が kernel の可変高さ
-チャンクを検証して変換するため、異なる高さを暗黙に切り詰めたりゼロ埋めしたりしない。
+mc-meshing は `@nerima-games/mc-kernel` に依存する。`ChunkView` は kernel の
+`coord` と可変 `height` を保持し、opaque な `blocks` は呼び出し側が byte view に
+コピーして渡す。`blockCount` が高さを検証して必要なストレージ長を算出するため、異なる高さを
+暗黙に切り詰めたりゼロ埋めしたりしない。
 
 ### 3.2 `FluidView` —— **バイトではなく復号済みの状態**を受け取る
 
@@ -111,29 +121,33 @@ mc-meshing は `@nerima-games/mc-kernel` に依存する。`chunkViewOf` が ker
 export type FluidView = {
   readonly levels: Readonly<Uint8Array>
   readonly sources: Readonly<Uint8Array>
-  readonly falling?: Readonly<Uint8Array>
+  readonly falling: Readonly<Uint8Array>
 }
 ```
 
-同じく差し替え予定の placeholder だが、**`ChunkView` とは差し替わり方が違う**ので分けて書く。
+これはバイト codec とメッシャーの間に置く入力境界であり、**`ChunkView` とは
+所有者と差し替え方が違う**ので分けて書く。
 
-`ChunkView` は参照実装と**同じ形**（`blocks: Uint8Array`）を宣言している。
+`ChunkView.blocks` は参照実装と**同じレイアウト**（`blocks: Uint8Array`）の byte view である。
+一方、kernel の `Chunk.blocks` は opaque な `BlockState` なので、境界で
+`chunk.blocks.copyTo(blocks)` のように呼び出し側がコピーする。
 `FluidView` は**わざと違う形**を宣言している —— 参照実装が渡すのは 1 本の
 `fluid: Uint8Array` であり、それを 5 つのマスク（`packages/block/domain/fluid.ts:7-11`）で
 復号する。**そのマスクを所有しているのは流体シミュレーション側であって、ここではない**ので、
-ここで宣言すればロスターに 2 つ目の綴りが増える（責務表 §3.3 / §3.4 / M-11 が
-座標・LOD 距離・レールの形状についてそれぞれ拒否したのと同じ形）。
+ここで宣言すればロスターに 2 つ目の綴りが増える（責務表 §3.3 / §3.4 が
+座標・LOD 距離について拒否したのと同じ形）。rail state は別途、復号済みの renderer-facing
+sidecar として `railShapes` に置くため、物理側の state byte codec を複製しない。
 
 したがって:
 
 | | `ChunkView.blocks` | `FluidView` |
 | --- | --- | --- |
 | 参照実装の形 | 同一 | **意図的に別** |
-| 差し替え時に起きること | `kernel-adapter.ts` で高さを検証して変換 | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
-| その層の置き場所 | mc-meshing（kernelのChunkを消費する境界） | mc-render（両方に依存する側）。責務表 §3.6 (c) |
+| 差し替え時に起きること | kernel `Chunk` の `coord` / `height` を保持し、`blocks` を呼び出し側が byte view へコピー | **符号化の所有者が publish した復号関数を呼ぶ層が要る** |
+| その層の置き場所 | kernel の `Chunk` を取得する呼び出し側の境界 | mc-render（両方に依存する側）。責務表 §3.6 (c) |
 
 **mc-meshing 側は差し替え時も変わらない。** ここが要求しているのは
-「セルごとの level / source / optional falling」であって「どう詰められていたか」ではないので、
+「セルごとの level / source / falling」であって「どう詰められていたか」ではないので、
 所有者が publish したときに書かれるのは `Uint8Array` → `FluidView` の変換 1 つであり、
 それは `decodeFluidByte` を**所有者から import して**書かれるべきものである。
 
@@ -175,15 +189,15 @@ plan.md §6 Step 2 は「各 Step で参照実装の対応テスト・fixture・
 
 | 参照実装のテスト | LOC | 内容 | 本リポジトリでの扱い |
 | --- | --- | --- | --- |
-| `packages/rendering/test/greedy-meshing-efficiency.test.ts` | 59 | 配列長の整合、index/vertex 比、**16×16 平板がちょうど 6 quad**（:32）、1 層の面数上限 1536（:55） | 面数テストとして移植済み（マージ未実装なので「6 quad」だけ未達） |
+| `packages/rendering/test/greedy-meshing-efficiency.test.ts` | 59 | 配列長の整合、index/vertex 比、**16×16 平板がちょうど 6 quad**（:32）、1 層の面数上限 1536（:55） | 面数テストとして移植済み。グリーディマージ後の「6 quad」も検証済み |
 | `packages/rendering/test/greedy-meshing-advanced.test.ts` | 304 | 透過振り分け: 単一 WATER が `result.water` に行く（:33）、既定の空 Set では行かない（:80） | 移植済み |
 | `packages/rendering/test/greedy-meshing-water.property.test.ts` | 116 | 空の `transparentBlockIds` で水が opaque に行く（:93）、全石チャンクで水メッシュが空（:111） | 移植済み |
-| `packages/rendering/test/greedy-meshing.test.ts` | 449 | index の妥当性（:82）、単一ブロックの quad 数 < 18（:101）、頂点ごとの法線成分（:245-247） | **一部**。頂点バッファ未実装 |
-| `packages/rendering/test/greedy-meshing.property.test.ts` | 265 | fast-check。index 範囲不変条件（:63, :92, :206） | **一部**。同上 |
-| `packages/rendering/test/greedy-meshing-passes.test.ts` | 130 | `dequantLight`、`packMask` のビット配置、`runGreedyExpansion` のマージ / 消費意味論 | **未**。マージ実装と同時 |
+| `packages/rendering/test/greedy-meshing.test.ts` | 449 | index の妥当性（:82）、単一ブロックの quad 数 < 18（:101）、頂点ごとの法線成分（:245-247） | **移植済み**。`packMeshLayers` が typed array と index を生成 |
+| `packages/rendering/test/greedy-meshing.property.test.ts` | 265 | fast-check。index 範囲不変条件（:63, :92, :206） | **移植済み（形は違う）**。`test/mesh.test.ts` が index 範囲、被覆多重集合、重複、削減を property として検証 |
+| `packages/rendering/test/greedy-meshing-passes.test.ts` | 130 | `dequantLight`、`packMask` のビット配置、`runGreedyExpansion` のマージ / 消費意味論 | **一部**。マージ結果は `mesh.test.ts` で検証。参照実装固有の内部 pass / accumulator API は公開していない |
 | `packages/rendering/test/greedy-meshing-boundary.test.ts` | 66 | 境界 | 移植済み（形は違う） |
 | `packages/worker/test/meshing-worker-config.test.ts` | 123 | `TRANSPARENT_IDS` に WATER、`TRANSPARENT_SOLID_IDS` に GLASS/LEAVES、**WATER を含まないこと**（:69） | 移植済み（レイヤ振り分けテストとして） |
-| `greedy-meshing-ao.test.ts` / `-accumulator.test.ts` / `-colors.test.ts` / `-fluid-*.test.ts` / `-pool.test.ts` | 636 | AO / アキュムレータ / 色 / 流体 / プール | **一部**。AO と流体は移植済み。アキュムレータ / 色 / プールは未実装 |
+| `greedy-meshing-ao.test.ts` / `-accumulator.test.ts` / `-colors.test.ts` / `-fluid-*.test.ts` / `-pool.test.ts` | 636 | AO / アキュムレータ / 色 / 流体 / プール | **一部**。AO と流体は移植済み。内部 accumulator API は公開せず、出力プールも所有権を保つため採用しない。色は material / biome の責務で、作業配列だけは `MeshScratch` で再利用 |
 | `chunk-mesh*.test.ts` / `block-mesh.test.ts` / `lod-simplification*.test.ts` / `subregion-greedy*.test.ts` | — | Three.js 依存または帰属先が別 | mc-render の責務 |
 
 共有 fixture: `packages/rendering/test/greedy-meshing-test-utils.ts`（102 行）に

@@ -3,11 +3,10 @@
  *
  * Ported from the reference implementation's
  * `packages/rendering/infrastructure/meshing/greedy-meshing-ao.ts` — the AO half
- * of that file (`aoXPos` .. `aoZNeg`, :15-87). The light-sampling half
- * (`sampleVoxelLight` / `sampleCornerLight`, :95-149) is NOT ported: it reads a
- * `LightGrids`, and docs/responsibility.md §3 gives the light grid to
- * mc-worldgen and says mc-meshing only reads one, which it cannot do yet
- * because there is nothing to read.
+ * of that file (`aoXPos` .. `aoZNeg`, :15-87). The light-sampling half is
+ * implemented separately in `domain/light-sampling.ts`: callers inject decoded
+ * block and sky light grids through `ChunkView.light`, while mc-worldgen remains
+ * responsible for generating and propagating those grids.
  *
  * ---------------------------------------------------------------------------
  * THE REFERENCE'S AO IS PER FACE, NOT PER VERTEX. Read this before changing it
@@ -57,10 +56,10 @@
  * glass should or should not cast ambient occlusion. Using `occludes()` instead
  * would be one line and would look tidier, and it is exactly the kind of
  * plausible tidy-up plan.md §8 warns against — "use the reference as a
- * specification; do not reinvent it". The place to settle it is when lighting
- * arrives, because the reference packs AO and light into one mask cell and the
- * two would then want a single notion of what stops light. See
- * docs/design-notes.md M-10.
+ * specification; do not reinvent it". The reference packs AO and light into one
+ * mask cell, but this port keeps their responsibilities separate: AO remains a
+ * face merge key and corner light is sampled from the injected light view in
+ * `light-sampling.ts`.
  *
  * ---------------------------------------------------------------------------
  * One deliberate deviation: this reads across chunk boundaries
@@ -84,8 +83,9 @@
  * neighbours. A loaded diagonal is consulted; an absent one keeps the same
  * "mesh as open" answer as every other unloaded boundary.
  */
-import { AIR, type ChunkNeighbours, type ChunkView, getBlockAcrossBoundary } from './chunk-view'
-import { type FaceDirection, type QuadAxis, faceOf, tangentAxes } from './faces'
+import { type ChunkNeighbours, type ChunkView, getBlockAcrossBoundary } from './chunk-view.js'
+import { type FaceDirection, type QuadAxis, faceOf, tangentAxes } from './faces.js'
+import { AIR } from './block-data.js'
 
 /**
  * Distinct ambient-occlusion values a face can carry: 0, 1, 2, 3.
@@ -237,7 +237,7 @@ const AO_OFFSETS = {
  * `noUncheckedIndexedAccess` types as `number | undefined` and which would need
  * `?? 0` fallbacks no input can reach — unreachable branches in a hot function,
  * and permanently uncoverable lines in a report this repository intends to gate
- * at 99% (docs/testing.md §3). The indices here are `const` literals, so
+ * at 100% (docs/testing.md §3). The indices here are `const` literals, so
  * TypeScript narrows each to its own literal type and indexing stays total.
  */
 

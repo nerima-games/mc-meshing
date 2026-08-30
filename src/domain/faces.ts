@@ -1,7 +1,7 @@
 /**
  * The six face directions, in their canonical order.
  *
- * FIRST CUT (叩き台).
+ * Stable geometry vocabulary for the current 0.x mesh format.
  *
  * ---------------------------------------------------------------------------
  * Why the order is fixed and testable
@@ -34,22 +34,123 @@ export type FaceDirection = 'xPos' | 'xNeg' | 'yPos' | 'yNeg' | 'zPos' | 'zNeg'
  */
 export type FaceRole = 'top' | 'bottom' | 'side'
 
-export type Face = {
-  readonly direction: FaceDirection
-  /** Unit normal, integral components. */
-  readonly nx: number
-  readonly ny: number
-  readonly nz: number
-  /** Offset to the neighbouring cell across this face. Equal to the normal. */
-  readonly role: FaceRole
+const POSITIVE_NORMAL = 1
+const ZERO_NORMAL = 0
+const NEGATIVE_NORMAL = -1
+
+type FaceByDirection = {
+  readonly xPos: {
+    readonly direction: 'xPos'
+    readonly nx: typeof POSITIVE_NORMAL
+    readonly ny: typeof ZERO_NORMAL
+    readonly nz: typeof ZERO_NORMAL
+    readonly role: 'side'
+  }
+  readonly xNeg: {
+    readonly direction: 'xNeg'
+    readonly nx: typeof NEGATIVE_NORMAL
+    readonly ny: typeof ZERO_NORMAL
+    readonly nz: typeof ZERO_NORMAL
+    readonly role: 'side'
+  }
+  readonly yPos: {
+    readonly direction: 'yPos'
+    readonly nx: typeof ZERO_NORMAL
+    readonly ny: typeof POSITIVE_NORMAL
+    readonly nz: typeof ZERO_NORMAL
+    readonly role: 'top'
+  }
+  readonly yNeg: {
+    readonly direction: 'yNeg'
+    readonly nx: typeof ZERO_NORMAL
+    readonly ny: typeof NEGATIVE_NORMAL
+    readonly nz: typeof ZERO_NORMAL
+    readonly role: 'bottom'
+  }
+  readonly zPos: {
+    readonly direction: 'zPos'
+    readonly nx: typeof ZERO_NORMAL
+    readonly ny: typeof ZERO_NORMAL
+    readonly nz: typeof POSITIVE_NORMAL
+    readonly role: 'side'
+  }
+  readonly zNeg: {
+    readonly direction: 'zNeg'
+    readonly nx: typeof ZERO_NORMAL
+    readonly ny: typeof ZERO_NORMAL
+    readonly nz: typeof NEGATIVE_NORMAL
+    readonly role: 'side'
+  }
 }
 
-const X_POS: Face = { direction: 'xPos', nx: 1, ny: 0, nz: 0, role: 'side' }
-const X_NEG: Face = { direction: 'xNeg', nx: -1, ny: 0, nz: 0, role: 'side' }
-const Y_POS: Face = { direction: 'yPos', nx: 0, ny: 1, nz: 0, role: 'top' }
-const Y_NEG: Face = { direction: 'yNeg', nx: 0, ny: -1, nz: 0, role: 'bottom' }
-const Z_POS: Face = { direction: 'zPos', nx: 0, ny: 0, nz: 1, role: 'side' }
-const Z_NEG: Face = { direction: 'zNeg', nx: 0, ny: 0, nz: -1, role: 'side' }
+export type FaceFor<Direction extends FaceDirection> = FaceByDirection[Direction]
+export type Face = FaceFor<FaceDirection>
+
+type FacePlacementByDirection = {
+  readonly [Direction in FaceDirection]: {
+    readonly direction: Direction
+    readonly role: FaceByDirection[Direction]['role']
+  }
+}
+
+/** The direction/role pair carried by a cube quad. */
+export type FacePlacementFor<Direction extends FaceDirection> = FacePlacementByDirection[Direction]
+export type FacePlacement = FacePlacementFor<FaceDirection>
+
+const FACE_PLACEMENTS = {
+  xNeg: { direction: 'xNeg', role: 'side' },
+  xPos: { direction: 'xPos', role: 'side' },
+  yNeg: { direction: 'yNeg', role: 'bottom' },
+  yPos: { direction: 'yPos', role: 'top' },
+  zNeg: { direction: 'zNeg', role: 'side' },
+  zPos: { direction: 'zPos', role: 'side' },
+} as const satisfies FacePlacementByDirection
+
+export const facePlacementOf = <Direction extends FaceDirection>(direction: Direction): FacePlacementFor<Direction> =>
+  FACE_PLACEMENTS[direction]
+
+const X_POS: Face = {
+  direction: 'xPos',
+  nx: POSITIVE_NORMAL,
+  ny: ZERO_NORMAL,
+  nz: ZERO_NORMAL,
+  role: 'side',
+}
+const X_NEG: Face = {
+  direction: 'xNeg',
+  nx: NEGATIVE_NORMAL,
+  ny: ZERO_NORMAL,
+  nz: ZERO_NORMAL,
+  role: 'side',
+}
+const Y_POS: Face = {
+  direction: 'yPos',
+  nx: ZERO_NORMAL,
+  ny: POSITIVE_NORMAL,
+  nz: ZERO_NORMAL,
+  role: 'top',
+}
+const Y_NEG: Face = {
+  direction: 'yNeg',
+  nx: ZERO_NORMAL,
+  ny: NEGATIVE_NORMAL,
+  nz: ZERO_NORMAL,
+  role: 'bottom',
+}
+const Z_POS: Face = {
+  direction: 'zPos',
+  nx: ZERO_NORMAL,
+  ny: ZERO_NORMAL,
+  nz: POSITIVE_NORMAL,
+  role: 'side',
+}
+const Z_NEG: Face = {
+  direction: 'zNeg',
+  nx: ZERO_NORMAL,
+  ny: ZERO_NORMAL,
+  nz: NEGATIVE_NORMAL,
+  role: 'side',
+}
 
 /**
  * CANONICAL ORDER: +X, -X, +Y, -Y, +Z, -Z.
@@ -57,7 +158,14 @@ const Z_NEG: Face = { direction: 'zNeg', nx: 0, ny: 0, nz: -1, role: 'side' }
  * Changing this array invalidates every golden hash in this repository and in
  * mc-render. That is a deliberate speed bump.
  */
-export const FACES: ReadonlyArray<Face> = [X_POS, X_NEG, Y_POS, Y_NEG, Z_POS, Z_NEG]
+export const FACES = [X_POS, X_NEG, Y_POS, Y_NEG, Z_POS, Z_NEG] as const satisfies readonly [
+  Face,
+  Face,
+  Face,
+  Face,
+  Face,
+  Face,
+]
 
 export const FACE_DIRECTIONS: ReadonlyArray<FaceDirection> = FACES.map((face) => face.direction)
 
@@ -71,7 +179,8 @@ export const FACE_DIRECTIONS: ReadonlyArray<FaceDirection> = FACES.map((face) =>
  * one every golden hash is pinned to. Hence the six named constants above: one
  * declaration, reachable both by order and by name.
  */
-export const faceOf = (direction: FaceDirection): Face => {
+export function faceOf<Direction extends FaceDirection>(direction: Direction): FaceFor<Direction>
+export function faceOf(direction: FaceDirection): Face {
   switch (direction) {
     case 'xPos':
       return X_POS
@@ -90,6 +199,28 @@ export const faceOf = (direction: FaceDirection): Face => {
 
 /** One of the three chunk-local axes. Not a coordinate — a choice of axis. */
 export type QuadAxis = 'x' | 'y' | 'z'
+
+type TangentAxesByDirection = {
+  readonly xPos: readonly ['y', 'z']
+  readonly xNeg: readonly ['y', 'z']
+  readonly yPos: readonly ['x', 'z']
+  readonly yNeg: readonly ['x', 'z']
+  readonly zPos: readonly ['x', 'y']
+  readonly zNeg: readonly ['x', 'y']
+}
+
+export type TangentAxesFor<Direction extends FaceDirection> = TangentAxesByDirection[Direction]
+
+type OppositeDirectionByDirection = {
+  readonly xPos: 'xNeg'
+  readonly xNeg: 'xPos'
+  readonly yPos: 'yNeg'
+  readonly yNeg: 'yPos'
+  readonly zPos: 'zNeg'
+  readonly zNeg: 'zPos'
+}
+
+export type OppositeDirectionFor<Direction extends FaceDirection> = OppositeDirectionByDirection[Direction]
 
 /**
  * The two axes a quad's `width` and `height` run along, in that order.
@@ -113,7 +244,8 @@ export type QuadAxis = 'x' | 'y' | 'z'
  * must emit quads under this convention or `simplifyMesh` will snap the wrong
  * extent. Changing it here is a mesh-format change, not a refactor.
  */
-export const tangentAxes = (direction: FaceDirection): readonly [QuadAxis, QuadAxis] => {
+export function tangentAxes<Direction extends FaceDirection>(direction: Direction): TangentAxesFor<Direction>
+export function tangentAxes(direction: FaceDirection): readonly [QuadAxis, QuadAxis] {
   switch (direction) {
     case 'xPos':
     case 'xNeg':
@@ -127,7 +259,8 @@ export const tangentAxes = (direction: FaceDirection): readonly [QuadAxis, QuadA
 }
 
 /** Every face has an opposite, and it is the one with the negated normal. */
-export const oppositeDirection = (direction: FaceDirection): FaceDirection => {
+export function oppositeDirection<Direction extends FaceDirection>(direction: Direction): OppositeDirectionFor<Direction>
+export function oppositeDirection(direction: FaceDirection): FaceDirection {
   switch (direction) {
     case 'xPos':
       return 'xNeg'
