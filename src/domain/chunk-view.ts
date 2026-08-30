@@ -6,7 +6,7 @@
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
-import { AIR, type BlockId } from './block-data.js'
+import { AIR, type BlockId, blockIdAt } from './block-data.js'
 import { CHUNK_SIZE_XZ, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
 import type { LightView } from './light-types.js'
 import type { RailShapeView } from './rail-types.js'
@@ -14,7 +14,7 @@ import type { RailShapeView } from './rail-types.js'
 export type { ChunkCoord } from '@nerima-games/mc-kernel'
 
 /** Horizontal extent of a chunk, in blocks. */
-export const CHUNK_SIZE = CHUNK_SIZE_XZ
+export const CHUNK_SIZE: number = CHUNK_SIZE_XZ
 
 /** Canonical vertical extent used by the fixtures and the default chunk. */
 export const CHUNK_HEIGHT = 256
@@ -35,7 +35,7 @@ export const blockCount = (height: number): number => {
   return CHUNK_SIZE * height * CHUNK_SIZE
 }
 
-export const blockCountOf = blockCount
+export const blockCountOf: (height: number) => number = blockCount
 
 /**
  * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.
@@ -45,7 +45,7 @@ export const blockCountOf = blockCount
  * (`greedy-meshing-ao.ts:8`), which matters: it is what lets the reference's
  * chunk fixtures be reused directly as golden inputs.
  */
-export const blockIndex = (lx: number, y: number, lz: number, height = CHUNK_HEIGHT): number =>
+export const blockIndex = (lx: number, y: number, lz: number, height: number = CHUNK_HEIGHT): number =>
   y + lz * height + lx * height * CHUNK_SIZE
 
 /**
@@ -130,10 +130,10 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   readonly light?: LightView
 }
 
-export const BLOCKS_PER_CHUNK = blockCountOf(CHUNK_HEIGHT)
+export const BLOCKS_PER_CHUNK: number = blockCountOf(CHUNK_HEIGHT)
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
-export const emptyChunk = (height = CHUNK_HEIGHT): ChunkView => ({
+export const emptyChunk = (height: number = CHUNK_HEIGHT): ChunkView => ({
   blocks: new Uint8Array(blockCountOf(height)),
   coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
   height,
@@ -184,7 +184,7 @@ export const getBlock = (chunk: Pick<ChunkView, 'blocks' | 'height'>, lx: number
   ) {
     return AIR
   }
-  return (blocks[y + lz * height + lx * height * CHUNK_SIZE] ?? AIR) as BlockId
+  return blockIdAt(blocks, y + lz * height + lx * height * CHUNK_SIZE)
 }
 
 /**

@@ -14,7 +14,7 @@ import { isCrossPlant } from './plant-mesh.js'
 
 const SOURCE_SURFACE_HEIGHT_NUMERATOR = 14
 const SOURCE_SURFACE_HEIGHT_DENOMINATOR = 16
-export const SOURCE_SURFACE_HEIGHT = SOURCE_SURFACE_HEIGHT_NUMERATOR / SOURCE_SURFACE_HEIGHT_DENOMINATOR
+export const SOURCE_SURFACE_HEIGHT: number = SOURCE_SURFACE_HEIGHT_NUMERATOR / SOURCE_SURFACE_HEIGHT_DENOMINATOR
 
 const NO_FLUID = -1
 const INDEX_TO_COUNT_OFFSET = 1
@@ -64,8 +64,19 @@ export const buildFluidLookup = (config: MeshConfig): Uint16Array => {
 export const isFluidBlock = (lookup: Uint16Array, blockId: number): boolean =>
   (lookup[blockId] ?? FLUID_LOOKUP_UNSET) !== FLUID_LOOKUP_UNSET
 
-const maxLevelOf = (lookup: Uint16Array, blockId: number): number =>
-  lookup[blockId]! - INDEX_TO_COUNT_OFFSET
+/**
+ * Exported so the defensive branch (a `blockId` genuinely absent from
+ * `lookup`, which every caller only reaches after `isFluidBlock` has already
+ * confirmed presence) has a direct test instead of an untestable one buried
+ * inside callers that never violate that precondition.
+ */
+export const maxLevelOf = (lookup: Uint16Array, blockId: number): number => {
+  const entry = lookup[blockId]
+  if (typeof entry === 'undefined') {
+    throw new RangeError(`unreachable: no fluid lookup entry for block id ${blockId}`)
+  }
+  return entry - INDEX_TO_COUNT_OFFSET
+}
 
 const heightForLevel = (level: number, maxLevel: number, source: boolean): number => {
   if (source) {

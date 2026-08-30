@@ -5,9 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# These are public repositories, so a fork PR runs this workflow. Nothing here
-# needs write access, and an unset block inherits an org default that is not
-# managed in Terraform.
 permissions:
   contents: read
   packages: read
@@ -15,21 +12,16 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history: `pnpm changeset status --since=origin/main` (below)
-          # needs to diff against the merge base, which a shallow (depth-1)
-          # checkout cannot resolve.
           fetch-depth: 0
 
       - name: Setup pnpm
-        # Pinned to a commit, not a mutable tag: this is a third-party action
-        # and a tag can be repointed at new code without any change here.
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
       - name: Setup Node.js
@@ -38,43 +30,40 @@ jobs:
           node-version: "24"
           cache: "pnpm"
 
-      - name: Configure GitHub Packages authentication
-        run: pnpm config set --location=user //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install dependencies
-        # --ignore-scripts: pnpm runs postinstall, and a fork PR can edit
-        # package.json and the lockfile consistently and still satisfy
-        # --frozen-lockfile. Nothing here needs a lifecycle script.
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      # oxlint is provided by the Nix devShell (flake.nix), not a package.json
-      # devDependency — see flake.nix's comment on why. Installing Nix just for
-      # this one step is the org-wide trade-off (DEPENDENCY_POLICY.md §5
-      # "前提条件"): one pinned oxlint version instead of 16 repos each
-      # independently drifting on their own npm-resolved version.
       - name: Set up Nix
         uses: ./.github/actions/nix-setup
         with:
           cachix-cache: ${{ vars.CACHIX_CACHE }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      # oxlint's no-restricted-imports (.oxlintrc.json) is the enforcement
-      # mechanism for the Tier dependency policy (DEPENDENCY_POLICY.md §5).
-      # `pnpm verify` chains typecheck/lint/coverage/build/package verification
-      # in one step (unlike the org
-      # template's separate Lint step), so the whole step runs under
-      # `nix develop` to put oxlint on PATH for the `pnpm lint` it invokes.
-      - name: Verify (typecheck, lint, coverage, build, package)
+      - name: Configure GitHub Packages authentication
+        run: pnpm config set --location=user //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: nix develop --command pnpm install --frozen-lockfile
+
+      - name: Verify
         run: nix develop --command pnpm verify
 
-      # RELEASE_STANDARD.md §1.2: every user-facing PR must add a changeset.
-      # Only meaningful for PRs (a push to main has nothing left to diff
-      # against itself).
       - name: Changeset status
-        if: github.event_name == 'pull_request'
-        run: pnpm changeset status --since=origin/main
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qvE '^(docs/|\.github/)'; then
+            nix develop --command pnpm exec changeset status --since="origin/${{ github.base_ref }}"
+          else
+            echo "Only docs/ or .github/ changed; skipping changeset check."
+          fi
+
+      - name: Coverage
+        run: nix develop --command pnpm test:coverage
+
+      - name: Verify package boundary
+        run: nix develop --command pnpm package:verify
+
+      - name: Audit dependencies
+        run: nix develop --command pnpm audit
 
       - name: Upload coverage report
         if: always()

@@ -18,6 +18,15 @@ import type {
   ResourcePackAssets,
 } from '../src/domain/resource-pack-types.js'
 
+/**
+ * Force a deliberately malformed fixture past the type checker so it can
+ * reach a strictly-typed parameter and prove the runtime schema rejects it.
+ * No type guard or validated constructor applies here — the fixture is
+ * invalid on purpose. `any` in, `T` out is a legal implicit assignment (no
+ * `as`/`!`), so it doesn't trip the org's `no-type-assertion` ast-grep rule.
+ */
+const invalidFixture = <T,>(value: any): T => value
+
 const face = (texture: string, options: Omit<ModelFace, 'texture'> = {}): ModelFace => ({
   texture,
   ...options,
@@ -213,15 +222,15 @@ describe('resource-pack resolver', () => {
     expect(() =>
       resolveBlockStateModels('demo', {}, {
         ...assets,
-        blockstates: { 'minecraft:demo': {} } as unknown as ResourcePackAssets['blockstates'],
+        blockstates: invalidFixture<ResourcePackAssets['blockstates']>({ 'minecraft:demo': {} }),
       }),
     ).toThrow('must define variants or multipart')
     expect(() =>
       resolveBlockStateModels('demo', {}, {
         ...assets,
-        blockstates: {
+        blockstates: invalidFixture<ResourcePackAssets['blockstates']>({
           'minecraft:demo': { variants: { '': [] } },
-        } as unknown as ResourcePackAssets['blockstates'],
+        }),
       }),
     ).toThrow('must not be empty')
     expect(() =>
@@ -404,7 +413,7 @@ describe('resource-pack mesh', () => {
   })
 
   it('rejects non-axis-aligned runtime block rotations', () => {
-    const invalidTransform = { y: 45 } as unknown as ResourceModelTransform
+    const invalidTransform = invalidFixture<ResourceModelTransform>({ y: 45 })
     expect(() => meshBlockModel('block/base', assets, invalidTransform)).toThrow('axis-aligned')
   })
 

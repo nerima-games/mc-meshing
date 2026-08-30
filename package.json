@@ -15,12 +15,12 @@
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0",
-    "pnpm": ">=11.0.0"
+    "pnpm": ">=11.24.0"
   },
-  "packageManager": "pnpm@11.17.0",
+  "packageManager": "pnpm@11.24.0",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "access": "public"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,8 +36,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "CHANGELOG.md"
+    "README.md"
   ],
   "keywords": [
     "minecraft",
@@ -48,30 +47,29 @@
     "greedy-meshing"
   ],
   "scripts": {
-    "typecheck": "tsc -p tsconfig.build.json --noEmit --pretty false && tsc -p tsconfig.test.json --pretty false",
-    "build": "tsc -p tsconfig.build.json --pretty false",
-    "lint": "oxlint --deny-warnings src scripts test",
-    "lint:fix": "oxlint --fix src scripts test",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
     "bench": "tsx scripts/bench-meshing.ts",
-    "verify:package": "node scripts/verify-package.mjs",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test:coverage && pnpm build && pnpm verify:package",
-    "prepublishOnly": "pnpm verify"
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.release.json --pretty false",
+    "lint": "oxlint --deny-warnings src scripts test && ast-grep scan",
+    "lint:fix": "oxlint --fix src scripts test",
+    "package:verify": "pnpm build && node scripts/verify-package.mjs",
+    "prepublishOnly": "pnpm verify && pnpm package:verify",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "dependencies": {
     "@nerima-games/mc-kernel": "0.4.0",
-    "effect": "^3.22.1"
+    "effect": "3.22.1"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^1.0.0",
-    "@changesets/cli": "^3.0.0",
-    "@types/node": "^26.2.0",
-    "@typescript/native": "npm:typescript@7.0.2",
-    "@vitest/coverage-v8": "^4.1.10",
-    "tsx": "^4.23.12",
-    "typescript": "npm:@typescript/typescript6@6.0.2",
-    "vitest": "^4.1.10"
+    "@changesets/changelog-github": "1.0.0",
+    "@changesets/cli": "3.0.1",
+    "@types/node": "26.4.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { BlockId } from '@nerima-games/mc-kernel'
+import { BlockId } from '@nerima-games/mc-kernel'
 import {
   MESH_BUFFER_LAYERS,
   packMeshLayers,
@@ -23,7 +23,7 @@ const emptyLayers = (): MutableMeshLayers => ({
 
 const cubeQuadOf = (direction: Quad['direction']): Quad => ({
   ...facePlacementOf(direction),
-  blockId: 1 as BlockId,
+  blockId: BlockId(1),
   lx: 2,
   y: 3,
   lz: 4,
@@ -108,7 +108,7 @@ describe('packMeshLayers', () => {
     const layers = emptyLayers()
     layers.crossPlants = [
       {
-        blockId: 2 as BlockId,
+        blockId: BlockId(2),
         role: 'side',
         vertices: [
           [0, 0, 0],
@@ -124,7 +124,7 @@ describe('packMeshLayers', () => {
     ]
     layers.fluids = [
       {
-        blockId: 3 as BlockId,
+        blockId: BlockId(3),
         direction: 'yPos',
         vertices: [
           [1, 0, 0],
@@ -138,7 +138,7 @@ describe('packMeshLayers', () => {
     layers.specialBlocks = [
       {
         ...facePlacementOf('yNeg'),
-        blockId: 4 as BlockId,
+        blockId: BlockId(4),
         kind: 'slab',
         nx: 0,
         ny: -1,

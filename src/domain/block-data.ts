@@ -1,3 +1,4 @@
+import { Brand } from 'effect'
 import {
   AIR_BLOCK_ID,
   BLOCK_IDS,
@@ -10,9 +11,31 @@ import {
 
 export type { BlockId }
 
-export const AIR = AIR_BLOCK_ID
+export const AIR: BlockId = AIR_BLOCK_ID
 
-export const MAX_BLOCK_ID = BLOCK_ID_MAX
+export const MAX_BLOCK_ID: number = BLOCK_ID_MAX
+
+/**
+ * A `Uint8Array` element, or a value masked with `& MAX_BLOCK_ID`, is always
+ * an integer in `[0, MAX_BLOCK_ID]` — exactly `BlockId`'s valid range — so
+ * this is a structurally-guaranteed upcast, not an unchecked claim about an
+ * arbitrary number. `Brand.nominal` applies the same nominal tag mc-kernel's
+ * `BlockId` (a `Brand.refined`, validating constructor) uses, but without a
+ * redundant runtime check on a value that is already known-safe, and without
+ * the `as`/`!` syntax the org's `no-type-assertion` ast-grep rule bans —
+ * unlike a manual guard, it adds no branch a caller can never actually take,
+ * which a real `Uint8Array` byte or an `& MAX_BLOCK_ID` mask never needs.
+ */
+const uncheckedBlockId = Brand.nominal<BlockId>()
+
+/** Read one block id out of a chunk's byte storage, defaulting to `AIR` for an out-of-range index. */
+export const blockIdAt = (blocks: Readonly<Uint8Array>, index: number): BlockId => {
+  const raw = blocks[index]
+  if (typeof raw === 'undefined') {
+    return AIR
+  }
+  return uncheckedBlockId(raw)
+}
 
 export const blockIdsWithRenderKind = (kind: RenderKind): ReadonlySet<BlockId> =>
   new Set(BLOCK_IDS.filter((blockId) => propertyOfBlockId(blockId, 'renderKind') === kind))
@@ -28,7 +51,7 @@ export const MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS: ReadonlySet<BlockId> = regis
   kernelBlockIdsWithOpacity('transparentSolid'),
 )
 
-export const MINECRAFT_CROSS_PLANT_BLOCK_IDS = blockIdsWithRenderKind('cross')
+export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: ReadonlySet<BlockId> = blockIdsWithRenderKind('cross')
 
 /**
  * The kernel exposes fluid kind but not the state-propagation level ceiling.

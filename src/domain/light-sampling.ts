@@ -131,10 +131,15 @@ const readLight = (
   index: number,
   fallback: number,
 ): number => {
-  if (index < CELL_ORIGIN || index >= values.length) {
+  // A `Uint8Array` read at a negative index or past its length both yield
+  // `undefined` in JS (verified: no throw, no wraparound), so the one
+  // `index < CELL_ORIGIN || index >= values.length` check this used to be is
+  // exactly what checking `value` already covers — one branch, not two.
+  const value = values[index]
+  if (typeof value === 'undefined') {
     return fallback
   }
-  return clampMeshLight(values[index]!)
+  return clampMeshLight(value)
 }
 
 const sampleLightInChunk = ({ chunk, light, lx, y, lz, fallback }: ChunkLightQuery): LightSample => {
@@ -169,7 +174,13 @@ export const sampleLightAt = (...args: SampleLightArguments): LightSample => {
   return sampleLightInChunk({ chunk: target.chunk, fallback: OPEN_SKY_LIGHT, light, lx: target.lx, lz: target.lz, y })
 }
 
-const CORNER_OFFSETS: Readonly<Record<FaceDirection, readonly [number, number, number][]>> = {
+/** A 3D grid offset. */
+type Offset = readonly [number, number, number]
+
+/** The four corner offsets for one face direction, as a fixed 4-tuple so each position is indexable without `T | undefined`. */
+type CornerOffsets = readonly [Offset, Offset, Offset, Offset]
+
+const CORNER_OFFSETS: Readonly<Record<FaceDirection, CornerOffsets>> = {
   xNeg: [[CELL_ORIGIN, CELL_ORIGIN, CELL_STEP], [CELL_ORIGIN, CELL_STEP, CELL_STEP], [CELL_ORIGIN, CELL_STEP, CELL_ORIGIN], [CELL_ORIGIN, CELL_ORIGIN, CELL_ORIGIN]],
   xPos: [[CELL_ORIGIN, CELL_ORIGIN, CELL_ORIGIN], [CELL_ORIGIN, CELL_STEP, CELL_ORIGIN], [CELL_ORIGIN, CELL_STEP, CELL_STEP], [CELL_ORIGIN, CELL_ORIGIN, CELL_STEP]],
   yNeg: [[CELL_ORIGIN, CELL_ORIGIN, CELL_STEP], [CELL_ORIGIN, CELL_ORIGIN, CELL_ORIGIN], [CELL_STEP, CELL_ORIGIN, CELL_ORIGIN], [CELL_STEP, CELL_ORIGIN, CELL_STEP]],
@@ -186,12 +197,14 @@ export const quadLightAt = (...args: QuadLightArguments): QuadLight | undefined 
     return
   }
 
-  const offsets = CORNER_OFFSETS[direction]
-  const samples = offsets.map(([dx, dy, dz]) => sampleLightAt(chunk, neighbours, lx + dx, y + dy, lz + dz))
-  const [first, second, third, fourth] = samples
+  const [firstOffset, secondOffset, thirdOffset, fourthOffset] = CORNER_OFFSETS[direction]
+  const first = sampleLightAt(chunk, neighbours, lx + firstOffset[0], y + firstOffset[1], lz + firstOffset[2])
+  const second = sampleLightAt(chunk, neighbours, lx + secondOffset[0], y + secondOffset[1], lz + secondOffset[2])
+  const third = sampleLightAt(chunk, neighbours, lx + thirdOffset[0], y + thirdOffset[1], lz + thirdOffset[2])
+  const fourth = sampleLightAt(chunk, neighbours, lx + fourthOffset[0], y + fourthOffset[1], lz + fourthOffset[2])
 
   return {
-    block: [first!.block, second!.block, third!.block, fourth!.block],
-    sky: [first!.sky, second!.sky, third!.sky, fourth!.sky],
+    block: [first.block, second.block, third.block, fourth.block],
+    sky: [first.sky, second.sky, third.sky, fourth.sky],
   }
 }

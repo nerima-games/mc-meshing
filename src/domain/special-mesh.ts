@@ -1,4 +1,4 @@
-import { AIR, type BlockId, MAX_BLOCK_ID } from './block-data.js'
+import { AIR, type BlockId, MAX_BLOCK_ID, blockIdAt } from './block-data.js'
 import {
   BLOCK_IDS,
   propertyOfBlockId,
@@ -439,7 +439,7 @@ export const meshSpecialBlocks = (
       lz += UNIT_SIZE, columnOffset += UNIT_SIZE * chunk.height
     ) {
       for (let y = minY; y < maxY; y += UNIT_SIZE) {
-        const blockId = (chunk.blocks[columnOffset + y] ?? AIR) as BlockId
+        const blockId = blockIdAt(chunk.blocks, columnOffset + y)
         const kind = specialKindOf(blockId)
         if (kind !== null) {
           meshSpecialCell(result, chunk, neighbours, blockId, kind, lx, y, lz)

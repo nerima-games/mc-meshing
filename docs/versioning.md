@@ -34,19 +34,23 @@
 
 - `dependencies` に `effect` と `@nerima-games/mc-kernel@0.4.0` を宣言する。
 - `exports` は **`dist/` の ESM と declaration** を指し、開発用の `src/` / `test/` は tarball に含めない。
-- `pnpm build` が `dist/` を生成し、`pnpm verify:package` が tarball の内容と展開後の import を検証する。
-- `prepublishOnly` は `pnpm verify` を実行する。GitHub Packages への自動 publish job はまだ有効化していない。
+- `pnpm build` が `dist/` を生成し、`pnpm package:verify` が tarball の内容と展開後の import を検証する。
+- `prepublishOnly` は `pnpm verify && pnpm package:verify` を実行する。
+  GitHub Packages への publish は `.github/workflows/release.yaml`（org 標準。detect → publish → tag）が担う。
 
 ## 3. ビルドと publish の現在地
 
-開発時の型検査は `tsconfig.base.json` の `noEmit` を維持し、公開用の `tsconfig.build.json` だけが
-`dist/` に JavaScript と declaration を出力する。`pnpm verify` は次の順に全ゲートを通す:
+開発時の型検査は `tsconfig.base.json` の `noEmit` を維持し、`tsconfig.release.json` だけが
+`dist/` に JavaScript と declaration を出力する（`tsconfig.build.json` は出荷ソースの型検査専用で emit しない）。
+`pnpm verify` は次の順にゲートを通す:
 
 1. `pnpm typecheck`
 2. `pnpm lint`
-3. `pnpm test:coverage`（4 指標 100%）
-4. `pnpm build`
-5. `pnpm verify:package`（tarball を作成し、公開形と同じ展開済み成果物を import）
+3. `pnpm test`
+
+カバレッジ計測（`pnpm test:coverage`、4 指標 100%）、`pnpm build`、`pnpm package:verify`
+（tarball を作成し、公開形と同じ展開済み成果物を import）、`pnpm audit` は
+CI（`.github/workflows/ci.yaml`）の別ステップとして実行される（docs/testing.md §5）。
 
 changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x → 1.0.0 の昇格判断
 （§2, §5 参照）は、上流 consumer がこの公開形を import して契約を確認した後に行う。
@@ -58,12 +62,14 @@ changesets 運用は導入済み（本書 §7、RELEASE_STANDARD.md §1）。0.x
 ```json
 "publishConfig": {
   "registry": "https://npm.pkg.github.com",
-  "access": "restricted"
+  "access": "public"
 }
 ```
 
 plan.md §9 の未決事項に「パッケージ公開先（GitHub Packages / private registry）」があるが、
 Step 0 の実装として GitHub Packages を選んである。組織 `nerima-games` の下に 16 パッケージが並ぶ。
+`access` は `public`（GitHub Packages 側で packages が public 化済みのため。`restricted` のままだと
+新規 publish が private に戻り、下流 CI が 403 になる）。
 
 消費側は `.npmrc` に次を要する:
 

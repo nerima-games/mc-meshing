@@ -208,6 +208,21 @@ const fluidLookupForMesh = (config: MeshConfig): Uint16Array => {
   return lookup
 }
 
+/**
+ * Route to one of exactly three per-layer buckets by `layerAt`'s index.
+ * Exported so the defensive branch (an index `layerAt` should never
+ * return, since `buildLayerLookup` only ever writes `MESH_LAYERS.indexOf(...)`
+ * and `buckets` has exactly `MESH_LAYERS.length` entries in the same order)
+ * has a direct test instead of an untestable one buried inside `makeSink`.
+ */
+export const bucketFor = <Bucket,>(buckets: readonly [Bucket, Bucket, Bucket], index: number): Bucket => {
+  const bucket = buckets[index]
+  if (typeof bucket === 'undefined') {
+    throw new RangeError(`unreachable: layer index ${index} outside the three MESH_LAYERS buckets`)
+  }
+  return bucket
+}
+
 /** The three per-layer sinks, and the routing rule, in one place. */
 const makeSink = (
   lookup: Uint8Array,
@@ -221,19 +236,14 @@ const makeSink = (
   const opaque: Array<Quad> = []
   const water: Array<Quad> = []
   const transparentSolid: Array<Quad> = []
-  const buckets = [opaque, water, transparentSolid]
+  const buckets: readonly [Array<Quad>, Array<Quad>, Array<Quad>] = [opaque, water, transparentSolid]
   return {
     layers: { crossPlants, fluids, opaque, specialBlocks, transparentSolid, water },
     // MESH_LAYERS is ['opaque', 'water', 'transparentSolid'] and the lookup
     // Stores an index into it, so the routing is the index — no re-spelling of
     // The priority order, which lives in `opacity.ts` and is tested there.
     push: (quad: Quad): void => {
-      // ASSERTED: `layerAt` returns an index into `MESH_LAYERS` (`buildLayerLookup`
-      // Only ever writes `MESH_LAYERS.indexOf(...)`), and `buckets` has exactly
-      // `MESH_LAYERS.length` entries in the same order, so the index is always
-      // In range.
-      const bucket = buckets[layerAt(lookup, quad.blockId)]!
-      bucket.push(quad)
+      bucketFor(buckets, layerAt(lookup, quad.blockId)).push(quad)
     },
   }
 }

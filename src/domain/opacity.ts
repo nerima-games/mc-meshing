@@ -68,18 +68,18 @@ export type MeshLayer = 'opaque' | 'water' | 'transparentSolid'
  * Highest priority first. Read this as: "when a block id is claimed by more
  * than one set, the earliest layer in this list wins".
  */
-export const MESH_LAYER_PRIORITY = ['transparentSolid', 'water', 'opaque'] as const satisfies readonly [
-  MeshLayer,
-  MeshLayer,
-  MeshLayer,
-]
+export const MESH_LAYER_PRIORITY: readonly [MeshLayer, MeshLayer, MeshLayer] = [
+  'transparentSolid',
+  'water',
+  'opaque',
+] as const satisfies readonly [MeshLayer, MeshLayer, MeshLayer]
 
 /** Every layer, in buffer-emission order (opaque first — it is drawn first). */
-export const MESH_LAYERS = ['opaque', 'water', 'transparentSolid'] as const satisfies readonly [
-  MeshLayer,
-  MeshLayer,
-  MeshLayer,
-]
+export const MESH_LAYERS: readonly [MeshLayer, MeshLayer, MeshLayer] = [
+  'opaque',
+  'water',
+  'transparentSolid',
+] as const satisfies readonly [MeshLayer, MeshLayer, MeshLayer]
 
 /**
  * Meshing configuration, injected by the caller.

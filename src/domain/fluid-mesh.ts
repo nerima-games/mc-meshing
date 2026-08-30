@@ -1,5 +1,5 @@
 /** Fluid surface geometry. State sampling and boundary traversal live in `fluid-sampling.ts`. */
-import { type BlockId, MAX_BLOCK_ID } from './block-data.js'
+import type { BlockId } from './block-data.js'
 import {
   CHUNK_SIZE,
   type ChunkNeighbours,
@@ -107,7 +107,10 @@ const SIDE_STEP: Readonly<Record<FluidDirection, readonly [dx: number, dz: numbe
   zPos: [AXIS_NO_STEP, AXIS_POSITIVE_STEP],
 }
 
-const SIDE_CORNER_INDICES: Readonly<Record<FluidDirection, readonly [near: number, far: number]>> = {
+/** A literal-typed corner index, so indexing `corners` (a 4-tuple) with one stays defined, never `T | undefined`. */
+type CornerIndex = 0 | 1 | 2 | 3
+
+const SIDE_CORNER_INDICES: Readonly<Record<FluidDirection, readonly [near: CornerIndex, far: CornerIndex]>> = {
   xNeg: [CORNER_NEAR_FAR_INDEX, CORNER_NEAR_NEAR_INDEX],
   xPos: [CORNER_FAR_NEAR_INDEX, CORNER_FAR_FAR_INDEX],
   zNeg: [CORNER_NEAR_NEAR_INDEX, CORNER_FAR_NEAR_INDEX],
@@ -188,8 +191,8 @@ const pushSide = (
     direction,
     vertices: [
       [nearX, bottom, nearZ],
-      [nearX, corners[nearIndex]!, nearZ],
-      [farX, corners[farIndex]!, farZ],
+      [nearX, corners[nearIndex], nearZ],
+      [farX, corners[farIndex], farZ],
       [farX, bottom, farZ],
     ],
     ...lightPropertiesOf(light),
@@ -212,12 +215,12 @@ const pushSide = (
  * to the same representation used by `isFluidBlock`.
  */
 const anyFluidConfigured = (fluids: Uint16Array): boolean => {
-  // `blockId` is the loop counter itself, bounded to `[0, MAX_BLOCK_ID]` by the
-  // `for` condition, and `fluids` is always a `MAX_BLOCK_ID + 1`-entry table —
-  // So `fluids[blockId]` is never `undefined` and the read is asserted rather
-  // Than defaulted, as `isFluidBlock` above does for the same table.
-  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += LOOP_STEP) {
-    if (fluids[blockId]! !== FLUID_LOOKUP_UNSET) {
+  // Iterating the table by VALUE, not by indexing `fluids[blockId]` over a
+  // `blockId` loop counter, is what keeps this branch-free: a `Uint16Array`
+  // iterator always yields a defined `number` (never `undefined`), so there
+  // is no unreachable-but-still-typed branch to guard or assert away.
+  for (const entry of fluids) {
+    if (entry !== FLUID_LOOKUP_UNSET) {
       return true
     }
   }

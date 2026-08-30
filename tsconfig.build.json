@@ -1,14 +1,8 @@
 {
-  // The package emits browser/worker/server-safe ESM and declarations. NodeNext
-  // resolution checks the same explicit ESM specifiers used by the package.
+  // Shipped source only, check-only. `tsconfig.release.json` is the sole
+  // emitting configuration (`pnpm build`); this file exists so `pnpm typecheck`
+  // can type-check the shipped surface without leaving generated files in src.
   "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "rootDir": "src",
-    "outDir": "dist",
-    "noEmit": false
-  },
   "include": ["src/index.ts", "src/domain/**/*.ts"],
   "exclude": [
     "node_modules",

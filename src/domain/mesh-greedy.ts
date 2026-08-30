@@ -1,4 +1,5 @@
-import { AIR, type BlockId, MAX_BLOCK_ID } from './block-data.js'
+import { Brand } from 'effect'
+import { AIR, type BlockId, MAX_BLOCK_ID, blockIdAt } from './block-data.js'
 import {
   CHUNK_SIZE,
   type ChunkNeighbours,
@@ -34,8 +35,8 @@ const packFaceCell = (blockId: number, ao: number): number => blockId | (ao << A
 
 const packLightCorners = (values: readonly number[]): number => {
   let packed = NO_FACE
-  for (let corner = FIRST_INDEX; corner < values.length; corner += STEP) {
-    packed |= (values[corner]! & LIGHT_NIBBLE_MASK) << (corner * LIGHT_CORNER_SHIFT)
+  for (const [corner, value] of values.entries()) {
+    packed |= (value & LIGHT_NIBBLE_MASK) << (corner * LIGHT_CORNER_SHIFT)
   }
   return packed
 }
@@ -72,7 +73,13 @@ const packedLightPropertiesOf = (
   return {}
 }
 
-const faceCellBlockId = (cell: number): BlockId => (cell & MAX_BLOCK_ID) as BlockId
+// `cell & MAX_BLOCK_ID` (a mask of 0xFF) is always an integer in
+// [0, MAX_BLOCK_ID] by construction of the bitwise AND itself — see
+// `block-data.ts`'s `uncheckedBlockId` for why `Brand.nominal` applies here
+// instead of a guard with a branch no caller can ever take.
+const uncheckedBlockId = Brand.nominal<BlockId>()
+
+const faceCellBlockId = (cell: number): BlockId => uncheckedBlockId(cell & MAX_BLOCK_ID)
 
 const faceCellAo = (cell: number): number => cell >> AO_SHIFT
 
@@ -214,9 +221,22 @@ const growRuns = (
   return [innerRun, outerRun]
 }
 
+/**
+ * Read one cell out of a greedy-expansion mask. Exported so the defensive
+ * branch (an index `expandGreedy`'s loop bounds should never produce) has a
+ * direct test instead of an untestable one buried inside `expandCell`.
+ */
+export const maskCellAt = (mask: Uint16Array, base: number): number => {
+  const cell = mask[base]
+  if (typeof cell === 'undefined') {
+    throw new RangeError(`unreachable: greedy mask index ${base} out of range`)
+  }
+  return cell
+}
+
 const expandCell = (ctx: GreedyExpansionContext, depth: number, outer: number, inner: number): void => {
   const base = outer * ctx.innerSize + inner
-  const cell = ctx.masks.mask[base]!
+  const cell = maskCellAt(ctx.masks.mask, base)
   if (cell === NO_FACE) {
     return
   }
@@ -331,7 +351,7 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
     const columnBase = xBase + lz * height
     const rowBase = lz * yLimit
     for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
-      const blockId = (blocks[columnBase + y] ?? AIR) as BlockId
+      const blockId = blockIdAt(blocks, columnBase + y)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
           ctx,
@@ -354,7 +374,7 @@ const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
     const columnBase = lx * height * CHUNK_SIZE + y
     const rowBase = lx * CHUNK_SIZE
     for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
-      const blockId = (blocks[columnBase + lz * height] ?? AIR) as BlockId
+      const blockId = blockIdAt(blocks, columnBase + lz * height)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
           ctx,
@@ -377,7 +397,7 @@ const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): voi
     const columnBase = lz * height + lx * height * CHUNK_SIZE
     const rowBase = lx * yLimit
     for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
-      const blockId = (blocks[columnBase + y] ?? AIR) as BlockId
+      const blockId = blockIdAt(blocks, columnBase + y)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
           ctx,

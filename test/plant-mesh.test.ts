@@ -91,16 +91,19 @@ describe('the two plates', () => {
       // Transcribed from `plant-mesh.ts:96-97`: the first plate spans the
       // (x0,z0)-(x1,z1) corner pair, the second (x1,z0)-(x0,z1).
       const [first, second] = meshChunk(chunkWith([[8, 64, 8, FLOWER]]), {}, CONFIG).crossPlants
+      if (typeof first === 'undefined' || typeof second === 'undefined') {
+        throw new Error('expected exactly two cross-plant quads')
+      }
       const low = 8 + PLANT_INSET
       const high = 9 - PLANT_INSET
 
-      expect(cornersOf(first as CrossPlantQuad)).toStrictEqual([
+      expect(cornersOf(first)).toStrictEqual([
         `${low},64,${low}`,
         `${low},65,${low}`,
         `${high},65,${high}`,
         `${high},64,${high}`,
       ])
-      expect(cornersOf(second as CrossPlantQuad)).toStrictEqual([
+      expect(cornersOf(second)).toStrictEqual([
         `${high},64,${low}`,
         `${high},65,${low}`,
         `${low},65,${high}`,
@@ -115,8 +118,8 @@ describe('the two plates', () => {
         plate.vertices[3][0] - plate.vertices[0][0],
         plate.vertices[3][2] - plate.vertices[0][2],
       ]
-      const [ax, az] = direction(first as CrossPlantQuad)
-      const [bx, bz] = direction(second as CrossPlantQuad)
+      const [ax, az] = direction(first)
+      const [bx, bz] = direction(second)
       expect(ax * bz - az * bx).not.toBe(0)
     }),
   )

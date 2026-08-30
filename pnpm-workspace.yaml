@@ -2,3 +2,10 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@nerima-games/mc-kernel@0.4.0'
+overrides:
+  # GHSA-2v37-7h3g-55p8: nanoid's custom generator loops indefinitely when
+  # size is 0. Transitive via vitest/@vitest/coverage-v8 -> vite -> postcss ->
+  # nanoid; pinned here rather than waiting on the upstream chain to bump it,
+  # per plan.md §4 step 14 ("pin the transitive package in pnpm-workspace.yaml
+  # overrides as the kernel does").
+  nanoid: '>=3.3.18'

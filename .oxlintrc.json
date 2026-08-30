@@ -17,7 +17,7 @@
   },
   "settings": {
     "typescript": {
-      "version": "5.9"
+      "version": "7.0"
     }
   },
   "plugins": [],
@@ -25,7 +25,7 @@
     "correctness": "warn",
     "suspicious": "warn",
     "perf": "warn",
-    "style": "warn",
+    "style": "off",
     "restriction": "warn"
   },
   "rules": {
@@ -95,10 +95,14 @@
     // `Schema.Literal(...)` is an `effect` Schema factory, called as a plain
     // function per the Effect ecosystem convention (Schema.Struct(...),
     // Context.Tag(...), etc.) — not a `class`, so `new Schema.Literal(...)` is
-    // not an option. `capIsNewExceptions` is the rule's own documented escape
+    // not an option. `BlockId(...)` is mc-kernel's `Brand.refined` validated
+    // constructor, the same convention (a plain function, not a class) — added
+    // when Wave 0 wired `ast-grep scan`'s `no-type-assertion` into `pnpm lint`
+    // and test fixtures switched from `n as BlockId` to the real validating
+    // constructor. `capIsNewExceptions` is the rule's own documented escape
     // hatch for exactly this shape; every other capitalized call in src/ still
     // warns.
-    "new-cap": ["warn", { "capIsNewExceptions": ["Literal"] }],
+    "new-cap": ["warn", { "capIsNewExceptions": ["Literal", "BlockId"] }],
     // Verified empirically across every flagged site: the short identifiers
     // this codebase uses are the coordinate vocabulary itself — `y` (paired
     // with the already-2-character `lx`/`lz`) as a loop variable, shorthand

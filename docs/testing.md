@@ -10,7 +10,7 @@
 | `pnpm lint` | oxlint。このリポジトリ唯一の lint / format 設定（prettier も biome も .editorconfig も置かない）。**`--deny-warnings` 付きで走る**ため、`warn` のルールもビルドを落とす（`.oxlintrc.json` は 5 カテゴリすべてと個別 39 ルールが `warn`、`error` は 3 つだけ。このフラグが無かった頃は実質その 3 つしかゲートになっていなかった） |
 | `pnpm test` | vitest。`test/effect-test.ts` の `it.effect` が主 API |
 | `pnpm test:coverage` | カバレッジ計測（4 指標を 100% でゲート。§3 参照） |
-| `pnpm verify` | `typecheck` / `lint` / `test:coverage` / `build` / `verify:package` を直列実行。**CI と同じリリース検証**（依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6） |
+| `pnpm verify` | `typecheck` / `lint` / `test` を直列実行。**カバレッジ計測・build・package 検証は CI の別ステップ**（§5）に分離されている——org 標準の Wave 0 でツールチェーンを凍結した際、失敗箇所が CI の step 名だけで分かるように切り出した（依存グラフの逸脱は `pnpm lint` の `.oxlintrc.json` `no-restricted-imports` が担う。公開 API の破壊的変更検出は自動スナップショットツールではなく人間のレビュー。API_STANDARD.md §4、versioning.md §6） |
 | `pnpm bench` | ベンチマーク（`scripts/bench-meshing.ts`）。**`verify` には入らない**（§7） |
 
 セットアップ:
@@ -99,7 +99,8 @@ test/mesh.test.ts
 ## 3. カバレッジ閾値は 100% で有効化済み
 
 `vitest.config.ts` は branches / functions / lines / statements の 4 指標すべてに **100%** を強制する。
-`pnpm verify` に含まれる `pnpm test:coverage` がこのゲートと HTML レポートを生成するため、CI で同じ検証を重複実行しない。
+`pnpm test:coverage` がこのゲートと HTML レポートを生成する。CI では `pnpm verify`（typecheck / lint / test）
+とは別の `Coverage` ステップとして実行される（§5）。
 新しい分岐は、閾値を緩めずテストで到達させるか、不要な分岐そのものを削除する。
 
 ```typescript
@@ -181,15 +182,21 @@ load-bearing である」と宣言していた。**グリーディマージは�
 
 ## 5. CI
 
-`.github/workflows/ci.yaml` は `pnpm verify` と同じ内容を job のステップに展開したものである
-（失敗箇所が step 名で分かるようにするため）:
+`.github/workflows/ci.yaml` は org 標準（Wave 0 で全 15 runtime repo に統一)のジョブで、
+検証の各段を個別ステップに展開している（失敗箇所が step 名で分かるようにするため）:
 
 1. Checkout
 2. Setup pnpm（`pnpm/action-setup@v6`）
 3. Setup Node.js 24（pnpm キャッシュ有効）
-4. `pnpm install --frozen-lockfile`
-5. `pnpm verify`（`typecheck && lint && test:coverage && build && verify:package`）
-6. カバレッジレポートを artifact に upload（7 日保持）
+4. Set up Nix（`.github/actions/nix-setup`）
+5. Configure GitHub Packages authentication
+6. `pnpm install --frozen-lockfile`
+7. `pnpm verify`（`typecheck && lint && test`）
+8. Changeset status（`pull_request` のみ）
+9. `pnpm test:coverage`
+10. `pnpm package:verify`
+11. `pnpm audit`
+12. カバレッジレポートを artifact に upload（7 日保持）
 
 依存グラフの逸脱(Tier を越えた `@nerima-games/*` import)は、専用スクリプトではなく
 `pnpm lint` が読む `.oxlintrc.json` の `no-restricted-imports` が検出する(DEPENDENCY_POLICY.md §5)。
