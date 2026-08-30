@@ -4,7 +4,7 @@ import {
 } from './mesh-types.js'
 import type { CrossPlantQuad } from './plant-types.js'
 import type { FluidQuad } from './fluid-types.js'
-import { MESH_LAYERS } from './opacity.js'
+import { MESH_LAYERS, type MeshLayer } from './opacity.js'
 import type { QuadLight } from './light-types.js'
 import type { SpecialBlockQuad } from './special-types.js'
 import { faceOf } from './faces.js'
@@ -29,12 +29,14 @@ type Vertex = readonly [number, number, number]
 type VertexQuad = readonly [Vertex, Vertex, Vertex, Vertex]
 type Normal = readonly [number, number, number]
 
-export const MESH_BUFFER_LAYERS = [
-  ...MESH_LAYERS,
+export const MESH_BUFFER_LAYERS: readonly [
+  MeshLayer,
+  MeshLayer,
+  MeshLayer,
   'crossPlants',
   'fluids',
   'specialBlocks',
-] as const
+] = [...MESH_LAYERS, 'crossPlants', 'fluids', 'specialBlocks'] as const
 
 export type MeshBufferLayer = (typeof MESH_BUFFER_LAYERS)[number]
 

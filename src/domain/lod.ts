@@ -69,7 +69,7 @@ const LOD_LEVEL_2 = 2
  * rather than the absence of one, so that a caller can hold a `LodLevel`
  * unconditionally instead of a `LodLevel | undefined`.
  */
-export const LOD_LEVELS = [LOD_LEVEL_NONE, LOD_LEVEL_1, LOD_LEVEL_2] as const
+export const LOD_LEVELS: readonly [0, 1, 2] = [LOD_LEVEL_NONE, LOD_LEVEL_1, LOD_LEVEL_2] as const
 
 export type LodLevel = (typeof LOD_LEVELS)[number]
 
@@ -81,7 +81,7 @@ export type LodLevel = (typeof LOD_LEVELS)[number]
  * Derived from `LOD_LEVELS` by spread rather than re-spelling `0, 1, 2`, so a
  * fourth level cannot be added to one and not the other.
  */
-export const LodLevelSchema = Schema.Literal(...LOD_LEVELS)
+export const LodLevelSchema: Schema.Schema<LodLevel> = Schema.Literal(...LOD_LEVELS)
 
 /**
  * Blocks per LOD grid cell. The reference's `STEP_FOR_LOD`, unchanged.

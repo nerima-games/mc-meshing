@@ -102,7 +102,7 @@ export const AO_LEVELS = 4
 const COUNT_TO_MAX_INDEX = 1
 
 /** Most occluded. The clamp ceiling, i.e. `AO_LEVELS - COUNT_TO_MAX_INDEX`. */
-export const AO_MAX = AO_LEVELS - COUNT_TO_MAX_INDEX
+export const AO_MAX: number = AO_LEVELS - COUNT_TO_MAX_INDEX
 
 /** Fully open — no occluding neighbour. What an isolated block's faces carry. */
 export const AO_NONE = 0

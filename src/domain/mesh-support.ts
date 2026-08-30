@@ -10,7 +10,13 @@ export const FIRST_INDEX = 0
 export const STEP = 1
 export const EMPTY_CHUNK_CEILING = 0
 
-export const layerAt = (lookup: Uint8Array, blockId: number): number => lookup[blockId]!
+export const layerAt = (lookup: Uint8Array, blockId: number): number => {
+  const layer = lookup[blockId]
+  if (typeof layer === 'undefined') {
+    throw new RangeError(`unreachable: no layer entry for block id ${blockId}`)
+  }
+  return layer
+}
 
 export const isFaceExposed = (
   lookup: Uint8Array,

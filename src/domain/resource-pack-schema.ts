@@ -2,17 +2,17 @@
 /* oxlint-disable sort-keys -- Schema fields follow the Minecraft JSON vocabulary for reviewability. */
 /* oxlint-disable no-magic-numbers -- These literals are Minecraft's JSON protocol values. */
 import {
-  BlockModel,
-  BlockStateCondition,
-  BlockStateDefinition,
-  BlockStateMultipart,
-  BlockStateVariant,
-  BlockStateVariantList,
-  ModelElement,
-  ModelElementRotation,
-  ModelFace,
   RESOURCE_MODEL_FACE_DIRECTIONS,
-  ResourcePackAssets,
+  type BlockModel,
+  type BlockStateCondition,
+  type BlockStateDefinition,
+  type BlockStateMultipart,
+  type BlockStateVariant,
+  type BlockStateVariantList,
+  type ModelElement,
+  type ModelElementRotation,
+  type ModelFace,
+  type ResourcePackAssets,
 } from './resource-pack-types.js'
 import { Schema } from 'effect'
 
@@ -136,12 +136,11 @@ export type ResourcePackParseInput = 'object' | 'json'
 /** Raised when an unknown value does not satisfy the resource-pack data contract. */
 export class ResourcePackParseError extends Error {
   override readonly name = 'ResourcePackParseError'
+  readonly input: ResourcePackParseInput
 
-  constructor(
-    readonly input: ResourcePackParseInput,
-    cause: unknown,
-  ) {
+  constructor(input: ResourcePackParseInput, cause: unknown) {
     super(`Invalid resource-pack ${input} input: ${String(cause)}`, { cause })
+    this.input = input
   }
 }
 

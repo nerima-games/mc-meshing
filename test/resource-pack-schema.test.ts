@@ -144,15 +144,21 @@ describe('resource-pack schema', () => {
     )
 
     expect(error).toBeInstanceOf(ResourcePackParseError)
-    expect((error as ResourcePackParseError).input).toBe('object')
-    expect((error as ResourcePackParseError).message).toContain('model')
+    if (!(error instanceof ResourcePackParseError)) {
+      throw new Error('expected a ResourcePackParseError')
+    }
+    expect(error.input).toBe('object')
+    expect(error.message).toContain('model')
   })
 
   it('reports malformed JSON as a parse error', () => {
     const error = caught(() => parseResourcePackAssetsJson('{'))
 
     expect(error).toBeInstanceOf(ResourcePackParseError)
-    expect((error as ResourcePackParseError).input).toBe('json')
+    if (!(error instanceof ResourcePackParseError)) {
+      throw new Error('expected a ResourcePackParseError')
+    }
+    expect(error.input).toBe('json')
   })
 
   it('rejects non-finite model numbers and non-positive variant weights', () => {
@@ -244,7 +250,10 @@ describe('resource-pack schema', () => {
     )
 
     expect(error).toBeInstanceOf(ResourcePackParseError)
-    expect((error as ResourcePackParseError).input).toBe('object')
+    if (!(error instanceof ResourcePackParseError)) {
+      throw new Error('expected a ResourcePackParseError')
+    }
+    expect(error.input).toBe('object')
   })
 
   it('requires exactly one blockstate selection mode', () => {

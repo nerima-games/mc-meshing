@@ -105,7 +105,18 @@ const faceOfDirection = (quads: ReadonlyArray<FluidQuad>, direction: string): Fl
 }
 
 /** Every Y a quad's four vertices sit at, in vertex order. */
-const ysOf = (quad: FluidQuad): ReadonlyArray<number> => quad.vertices.map((vertex) => vertex[1])
+const ysOf = (quad: FluidQuad): readonly [number, number, number, number] => {
+  const [first, second, third, fourth] = quad.vertices
+  return [first[1], second[1], third[1], fourth[1]]
+}
+
+/** Narrow a lookup/find result that the test already expects to be present. */
+const expectDefined = <T,>(value: T | undefined, message: string): T => {
+  if (typeof value === 'undefined') {
+    throw new Error(message)
+  }
+  return value
+}
 
 const topAt = (quads: ReadonlyArray<FluidQuad>, lx: number, lz: number): FluidQuad | undefined =>
   quads.find((quad) => quad.direction === 'yPos' && quad.vertices[0][0] === lx && quad.vertices[0][2] === lz)
@@ -121,7 +132,7 @@ describe('the height of one cell', () => {
 
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]]), {}, CONFIG)
       const top = faceOfDirection(layers.fluids, 'yPos')
-      expect(ysOf(top as FluidQuad)).toStrictEqual([64.875, 64.875, 64.875, 64.875])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([64.875, 64.875, 64.875, 64.875])
     }),
   )
 
@@ -134,7 +145,7 @@ describe('the height of one cell', () => {
       const heightOf = (blockId: number, level: number): number => {
         const chunk = chunkWith([[8, 64, 8, blockId]], [[8, 64, 8, level, 0]])
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-        return (ysOf(top as FluidQuad)[0] as number) - 64
+        return ysOf(expectDefined(top, 'expected a fluid quad'))[0] - 64
       }
 
       expect(heightOf(WATER, 0)).toBe(1)
@@ -156,7 +167,7 @@ describe('the height of one cell', () => {
       const heightOf = (blockId: number, level: number): number => {
         const chunk = chunkWith([[8, 64, 8, blockId]], [[8, 64, 8, level, 0]])
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-        return (ysOf(top as FluidQuad)[0] as number) - 64
+        return ysOf(expectDefined(top, 'expected a fluid quad'))[0] - 64
       }
 
       // Levels past the injected maximum, which is what the floor is there for.
@@ -188,14 +199,14 @@ describe('the height of one cell', () => {
       // Exactly one top, and it belongs to the upper cell.
       const tops = layers.fluids.filter((quad) => quad.direction === 'yPos')
       expect(tops.length).toBe(1)
-      expect(ysOf(tops[0] as FluidQuad)).toStrictEqual([65.875, 65.875, 65.875, 65.875])
+      expect(ysOf(expectDefined(tops[0], 'expected a fluid quad'))).toStrictEqual([65.875, 65.875, 65.875, 65.875])
 
       // And the LOWER cell's own sides run to a full 65, not to 64.875: the
       // Submerged rule feeds the corner averaging too, so the wall of the lake
       // Has no notch at every cell boundary.
       const lowerSides = layers.fluids.filter((quad) => quad.direction === 'xPos' && quad.vertices[1][1] <= 65)
       expect(lowerSides.length).toBe(1)
-      expect(ysOf(lowerSides[0] as FluidQuad)).toStrictEqual([64, 65, 65, 64])
+      expect(ysOf(expectDefined(lowerSides[0], 'expected a fluid quad'))).toStrictEqual([64, 65, 65, 64])
     }),
   )
 
@@ -217,7 +228,7 @@ describe('the height of one cell', () => {
 
       expect(layers.fluids.length).toBe(5)
       const surface = faceOfDirection(layers.fluids, 'yPos')
-      expect(ysOf(surface as FluidQuad)).toStrictEqual([
+      expect(ysOf(expectDefined(surface, 'expected a fluid quad'))).toStrictEqual([
         top + 0.875,
         top + 0.875,
         top + 0.875,
@@ -247,7 +258,7 @@ describe('the height of one cell', () => {
       )
 
       expect(layers.fluids.length).toBe(5)
-      expect(ysOf(faceOfDirection(layers.fluids, 'yPos') as FluidQuad)).toStrictEqual([
+      expect(ysOf(expectDefined(faceOfDirection(layers.fluids, 'yPos'), 'expected a fluid quad'))).toStrictEqual([
         top + 0.875,
         top + 0.875,
         top + 0.875,
@@ -265,7 +276,7 @@ describe('the height of one cell', () => {
       // Neighbour: degrade to the answer that still shows the player a world.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]]), {}, CONFIG)
       const top = faceOfDirection(layers.fluids, 'yPos')
-      expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
     }),
   )
 
@@ -291,7 +302,7 @@ describe('the height of one cell', () => {
         }
 
         const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-        expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 65, 65])
+        expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
       }),
   )
 })
@@ -324,13 +335,13 @@ describe('the corner averaging', () => {
       // Winding is (0,0), (0,1), (1,1), (1,0) — the reference's, at :82-85. The
       // Two corners on the lx=8 side see only the full cell; the two on the lx=9
       // Side average the full cell with the half-full one.
-      expect(ysOf(top as FluidQuad)).toStrictEqual([65, 65, 64.75, 64.75])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 64.75, 64.75])
 
       // Stated independently of the literals above: whatever the numbers, the
       // +X edge must sit LOWER than the -X edge. An edit that "fixes" both
       // Literals at once still has to face this.
-      const ys = ysOf(top as FluidQuad)
-      expect(Math.max(ys[2] as number, ys[3] as number)).toBeLessThan(Math.min(ys[0] as number, ys[1] as number))
+      const ys = ysOf(expectDefined(top, 'expected a fluid quad'))
+      expect(Math.max(ys[2], ys[3])).toBeLessThan(Math.min(ys[0], ys[1]))
     }),
   )
 
@@ -338,7 +349,7 @@ describe('the corner averaging', () => {
     Effect.sync(() => {
       const chunk = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 4, 0]])
       const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-      expect(ysOf(top as FluidQuad)).toStrictEqual([64.5, 64.5, 64.5, 64.5])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([64.5, 64.5, 64.5, 64.5])
     }),
   )
 
@@ -351,13 +362,14 @@ describe('the corner averaging', () => {
       // `buildCrossPlantLookup` after no mutation could make it fail. This test
       // Is the statement that the reasoning holds, at every corner of the chunk
       // — which is where a sampler that walked off the edge would divide by 0.
-      for (const [lx, lz] of [
+      const corners: ReadonlyArray<readonly [number, number]> = [
         [0, 0],
         [0, CHUNK_SIZE - 1],
         [CHUNK_SIZE - 1, 0],
         [CHUNK_SIZE - 1, CHUNK_SIZE - 1],
-      ]) {
-        const chunk = chunkWith([[lx as number, 64, lz as number, WATER]], [[lx as number, 64, lz as number, 2, 0]])
+      ]
+      for (const [lx, lz] of corners) {
+        const chunk = chunkWith([[lx, 64, lz, WATER]], [[lx, 64, lz, 2, 0]])
         const quads = meshChunk(chunk, {}, CONFIG).fluids
         expect(quads.length).toBeGreaterThan(0)
         for (const quad of quads) {
@@ -609,7 +621,7 @@ describe('which fluid faces exist', () => {
       const step = quads.find((quad) => quad.direction === 'xPos' && quad.vertices[0][0] === 9)
 
       // Bottom at the neighbour's 64.5, top at this cell's two +X corners.
-      expect(ysOf(step as FluidQuad)).toStrictEqual([64.5, 64.75, 64.75, 64.5])
+      expect(ysOf(expectDefined(step, 'expected a fluid quad'))).toStrictEqual([64.5, 64.75, 64.75, 64.5])
 
       // And the taller cell owns the step: the shorter one emits nothing back.
       const backwards = quads.filter((quad) => quad.direction === 'xNeg' && quad.vertices[0][0] === 9)
@@ -795,12 +807,12 @@ describe('across a chunk boundary', () => {
         const top = meshChunk(chunk, { [seam.side]: half }, CONFIG).fluids.find(
           (quad) => quad.direction === 'yPos',
         )
-        const ys = ysOf(top as FluidQuad)
-        const near = cornersOnSide[seam.side] as readonly [number, number]
+        const ys = ysOf(expectDefined(top, 'expected a fluid quad'))
+        const near = expectDefined(cornersOnSide[seam.side], `no corner mapping for seam side ${seam.side}`)
         const far = [0, 1, 2, 3].filter((index) => !near.includes(index))
 
-        const nearMax = Math.max(...near.map((index) => ys[index] as number))
-        const farMin = Math.min(...far.map((index) => ys[index] as number))
+        const nearMax = Math.max(...near.map((index) => expectDefined(ys[index], 'corner index out of range')))
+        const farMin = Math.min(...far.map((index) => expectDefined(ys[index], 'corner index out of range')))
         expect(nearMax).toBeLessThan(farMin)
       }
     }),
@@ -815,10 +827,10 @@ describe('across a chunk boundary', () => {
       const joinedTop = meshChunk(chunk, { xNegZNeg: half }, CONFIG).fluids.find(
         (quad) => quad.direction === 'yPos',
       )
-      const open = ysOf(openTop as FluidQuad)
-      const joined = ysOf(joinedTop as FluidQuad)
+      const open = ysOf(expectDefined(openTop, 'expected a fluid quad'))
+      const joined = ysOf(expectDefined(joinedTop, 'expected a fluid quad'))
 
-      expect(joined[0]).toBeLessThan(open[0] as number)
+      expect(joined[0]).toBeLessThan(open[0])
       expect(joined.slice(1)).toEqual(open.slice(1))
     }),
   )
@@ -1019,7 +1031,14 @@ describe('the two meshers, and the merge, with fluids configured', () => {
         [2, 9, 2, WATER],
         [9, 5, 2, WATER],
       ]
-      const layers = meshChunk(chunkWith(cells, cells.map(([lx, y, lz]) => [lx, y, lz, 0, 1] as FluidCell)), {}, CONFIG)
+      const layers = meshChunk(
+        chunkWith(
+          cells,
+          cells.map(([lx, y, lz]): FluidCell => [lx, y, lz, 0, 1]),
+        ),
+        {},
+        CONFIG,
+      )
       const tops = layers.fluids
         .filter((quad) => quad.direction === 'yPos')
         .map((quad) => `${quad.vertices[0][0]},${Math.floor(quad.vertices[0][1])},${quad.vertices[0][2]}`)

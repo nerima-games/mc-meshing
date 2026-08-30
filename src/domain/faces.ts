@@ -158,14 +158,14 @@ const Z_NEG: Face = {
  * Changing this array invalidates every golden hash in this repository and in
  * mc-render. That is a deliberate speed bump.
  */
-export const FACES = [X_POS, X_NEG, Y_POS, Y_NEG, Z_POS, Z_NEG] as const satisfies readonly [
-  Face,
-  Face,
-  Face,
-  Face,
-  Face,
-  Face,
-]
+export const FACES: readonly [Face, Face, Face, Face, Face, Face] = [
+  X_POS,
+  X_NEG,
+  Y_POS,
+  Y_NEG,
+  Z_POS,
+  Z_NEG,
+] as const satisfies readonly [Face, Face, Face, Face, Face, Face]
 
 export const FACE_DIRECTIONS: ReadonlyArray<FaceDirection> = FACES.map((face) => face.direction)
 

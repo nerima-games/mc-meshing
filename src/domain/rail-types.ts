@@ -17,7 +17,7 @@ export type RailShape = typeof RAIL_SHAPES[number]
 /** Per-cell rail state in the same Y-major layout as `ChunkView.blocks`. */
 export type RailShapeView = Readonly<Uint8Array>
 
-export const RAIL_SHAPE_COUNT = RAIL_SHAPES.length
+export const RAIL_SHAPE_COUNT: number = RAIL_SHAPES.length
 
 const RAIL_SHAPE_CODES: Readonly<Record<RailShape, number>> = {
   ascending_east: 2,
@@ -32,17 +32,21 @@ const RAIL_SHAPE_CODES: Readonly<Record<RailShape, number>> = {
   south_west: 7,
 }
 
-const MIN_RAIL_SHAPE_CODE = 0
-
 /** Converts a named rail state into the compact value stored in `RailShapeView`. */
 export const railShapeCodeOf = (shape: RailShape): number => RAIL_SHAPE_CODES[shape]
 
 /** Converts a compact rail state into its blockstate name. */
 export const railShapeOf = (code: number): RailShape => {
-  if (!Number.isInteger(code) || code < MIN_RAIL_SHAPE_CODE || code >= RAIL_SHAPE_COUNT) {
+  // Indexing an array with a non-integer, negative, or too-large numeric key
+  // yields `undefined` in JS, so this one check covers every invalid `code`
+  // (non-integer, negative, or `>= RAIL_SHAPE_COUNT`) without re-testing each
+  // case separately, and it is the same check `typeof shape === 'undefined'`
+  // narrowing needs anyway.
+  const shape = RAIL_SHAPES[code]
+  if (typeof shape === 'undefined') {
     throw new RangeError(`Invalid rail shape code: ${code}`)
   }
-  return RAIL_SHAPES[code] as RailShape
+  return shape
 }
 
 /** Reads one optional state value, treating an absent sidecar cell as unknown. */

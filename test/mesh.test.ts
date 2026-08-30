@@ -42,7 +42,15 @@ import {
   VERTICES_PER_QUAD,
   tangentAxes,
 } from '../src/domain/faces'
-import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
+import {
+  type MeshLayers,
+  type Quad,
+  bucketFor,
+  meshChunk,
+  meshChunkNaive,
+  totalQuadArea,
+  totalQuadCount,
+} from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
@@ -253,42 +261,45 @@ describe('face count', () => {
     }),
   )
 
-  it.effect('face count never exceeds six per non-air cell, whatever the arrangement', () =>
-    Effect.sync(() => {
-      FastCheck.assert(
-        FastCheck.property(
-          FastCheck.array(
-            FastCheck.tuple(
-              FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-              FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
-              FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-              FastCheck.constantFrom(STONE, WATER, GLASS),
+  it.effect(
+    'face count never exceeds six per non-air cell, whatever the arrangement',
+    () =>
+      Effect.sync(() => {
+        FastCheck.assert(
+          FastCheck.property(
+            FastCheck.array(
+              FastCheck.tuple(
+                FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+                FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+                FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
+                FastCheck.constantFrom(STONE, WATER, GLASS),
+              ),
+              { maxLength: 40, minLength: 0 },
             ),
-            { maxLength: 40, minLength: 0 },
-          ),
-          (cells) => {
-            const chunk = chunkWith(cells.map(([lx, y, lz, id]) => [lx, y, lz, id] as const))
-            const layers = meshChunk(chunk, {}, CONFIG)
-            let solidCells = 0
-            for (let index = 0; index < BLOCKS_PER_CHUNK; index += 1) {
-              if ((chunk.blocks[index] ?? AIR) !== AIR) {
-                solidCells += 1
+            (cells) => {
+              const chunk = chunkWith(cells.map(([lx, y, lz, id]) => [lx, y, lz, id] as const))
+              const layers = meshChunk(chunk, {}, CONFIG)
+              let solidCells = 0
+              for (let index = 0; index < BLOCKS_PER_CHUNK; index += 1) {
+                if ((chunk.blocks[index] ?? AIR) !== AIR) {
+                  solidCells += 1
+                }
               }
-            }
-            // Stated on the AREA, which is where the six-per-cell bound actually
-            // Lives: a cell has six faces however they are grouped into quads.
-            // The count is then bounded by the area, because no quad covers less
-            // Than one face. Both directions of that chain matter — a merge that
-            // Emitted a zero-extent quad would satisfy the old count bound and
-            // Break the second half of this one.
-            return (
-              totalQuadArea(layers) <= solidCells * FACES.length && totalQuadCount(layers) <= totalQuadArea(layers)
-            )
-          },
-        ),
-        { numRuns: 100 },
-      )
-    }),
+              // Stated on the AREA, which is where the six-per-cell bound actually
+              // Lives: a cell has six faces however they are grouped into quads.
+              // The count is then bounded by the area, because no quad covers less
+              // Than one face. Both directions of that chain matter — a merge that
+              // Emitted a zero-extent quad would satisfy the old count bound and
+              // Break the second half of this one.
+              return (
+                totalQuadArea(layers) <= solidCells * FACES.length && totalQuadCount(layers) <= totalQuadArea(layers)
+              )
+            },
+          ),
+          { numRuns: 100 },
+        )
+      }),
+    PROPERTY_TIMEOUT_MS,
   )
 })
 
@@ -484,6 +495,18 @@ describe('quad extent and role', () => {
       const layers = meshChunk(chunkWith([[7, 100, 4, STONE]]), {}, EMPTY_MESH_CONFIG)
       expect(layers.opaque.length).toBe(6)
       expect(new Set(layers.opaque.map(positionOf))).toStrictEqual(new Set(['7,100,4']))
+    }),
+  )
+})
+
+describe('bucketFor', () => {
+  it.effect('rejects an index outside the three MESH_LAYERS buckets', () =>
+    Effect.sync(() => {
+      const buckets: readonly [string, string, string] = ['opaque', 'water', 'transparentSolid']
+      expect(bucketFor(buckets, 0)).toBe('opaque')
+      expect(bucketFor(buckets, 2)).toBe('transparentSolid')
+      expect(() => bucketFor(buckets, 3)).toThrow('unreachable')
+      expect(() => bucketFor(buckets, -1)).toThrow('unreachable')
     }),
   )
 })
