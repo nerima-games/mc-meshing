@@ -51,7 +51,7 @@ export type MeshBufferGroup = {
 export type PackedMeshBuffers = {
   readonly positions: Float32Array
   readonly normals: Int8Array
-  readonly blockIds: Uint8Array
+  readonly blockIds: Uint16Array
   readonly ambientOcclusion: Uint8Array
   readonly blockLight: Uint8Array
   readonly skyLight: Uint8Array
@@ -325,7 +325,7 @@ export const packMeshLayers = (layers: MeshLayers): PackedMeshBuffers => {
   )
   const output: PackedArrays = {
     ambientOcclusion: new Uint8Array(quadCount * VERTICES_PER_QUAD),
-    blockIds: new Uint8Array(quadCount * VERTICES_PER_QUAD),
+    blockIds: new Uint16Array(quadCount * VERTICES_PER_QUAD),
     blockLight: new Uint8Array(quadCount * VERTICES_PER_QUAD),
     indices: new Uint32Array(quadCount * INDICES_PER_QUAD),
     normals: new Int8Array(quadCount * VERTICES_PER_QUAD * COMPONENTS_PER_VERTEX),

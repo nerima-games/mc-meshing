@@ -392,8 +392,9 @@ rail state は復号済みの renderer-facing sidecar として `ChunkView.railS
 
 `mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。
 公開する `ChunkView` は kernel の `coord` と可変 `height` を保持し、メッシング用の
-`Readonly<Uint8Array>` を `blocks` として受け取る。kernel の opaque な `Chunk.blocks` は、
-その `Chunk` を取得した呼び出し側が `copyTo` で byte view にコピーして渡す。
+`Readonly<Uint16Array>` を `blocks` として受け取る（kernel の `BlockState`/`BLOCK_ID_MAX` と同じ
+16-bit 幅）。kernel の opaque な `Chunk.blocks` は、その `Chunk` を取得した呼び出し側が
+`copyTo` で 16-bit element view にコピーして渡す。
 `blockCount` が高さを検証して必要な長さを算出し、256 高さへの暗黙の切り詰め・ゼロ埋めは行わない。
 
 ## 5. 完成条件

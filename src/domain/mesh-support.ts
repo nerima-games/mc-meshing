@@ -31,7 +31,7 @@ export const isFaceExposed = (
   return neighbourLayer !== OPAQUE_LAYER && neighbourLayer !== layerAt(lookup, blockId)
 }
 
-export const solidCeiling = (blocks: Readonly<Uint8Array>, height: number): number => {
+export const solidCeiling = (blocks: Readonly<Uint16Array>, height: number): number => {
   let highest = -1
   for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
     for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {

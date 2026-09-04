@@ -111,7 +111,7 @@ let sink = 0
 // ---------------------------------------------------------------------------
 
 /**
- * Six linear passes summing a chunk's 65,536 bytes.
+ * Six linear passes summing a chunk's 65,536 cells.
  *
  * The machine-speed reference for the `workloads` ratios. Chosen to share the
  * memory-access character of the six face passes rather than to be a pure ALU
@@ -120,7 +120,7 @@ let sink = 0
  * see the harness header on why workload ratios carry a looser tolerance than
  * guard ratios do.
  */
-const yardstickOver = (blocks: Readonly<Uint8Array>) => (): void => {
+const yardstickOver = (blocks: Readonly<Uint16Array>) => (): void => {
   let total = 0
   for (let pass = 0; pass < FACES.length; pass += 1) {
     for (let index = 0; index < BLOCKS_PER_CHUNK; index += 1) {
@@ -208,7 +208,7 @@ const lookupTableArm = (): void => {
  * the arm below unwraps with the same `AIR` default.
  */
 const getBlockOption = (
-  blocks: Readonly<Uint8Array>,
+  blocks: Readonly<Uint16Array>,
   lx: number,
   y: number,
   lz: number,
@@ -228,7 +228,7 @@ const getBlockOption = (
  * Both walk every cell's neighbour across every face — the same 393,216 reads,
  * including the same 1-cell out-of-bounds shell, that meshing performs.
  */
-const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const plainWalkArm = (blocks: Readonly<Uint16Array>) => (): void => {
   const chunk = { blocks, height: CHUNK_HEIGHT }
   let total = 0
   for (const face of FACES) {
@@ -260,7 +260,7 @@ const plainWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
  * guard tolerance.
  */
 const frozenGetBlock = (
-  blocks: Readonly<Uint8Array>,
+  blocks: Readonly<Uint16Array>,
   lx: number,
   y: number,
   lz: number,
@@ -272,7 +272,7 @@ const frozenGetBlock = (
   return blocks[y + lz * height + lx * height * CHUNK_SIZE] ?? AIR
 }
 
-const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const frozenWalkArm = (blocks: Readonly<Uint16Array>) => (): void => {
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
@@ -286,7 +286,7 @@ const frozenWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
   sink += total
 }
 
-const optionWalkArm = (blocks: Readonly<Uint8Array>) => (): void => {
+const optionWalkArm = (blocks: Readonly<Uint16Array>) => (): void => {
   let total = 0
   for (const face of FACES) {
     for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {

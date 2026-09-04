@@ -93,7 +93,7 @@
  * outer and which is inner is a cache decision. `blockIndex` is y-major within a
  * column, so `y` is the contiguous axis and is innermost wherever it is not the
  * slice axis. The alternative — inner `lz`, outer `y` for the X passes — reads
- * one byte per 256-byte stride and measurably wastes the line it just pulled in.
+ * one element per column-length stride and measurably wastes the line it just pulled in.
  *
  * ---------------------------------------------------------------------------
  * The output shape
@@ -293,7 +293,7 @@ const lightMasksOf = (
 }
 
 type MeshWorkBuffers = {
-  readonly mask: Uint16Array<ArrayBufferLike>
+  readonly mask: Uint32Array<ArrayBufferLike>
   readonly light: { block: Uint16Array; sky: Uint16Array } | undefined
 }
 
@@ -306,7 +306,7 @@ const meshBuffersOf = (
   if (buffers) {
     return { light: buffers.light, mask: buffers.mask }
   }
-  return { light: lightMasksOf(chunk, length), mask: new Uint16Array(length) }
+  return { light: lightMasksOf(chunk, length), mask: new Uint32Array(length) }
 }
 
 /**

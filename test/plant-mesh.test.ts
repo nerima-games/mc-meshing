@@ -21,6 +21,7 @@ import {
   blockIndex,
   emptyChunk,
 } from '../src/domain/chunk-view'
+import { MAX_BLOCK_ID } from '../src/domain/block-data'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 import {
@@ -46,7 +47,7 @@ const CONFIG: MeshConfig = {
 }
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
@@ -240,7 +241,7 @@ describe('the two plates', () => {
   it.effect('a plant at the top of a short chunk is still meshed', () =>
     Effect.sync(() => {
       const height = 8
-      const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+      const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
       blocks[blockIndex(3, height - 1, 3, height)] = FLOWER
 
       const layers = meshChunk({ blocks, coord: chunkCoord(0, 0), height }, {}, CONFIG)
@@ -383,7 +384,7 @@ describe('the injected set', () => {
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set(),
       })
-      expect(lookup.length).toBe(256)
+      expect(lookup.length).toBe(MAX_BLOCK_ID + 1)
       expect(lookup.reduce((total, value) => total + value, 0)).toBe(0)
     }),
   )
@@ -391,15 +392,15 @@ describe('the injected set', () => {
   it.effect('the flattened table agrees with the set on every representable id', () =>
     Effect.sync(() => {
       const lookup = buildCrossPlantLookup(CONFIG)
-      for (let blockId = 0; blockId <= 255; blockId += 1) {
+      for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += 1) {
         expect(isCrossPlant(lookup, blockId)).toBe(CONFIG.crossPlantBlockIds.has(blockId))
       }
     }),
   )
 
-  it.effect('ignores ids outside a byte rather than corrupting the table', () =>
+  it.effect('ignores ids outside the representable range rather than corrupting the table', () =>
     Effect.sync(() => {
-      // A block id arrives from a `Uint8Array`, so an out-of-range id is a
+      // A block id arrives from a `Uint16Array`, so an out-of-range id is a
       // Config mistake. `buildCrossPlantLookup` has NO bounds check, because a
       // Write past the end of a typed array is dropped by the array itself:
       // A guard would be unreachable, and a mutation that deleted one could not
@@ -407,12 +408,12 @@ describe('the injected set', () => {
       // States the behaviour that makes the guard unnecessary, so that the next
       // Reader who wants to add one finds the answer here.
       const lookup = buildCrossPlantLookup({
-        crossPlantBlockIds: new Set([-1, 256, 1000, FLOWER]),
+        crossPlantBlockIds: new Set([-1, MAX_BLOCK_ID + 1, 1_000_000, FLOWER]),
         fluidMaxLevels: new Map(),
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set(),
       })
-      expect(lookup.length).toBe(256)
+      expect(lookup.length).toBe(MAX_BLOCK_ID + 1)
       expect(isCrossPlant(lookup, FLOWER)).toBe(true)
       expect(lookup.reduce((total, value) => total + value, 0)).toBe(1)
     }),

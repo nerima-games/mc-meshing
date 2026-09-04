@@ -187,17 +187,18 @@ export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer =
 }
 
 /**
- * Flatten a `MeshConfig` into a 256-entry lookup table, indexed by block id.
+ * Flatten a `MeshConfig` into a `MAX_BLOCK_ID + 1`-entry lookup table, indexed
+ * by block id.
  *
- * Block ids are bytes, so the whole domain fits in 256 bytes and the inner loop
- * becomes an array index instead of a hash lookup. The reference does the same
- * (`greedy-meshing.ts:41-57`, memoised on Set identity through a `WeakMap`) and
- * notes that "the resulting lookup is still faster than iterating a Set in the
- * inner meshing loop".
+ * The whole domain fits in one small typed array, so the inner loop becomes
+ * an array index instead of a hash lookup. The reference does the same
+ * (`greedy-meshing.ts:41-57`, memoised on Set identity through a `WeakMap`,
+ * over its own 256-entry byte domain) and notes that "the resulting lookup is
+ * still faster than iterating a Set in the inner meshing loop".
  *
- * Building it here is O(256). Internal mesh entry points reuse the result by
- * Set identity, while this public builder returns a fresh table for each call.
- * Values are indices into `MESH_LAYERS`.
+ * Building it here is O(`MAX_BLOCK_ID`). Internal mesh entry points reuse the
+ * result by Set identity, while this public builder returns a fresh table for
+ * each call. Values are indices into `MESH_LAYERS`.
  */
 /** `MAX_BLOCK_ID` is inclusive, so the table needs one more slot than that. */
 const TABLE_SIZE_OFFSET = 1

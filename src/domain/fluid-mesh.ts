@@ -202,13 +202,13 @@ const pushSide = (
 /**
  * Does the injected fluid table declare any fluid at all?
  *
- * A 256-ENTRY SCAN TO SKIP A 16 x yLimit x 16 WALK. Without it a config that
- * declares no fluid still pays for a whole extra traversal of the chunk that
- * can only ever find nothing — measured at 1.05-1.17x of `meshChunk` on the
- * four fluid-free bench fixtures, which is most of what fluid meshing appeared
- * to cost before this early exit existed. The table has 256 entries and
- * the walk is 16,384 cells on the `flat` fixture alone, so the trade is not
- * close. See docs/design-notes.md M-12.
+ * A SMALL LOOKUP-TABLE SCAN TO SKIP A 16 x yLimit x 16 WALK. Without it a config
+ * that declares no fluid still pays for a whole extra traversal of the chunk
+ * that can only ever find nothing — measured at 1.05-1.17x of `meshChunk` on
+ * the four fluid-free bench fixtures, which is most of what fluid meshing
+ * appeared to cost before this early exit existed. The table has
+ * `MAX_BLOCK_ID + 1` entries and the walk is 16,384 cells on the `flat`
+ * fixture alone, so the trade is not close. See docs/design-notes.md M-12.
  *
  * Scanning the TABLE rather than testing the config keeps this correct when the
  * lookup is derived from a caller-owned map and also keeps the early exit tied

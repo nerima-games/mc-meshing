@@ -46,9 +46,12 @@ export const CONFIG: MeshConfig = {
   waterBlockIds: new Set([WATER]),
 }
 
-const newBlocks = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
+const newBlocks = (): Uint16Array => new Uint16Array(BLOCKS_PER_CHUNK)
 
-const set = (blocks: Uint8Array, lx: number, y: number, lz: number, value: number): void => {
+/** One byte per cell — fluid state (`falling`/`levels`/`sources`), never block ids. */
+const newFluidGrid = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
+
+const set = (blocks: Uint16Array, lx: number, y: number, lz: number, value: number): void => {
   blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = value
 }
 
@@ -121,9 +124,9 @@ const layeredChunk = (): ChunkView => {
 
 /**
  * Built once at module load and shared by every consumer. A `ChunkView` is read
- * only — `blocks` is a `Readonly<Uint8Array>` and meshing never writes to it —
+ * only — `blocks` is a `Readonly<Uint16Array>` and meshing never writes to it —
  * so one instance per shape is enough, and one instance is what makes the
- * timings and the counts describe the same bytes.
+ * timings and the counts describe the same elements.
  */
 export const FLAT: ChunkView = flatChunk()
 export const ROLLING: ChunkView = rollingChunk()
@@ -152,9 +155,9 @@ export const LAYERED: ChunkView = layeredChunk()
  */
 const lakeChunk = (): ChunkView => {
   const blocks = newBlocks()
-  const falling = newBlocks()
-  const levels = newBlocks()
-  const sources = newBlocks()
+  const falling = newFluidGrid()
+  const levels = newFluidGrid()
+  const sources = newFluidGrid()
   for (let lx = 0; lx < CHUNK_SIZE; lx += 1) {
     for (let lz = 0; lz < CHUNK_SIZE; lz += 1) {
       const bed = 40 + Math.floor((lx + lz) / 2)

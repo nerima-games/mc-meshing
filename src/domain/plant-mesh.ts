@@ -108,15 +108,15 @@ export const PLANT_INSET = 0.1
 const CELL_SIZE = 1
 
 /**
- * Flatten the cross-plant id set into a 256-entry byte table, `1` meaning "this
- * id is a cross plant".
+ * Flatten the cross-plant id set into a `MAX_BLOCK_ID + 1`-entry byte table,
+ * `1` meaning "this id is a cross plant".
  *
  * The same device as `buildLayerLookup`, kept separate rather than folded into
  * it. Folding would mean giving that table a fourth value that is not a
  * `MeshLayer`, which breaks its contract — `layerOfBlockId` returns a
- * `MeshLayer` and `test/public-api.test.ts` checks the two agree over all 256
- * ids — in exchange for one byte-indexed read. The read is the cheap thing here;
- * the contract is not.
+ * `MeshLayer` and `test/public-api.test.ts` checks the two agree over every
+ * representable id — in exchange for one byte-indexed read. The read is the
+ * cheap thing here; the contract is not.
  */
 /** `MAX_BLOCK_ID` is inclusive, so the table needs one more slot than that. */
 const TABLE_SIZE_OFFSET = 1
@@ -135,11 +135,11 @@ const CROSS_PLANT_MARKER = 1
 
 export const buildCrossPlantLookup = (config: MeshConfig): Uint8Array => {
   const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
-  // Iterating the SET rather than all 256 ids, unlike `buildLayerLookup`. That
+  // Iterating the SET rather than every representable id, unlike `buildLayerLookup`. That
   // One has to visit every id because it must give every id an answer; this one
   // Defaults to "not a plant" and only the named ids differ.
   //
-  // THERE IS NO BOUNDS CHECK, and that is deliberate. An id outside a byte is a
+  // THERE IS NO BOUNDS CHECK, and that is deliberate. An id outside the table is a
   // Config mistake, and the obvious `if (blockId >= 0 && blockId <= MAX_BLOCK_ID)`
   // Guard is UNREACHABLE: a write past the end of a `Uint8Array` is dropped by
   // The array itself, silently and by specification, so the guarded and

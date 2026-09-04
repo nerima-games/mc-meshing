@@ -53,7 +53,7 @@ const SLAB = firstBlockIdWithCollisionShape('slab')
 const PRESSURE_PLATE = firstBlockIdWithCollisionShape('pressurePlate')
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
@@ -249,7 +249,7 @@ describe('kernel-defined special block geometry', () => {
   it.effect('meshes a special block at the top of a short chunk', () =>
     Effect.sync(() => {
       const height = 8
-      const blocks = new Uint8Array(16 * height * 16)
+      const blocks = new Uint16Array(16 * height * 16)
       blocks[blockIndex(8, height - 1, 8, height)] = CACTUS
 
       const specialBlocks = meshSpecialBlocks({ blocks, coord: chunkCoord(0, 0), height }, {}, height)

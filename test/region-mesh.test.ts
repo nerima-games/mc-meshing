@@ -19,7 +19,7 @@ const chunkWith = (
   cells: ReadonlyArray<readonly [number, number, number, number]>,
   fluidCells: ReadonlyArray<readonly [x: number, y: number, z: number, level: number]> = [],
 ): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = id}
   if (fluidCells.length === 0) {return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }}
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)

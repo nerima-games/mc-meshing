@@ -43,7 +43,7 @@ const chunkWith = (
   cells: ReadonlyArray<readonly [number, number, number, number]>,
   light?: LightView,
 ): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, blockId] of cells) {
     blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = blockId
   }
