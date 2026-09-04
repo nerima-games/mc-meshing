@@ -21,7 +21,7 @@ import { describe, expect, it } from './effect-test.js'
 import { Effect, FastCheck } from 'effect'
 import { chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_MAX } from '../src/domain/ambient-occlusion'
-import { AIR } from '../src/domain/block-data'
+import { AIR, MAX_BLOCK_ID } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -107,7 +107,7 @@ const everyQuad = (layers: MeshLayers): ReadonlyArray<Quad> => [
 ]
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
@@ -607,7 +607,7 @@ describe('variable chunk height', () => {
   it.effect('meshes the top layer of a non-default-height chunk', () =>
     Effect.sync(() => {
       const height = 8
-      const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+      const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
       blocks[blockIndex(4, height - 1, 5, height)] = STONE
       const chunk: ChunkView = { blocks, coord: chunkCoord(0, 0), height }
 
@@ -629,7 +629,7 @@ describe('chunk boundaries', () => {
 
   it.effect('a present neighbour occludes across the boundary, so seams do not double up', () =>
     Effect.sync(() => {
-      const neighbourBlocks = new Uint8Array(BLOCKS_PER_CHUNK)
+      const neighbourBlocks = new Uint16Array(BLOCKS_PER_CHUNK)
       neighbourBlocks[blockIndex(CHUNK_SIZE - 1, 64, 0, CHUNK_HEIGHT)] = STONE
       const layers = meshChunk(
         chunkWith([[0, 64, 0, STONE]]),
@@ -916,7 +916,7 @@ const arbitraryChunkOfBoxes = FastCheck.array(
   ),
   { maxLength: 10, minLength: 1 },
 ).map((boxes) => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, dx, dy, dz, blockId] of boxes) {
     for (let x = lx; x < Math.min(lx + dx, CHUNK_SIZE); x += 1) {
       for (let z = lz; z < Math.min(lz + dz, CHUNK_SIZE); z += 1) {
@@ -1161,30 +1161,33 @@ describe('the greedy merge against the naive oracle', () => {
     }),
   )
 
-  it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, id 255 included', () =>
+  it.effect('REGRESSION: a merged quad’s ao is the ao of every cell it covers, id MAX_BLOCK_ID included', () =>
     Effect.sync(() => {
-      // The mask packs `blockId | (ao << 8)` into one cell and merges on the
-      // Whole cell, so this is also the round-trip test for that packing. Id 255
-      // Is the largest a `Uint8Array` holds: were the shift 7 rather than 8, its
-      // Top bit would land in the AO field and every quad of block 255 would
-      // Report a shade it does not have — and no other id in this file would
-      // Notice.
+      // The mask packs `blockId | (ao << AO_SHIFT)` into one cell and merges on
+      // the whole cell, so this is also the round-trip test for that packing.
+      // `MAX_BLOCK_ID` is the largest a `Uint16Array` element holds: were
+      // `AO_SHIFT` 15 rather than 16, its top bit would land in the AO field and
+      // every quad of block `MAX_BLOCK_ID` would report a shade it does not
+      // have — and no other id in this file would notice. This is also the id
+      // byte storage could never have represented at all (only mod-256, i.e. as
+      // if it were `MAX_BLOCK_ID & 0xff`), so it is the round-trip test for the
+      // wider storage itself, not only for the AO packing.
       //
-      // A 4x4 plate of id 255 with a wall along one side, so the plate's top
-      // Face carries two AO values and both are non-zero somewhere.
+      // A 4x4 plate of id MAX_BLOCK_ID with a wall along one side, so the
+      // plate's top face carries two AO values and both are non-zero somewhere.
       const cells: Array<readonly [number, number, number, number]> = []
       for (let lx = 4; lx < 8; lx += 1) {
         for (let lz = 4; lz < 8; lz += 1) {
-          cells.push([lx, 64, lz, 255])
+          cells.push([lx, 64, lz, MAX_BLOCK_ID])
         }
       }
       for (let lz = 4; lz < 8; lz += 1) {
-        cells.push([3, 65, lz, 255])
+        cells.push([3, 65, lz, MAX_BLOCK_ID])
       }
       const chunk = chunkWith(cells)
       const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
 
-      expect(layers.opaque.every((quad) => quad.blockId === 255)).toBe(true)
+      expect(layers.opaque.every((quad) => quad.blockId === MAX_BLOCK_ID)).toBe(true)
       expect(layers.opaque.every((quad) => quad.ao >= 0 && quad.ao <= AO_MAX)).toBe(true)
       // The wall at lx=3, y=65 darkens the lx=4 column of the plate's top face
       // And nothing further in, so the top splits into exactly two quads.
@@ -1199,6 +1202,20 @@ describe('the greedy merge against the naive oracle', () => {
       expect([...allUnitFaces(layers)].sort()).toStrictEqual(
         [...allUnitFaces(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))].sort(),
       )
+    }),
+  )
+
+  it.effect('REGRESSION: an id above 255 meshes as itself, not truncated modulo 256', () =>
+    Effect.sync(() => {
+      // 300 could only ever have been stored as 44 in a `Uint8Array` — this is
+      // the round-trip test `chunk-view.ts`'s `ChunkView.blocks` widening to
+      // `Uint16Array` exists for. A single isolated block, so its six faces are
+      // unmerged and each carries `blockId` straight from the mask.
+      const wideId = 300
+      const layers = meshChunk(chunkWith([[8, 64, 8, wideId]]), {}, EMPTY_MESH_CONFIG)
+      expect(layers.opaque).toHaveLength(6)
+      expect(layers.opaque.every((quad) => quad.blockId === wideId)).toBe(true)
+      expect(layers.opaque.some((quad) => quad.blockId === wideId % 256)).toBe(false)
     }),
   )
 
@@ -1276,7 +1293,7 @@ describe('the Y scan ceiling', () => {
       // ChunkView is structural, so a producer can temporarily expose a short
       // Typed array. The hot passes may read directly only if they retain
       // GetBlock's missing-cell-as-AIR behavior and the emitted sequence.
-      const blocks = new Uint8Array(1)
+      const blocks = new Uint16Array(1)
       blocks[0] = STONE
       const chunk: ChunkView = { blocks, coord: chunkCoord(0, 0), height: CHUNK_HEIGHT }
       expect(meshChunk(chunk, {}, EMPTY_MESH_CONFIG)).toStrictEqual(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))
@@ -1287,7 +1304,7 @@ describe('the Y scan ceiling', () => {
 describe('getBlock', () => {
   it.effect('returns AIR for every out-of-range coordinate instead of throwing or returning undefined', () =>
     Effect.sync(() => {
-      const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+      const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
       blocks[blockIndex(0, 0, 0, CHUNK_HEIGHT)] = STONE
       for (const [lx, y, lz] of [
         [-1, 0, 0],
@@ -1311,7 +1328,7 @@ describe('getBlock', () => {
           FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
           FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
           (lx, y, lz) => {
-            const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+            const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
             blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = STONE
             return getBlock({ blocks, height: CHUNK_HEIGHT }, lx, y, lz) === STONE
           },

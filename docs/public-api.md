@@ -8,7 +8,7 @@
 ```typescript
 import { blockCount, meshChunk, type ChunkView } from '@nerima-games/mc-meshing'
 
-const blocks = new Uint8Array(blockCount(kernelChunk.height))
+const blocks = new Uint16Array(blockCount(kernelChunk.height))
 kernelChunk.blocks.copyTo(blocks)
 const view: ChunkView = {
   coord: kernelChunk.coord,
@@ -19,7 +19,7 @@ const layers = meshChunk(view, neighbours, config)
 ```
 
 呼び出し側は mc-kernel の `Chunk` から `coord` と `height` を引き継ぎ、opaque な
-`blocks` を `copyTo` でメッシング用の byte view にコピーして `ChunkView` を組み立てる。
+`blocks` を `copyTo` でメッシング用の 16-bit element view にコピーして `ChunkView` を組み立てる。
 `blockCount` は可変高さの範囲を検証し、必要なストレージ長を算出する。`meshChunk` は `ChunkView`、
 隣接チャンク、注入された `MeshConfig` を受け取り、呼び出し側が所有できる `MeshLayers` を返す。
 返り値は cube 面と専用形状を別のコレクションに保持する。
@@ -65,7 +65,7 @@ export type MeshConfig = {
 }
 export const EMPTY_MESH_CONFIG: MeshConfig
 export const MINECRAFT_MESH_CONFIG: MeshConfig
-export const MAX_BLOCK_ID = 255
+export const MAX_BLOCK_ID = 65535 // re-exported from @nerima-games/mc-kernel's BLOCK_ID_MAX
 
 export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer
 export const buildLayerLookup = (config: MeshConfig): Uint8Array
@@ -150,7 +150,7 @@ export type ChunkCoord = { readonly cx: number; readonly cz: number }
 export type ChunkView = {
   readonly coord: ChunkCoord
   readonly height: number
-  readonly blocks: Readonly<Uint8Array>
+  readonly blocks: Readonly<Uint16Array>
   readonly fluid?: FluidView
   readonly railShapes?: RailShapeView
   readonly light?: LightView
@@ -222,7 +222,7 @@ export const MESH_BUFFER_LAYERS: ReadonlyArray<MeshBufferLayer>
 export type PackedMeshBuffers = {
   readonly positions: Float32Array
   readonly normals: Int8Array
-  readonly blockIds: Uint8Array
+  readonly blockIds: Uint16Array
   readonly ao: Uint8Array
   readonly blockLight: Uint8Array
   readonly skyLight: Uint8Array
@@ -234,8 +234,8 @@ export const packMeshLayers = (layers: MeshLayers): PackedMeshBuffers
 ```
 
 `packMeshLayers` は `MeshLayers` の cube、cross-plant、fluid、special-block quad を安定したレイヤー順で
-所有された typed array に変換する。頂点属性は位置 xyz (`Float32Array`)、法線 xyz (`Int8Array`)、block ID と AO
-、block light と sky light (`Uint8Array`)、index は `Uint32Array` で、各レイヤーの範囲は `groups` から取得する。
+所有された typed array に変換する。頂点属性は位置 xyz (`Float32Array`)、法線 xyz (`Int8Array`)、block ID
+(`Uint16Array`)、AO、block light と sky light (`Uint8Array`)、index は `Uint32Array` で、各レイヤーの範囲は `groups` から取得する。
 結果は GPU に upload
 できるデータだが、WebGL / GPU device、texture、material の所有権は持たない。
 

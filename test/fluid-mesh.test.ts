@@ -79,7 +79,7 @@ type BlockCell = readonly [number, number, number, number]
 type FluidCell = readonly [number, number, number, number, number, number?]
 
 const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<FluidCell> = []): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
@@ -241,7 +241,7 @@ describe('the height of one cell', () => {
   it.effect('fluid on the top row of a short chunk still shows a surface', () =>
     Effect.sync(() => {
       const height = 8
-      const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+      const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
       const levels = new Uint8Array(blocks.length)
       const sources = new Uint8Array(blocks.length)
       const falling = new Uint8Array(blocks.length)
@@ -292,7 +292,7 @@ describe('the height of one cell', () => {
         // Wholly-missing-`FluidView` case above does: the lookup's zero sentinel, i.e. full
         // And not a source. This is that default, witnessed with the `FluidView`
         // Present but truncated to one entry instead of absent entirely.
-        const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+        const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
         blocks[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = WATER
         const chunk: ChunkView = {
           coord: chunkCoord(0, 0),
@@ -856,7 +856,7 @@ describe('the injected fluid table', () => {
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set([WATER]),
       })
-      for (let blockId = 0; blockId <= 255; blockId += 1) {
+      for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += 1) {
         expect(isFluidBlock(lookup, blockId)).toBe(false)
       }
     }),
@@ -904,7 +904,7 @@ const arbitraryFluidChunk = FastCheck.array(
   }),
   { maxLength: 8, minLength: 1 },
 ).map((boxes): ChunkView => {
-  const blocks = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)

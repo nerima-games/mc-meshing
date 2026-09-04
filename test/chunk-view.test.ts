@@ -19,9 +19,9 @@ const STONE_Z = 5
 const STONE_Y = 42
 
 describe('ChunkView', () => {
-  it('keeps kernel coordinates alongside height-aware byte storage', () => {
+  it('keeps kernel coordinates alongside height-aware element storage', () => {
     const height = CHUNK_HEIGHT - STEP
-    const blocks = new Uint8Array(blockCount(height))
+    const blocks = new Uint16Array(blockCount(height))
     const stone = blockIdOf('stone')
     blocks[blockIndex(STONE_X, STONE_Y, STONE_Z, height)] = stone
     const view: ChunkView = { blocks, coord: chunkCoord(CHUNK_X, CHUNK_Z), height }

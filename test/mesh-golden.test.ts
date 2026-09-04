@@ -39,7 +39,7 @@ const CONFIG: MeshConfig = {
 
 const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
   const cellCount = 16 * CHUNK_HEIGHT * 16
-  const blocks = new Uint8Array(cellCount)
+  const blocks = new Uint16Array(cellCount)
   const levels = new Uint8Array(cellCount)
   const sources = new Uint8Array(cellCount)
   const falling = new Uint8Array(cellCount)

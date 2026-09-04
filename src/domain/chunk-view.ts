@@ -2,7 +2,7 @@
  * The chunk as meshing sees it, and the hot-path block read.
  *
  * `ChunkView` is the renderer-facing variable-height view. It keeps the
- * mc-kernel coordinate and height while carrying the byte view used by the
+ * mc-kernel coordinate and height while carrying the element view used by the
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
@@ -112,7 +112,7 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   /** Vertical extent of this chunk, in blocks. */
   readonly height: number
   /** `CHUNK_SIZE * height * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
-  readonly blocks: Readonly<Uint8Array>
+  readonly blocks: Readonly<Uint16Array>
   /**
    * Per-cell decoded fluid state when available from the simulation boundary.
    *
@@ -134,7 +134,7 @@ export const BLOCKS_PER_CHUNK: number = blockCountOf(CHUNK_HEIGHT)
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
 export const emptyChunk = (height: number = CHUNK_HEIGHT): ChunkView => ({
-  blocks: new Uint8Array(blockCountOf(height)),
+  blocks: new Uint16Array(blockCountOf(height)),
   coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
   height,
 })

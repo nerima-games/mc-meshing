@@ -1,6 +1,7 @@
 import { Brand } from 'effect'
 import {
   AIR_BLOCK_ID,
+  BLOCK_ID_MAX,
   BLOCK_IDS,
   type BlockId,
   type RenderKind,
@@ -13,23 +14,21 @@ export type { BlockId }
 export const AIR: BlockId = AIR_BLOCK_ID
 
 /**
- * The largest id THIS PACKAGE's own storage can represent — not kernel's
- * abstract `BlockId` ceiling.
+ * The largest id this package's own storage can represent.
  *
- * `ChunkView.blocks` is a `Uint8Array`, one byte per cell, by this package's
- * own storage-layout choice (`chunk-view.ts`), independent of whatever wire
- * format the kernel's `Chunk` uses internally. Kernel's own `BLOCK_ID_MAX`
- * widened from 255 to 0xffff when its `Chunk` wire format gained a 16-bit v2
- * element (mc-kernel 0.5.0) — a fact about the KERNEL's encoding. Re-exporting
- * that growing ceiling here would silently drift this constant away from what
- * a `Uint8Array` byte can actually hold, corrupting every `& MAX_BLOCK_ID`
- * mask below (`mesh-greedy.ts`'s `faceCellBlockId` packs `ao` starting at bit
- * 8, so a mask wider than one byte reads AO bits back as part of the id).
+ * `ChunkView.blocks` is a `Uint16Array`, two bytes per cell (`chunk-view.ts`),
+ * matching kernel's own `BLOCK_ID_MAX` and `BlockState`'s 16-bit wire element
+ * exactly — re-exported rather than restated as a literal, so the two cannot
+ * drift apart the way they did before this storage widened (this constant was
+ * `0xff` while kernel's ceiling had already moved to `0xffff`). Every
+ * `& MAX_BLOCK_ID` mask below (`mesh-greedy.ts`'s `faceCellBlockId`) relies on
+ * this matching the storage width exactly: `mesh-greedy.ts`'s `AO_SHIFT` packs
+ * `ao` starting at bit 16, immediately above it.
  */
-export const MAX_BLOCK_ID = 0xff
+export const MAX_BLOCK_ID: number = BLOCK_ID_MAX
 
 /**
- * A `Uint8Array` element, or a value masked with `& MAX_BLOCK_ID`, is always
+ * A `Uint16Array` element, or a value masked with `& MAX_BLOCK_ID`, is always
  * an integer in `[0, MAX_BLOCK_ID]` — exactly the range this package's own
  * storage can hold — so this is a structurally-guaranteed upcast, not an
  * unchecked claim about an arbitrary number. `Brand.nominal` applies the same
@@ -37,13 +36,13 @@ export const MAX_BLOCK_ID = 0xff
  * constructor) uses, but without a redundant runtime check on a value that is
  * already known-safe, and without the `as`/`!` syntax the org's
  * `no-type-assertion` ast-grep rule bans — unlike a manual guard, it adds no
- * branch a caller can never actually take, which a real `Uint8Array` byte or
- * an `& MAX_BLOCK_ID` mask never needs.
+ * branch a caller can never actually take, which a real `Uint16Array` element
+ * or an `& MAX_BLOCK_ID` mask never needs.
  */
 const uncheckedBlockId = Brand.nominal<BlockId>()
 
-/** Read one block id out of a chunk's byte storage, defaulting to `AIR` for an out-of-range index. */
-export const blockIdAt = (blocks: Readonly<Uint8Array>, index: number): BlockId => {
+/** Read one block id out of a chunk's element storage, defaulting to `AIR` for an out-of-range index. */
+export const blockIdAt = (blocks: Readonly<Uint16Array>, index: number): BlockId => {
   const raw = blocks[index]
   if (typeof raw === 'undefined') {
     return AIR

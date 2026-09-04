@@ -11,7 +11,7 @@ import { EMPTY_MESH_CONFIG } from '../src/domain/opacity'
 
 const sampleChunk = (light?: ChunkView['light']): ChunkView => {
   const height = 4
-  const blocks = new Uint8Array(CHUNK_SIZE * height * CHUNK_SIZE)
+  const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
   blocks[blockIndex(1, 1, 1, height)] = 1
   return light ? { blocks, coord: chunkCoord(0, 0), height, light } : { blocks, coord: chunkCoord(0, 0), height }
 }

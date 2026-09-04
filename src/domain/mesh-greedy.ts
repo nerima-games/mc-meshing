@@ -23,7 +23,13 @@ import { isSpecialBlock } from './special-mesh.js'
 import { quadLightAt } from './light-sampling.js'
 
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
-const AO_SHIFT = 8
+/**
+ * Where `packFaceCell` packs `ao`, immediately above the 16-bit block id
+ * range `MAX_BLOCK_ID` covers. Must stay `MAX_BLOCK_ID`'s bit width — the mask
+ * cell that results (`GreedyMasks.mask`) is a `Uint32Array` precisely because
+ * the packed value now needs more than 16 bits (id) plus 2 bits (ao).
+ */
+const AO_SHIFT = 16
 const NO_FACE = 0
 const NO_OFFSET = 0
 const LIGHT_NIBBLE_MASK = 0x0f
@@ -73,7 +79,7 @@ const packedLightPropertiesOf = (
   return {}
 }
 
-// `cell & MAX_BLOCK_ID` (a mask of 0xFF) is always an integer in
+// `cell & MAX_BLOCK_ID` (a mask of 0xFFFF) is always an integer in
 // [0, MAX_BLOCK_ID] by construction of the bitwise AND itself — see
 // `block-data.ts`'s `uncheckedBlockId` for why `Brand.nominal` applies here
 // instead of a guard with a branch no caller can ever take.
@@ -101,7 +107,8 @@ type LightMasks = {
 
 type GreedyMasks = {
   readonly light: LightMasks | undefined
-  readonly mask: Uint16Array
+  /** Packed `blockId | (ao << AO_SHIFT)` cells; `Uint32Array` because a 16-bit id plus ao no longer fits 16 bits. */
+  readonly mask: Uint32Array
 }
 
 const rowMatches = (
@@ -226,7 +233,7 @@ const growRuns = (
  * branch (an index `expandGreedy`'s loop bounds should never produce) has a
  * direct test instead of an untestable one buried inside `expandCell`.
  */
-export const maskCellAt = (mask: Uint16Array, base: number): number => {
+export const maskCellAt = (mask: Uint32Array, base: number): number => {
   const cell = mask[base]
   if (typeof cell === 'undefined') {
     throw new RangeError(`unreachable: greedy mask index ${base} out of range`)
@@ -261,7 +268,7 @@ type ColumnPassContext = {
   readonly face: Face
   readonly fluids: Uint16Array
   readonly lookup: Uint8Array
-  readonly mask: Uint16Array
+  readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly placement: FacePlacement
   readonly plants: Uint8Array
@@ -277,7 +284,7 @@ export type MeshAllFacesContext = {
   readonly chunk: ChunkView
   readonly fluids: Uint16Array
   readonly lookup: Uint8Array
-  readonly mask: Uint16Array
+  readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly plants: Uint8Array
   readonly push: (quad: Quad) => void
