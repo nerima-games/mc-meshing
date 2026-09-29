@@ -36,6 +36,9 @@
 現在の `package.json` は、ビルド済み成果物を検証可能にする段階まで進んでいる:
 
 - `dependencies` に `effect` と `@nerima-games/mc-kernel` を宣言する。依存する版数は `package.json` で管理する。
+- kernel の破壊的な公開 API 更新に追随するときは、下流利用者が kernel と本パッケージを同じ世代へ
+  揃える必要がある。今回の変更もその契約に該当し、利用者は kernel 0.8.0 に揃えることを changeset
+  で告知する。公開 d.ts の型は kernel の `ChunkCoord` / `BlockId` を引き続き利用する。
 - `exports` は **`dist/` の ESM と declaration** を指し、開発用の `src/` / `test/` は tarball に含めない。
 - `pnpm build` が `dist/` を生成し、`pnpm package:verify` が tarball の内容と展開後の import を検証する。
 - `prepublishOnly` は `pnpm verify && pnpm package:verify` を実行する。
