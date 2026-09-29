@@ -14,6 +14,9 @@
 > - **移植元**: greedy-meshing.ts + chunk-mesh-geometry + meshing-worker-config.ts（計 3,994 LOC）
 > - **設計注意**: ホットパスの `transparentBlockIds: Set<number>` はネイティブ `Set` を維持（**~40万call/chunk**。Effect の HashSet は構造的等価性比較が遅く使用禁止）。`getBlock()` は境界チェックをインライン化し Option 割り当てを避ける（いずれも参照実装で実測確定）
 
+この引用の `mesh` は計画時点の略称であり、現行の公開入口は `docs/public-api.md` と
+`src/index.ts` が定める `meshChunk` である。返り値には cube 面以外の専用形状と流体のコレクションも含む。
+
 ## 2. 責務の言い換え
 
 **ブロック ID の配列と注入された設定だけを入力とし、形状別の面リストを返す純粋関数。**
@@ -88,7 +91,7 @@
 
 理由は 2 つ。
 
-1. **本リポジトリは純粋関数の集合であり、`mesh(chunk, neighbours, config)` は
+1. **本リポジトリは純粋関数の集合であり、`meshChunk(chunk, neighbours, config)` は
    バッファしか見ない。** 座標を入れると「どのチャンクか」という第 2 の変更理由が増える。
 2. **座標系は mc-kernel の資産である**（plan.md §3.1: `Position` / `AABB` / チャンク座標系）。
    ここで `ChunkCoord` を宣言すれば、ロスターに 3 つ目の綴りが増える。
@@ -141,7 +144,7 @@ mc-meshing はその分離を**1 段下で**維持する。理由は 2 つ:
 `lodForDistance` の `distanceChunks` は「プレイヤーのチャンクと対象チャンクの
 L1 / L∞ ノルム」——参照実装の doc comment がそう書いている——つまり座標の派生物である。
 これを入れれば §3.3 が禁じた「どのチャンクか」という第 2 の変更理由がそのまま入ってくる。
-逆に `simplifyMesh` は `MeshedChunk` と段番号しか見ない。**`mesh()` と同じ形の純粋関数である。**
+逆に `simplifyMesh` は `MeshLayers` と段番号しか見ない。**`meshChunk()` と同じ形の純粋関数である。**
 
 `block-mesh.ts` は迷う余地が無い。`import * as THREE` があり THREE の参照が 8 箇所、
 `MaterialCacheKey` を持つ `Effect.Service` である。本リポジトリが `three` に依存した瞬間、
@@ -387,7 +390,7 @@ rail state は復号済みの renderer-facing sidecar として `ChunkView.railS
 
 | 関係 | リポジトリ |
 | --- | --- |
-| 親（依存先） | `mc-kernel` のみ |
+| 親（依存先） | `mc-kernel`、`effect` |
 | 子（依存元） | `mc-render` のみ |
 
 `mc-kernel` の `Chunk` を `package.json` の依存として直接消費する。

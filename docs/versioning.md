@@ -2,7 +2,9 @@
 
 - 上位仕様: plan.md §6 Step 0 / Step 3、§9
 
-## 1. 現在のバージョン: `0.1.4`
+## 1. バージョンの正本
+
+現在のバージョンと依存パージョンは `package.json` を正とする。本文書には個別の版数を複製しない。
 
 **1.0.0 にするのは、上流の消費者が実際にこのリポジトリを消費して契約を確認したときである。**
 
@@ -16,9 +18,10 @@
 「新規構築初期は全界面が高 churn」を挙げ、その対策として
 「npm 公開を遅らせ dev-meta workspace で開発」を指定しているのはこの理由による。
 
-## 2. なぜ今は publish しないのか（plan.md §6 Step 0-2）
+## 2. なぜ自動 bump しないのか（plan.md §6 Step 0-2）
 
-> **npm公開・バージョンbump運用は、上位階層が実際にこのリポジトリを消費し動作確認するまで開始しない。**
+> **バージョン bump は、上位階層が実際にこのリポジトリを消費し動作確認するまで自動化しない。**
+> 公開 workflow は導入済みだが、版数の変更と公開の判断は maintainer が行う。
 > 「4週間 API 無変更で凍結」という日数計測ベースの自動ゲートは org 標準として廃止された
 > (RELEASE_STANDARD.md §4)。1.0.0 への昇格は maintainer(take)による裁量判断のみで行い、
 > 代替の自動ゲートは設けない。
@@ -32,7 +35,7 @@
 
 現在の `package.json` は、ビルド済み成果物を検証可能にする段階まで進んでいる:
 
-- `dependencies` に `effect` と `@nerima-games/mc-kernel@0.4.0` を宣言する。
+- `dependencies` に `effect` と `@nerima-games/mc-kernel` を宣言する。依存する版数は `package.json` で管理する。
 - `exports` は **`dist/` の ESM と declaration** を指し、開発用の `src/` / `test/` は tarball に含めない。
 - `pnpm build` が `dist/` を生成し、`pnpm package:verify` が tarball の内容と展開後の import を検証する。
 - `prepublishOnly` は `pnpm verify && pnpm package:verify` を実行する。
@@ -86,14 +89,14 @@ Step 0 の実装として GitHub Packages を選んである。組織 `nerima-ga
 
 > **`0.x` の間の読み替え（全 16 リポジトリ共通の方針）**
 >
-> 本リポジトリは `0.1.4` であり、下流が契約を実際に消費して確認するまで `0.x` から出ない。
-> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**（`0.1.4` → `0.2.0`）。
+> 本リポジトリの `package.json` が `0.x` を示している間は、下流が契約を実際に消費して確認するまで `0.x` から出ない。
+> **semver では `0.x` の破壊的変更は major bump ではなく minor bump である**。
 > したがって以下の MAJOR / MINOR / PATCH は **`1.0.0` 到達後の分類**であり、
 > `0.x` の間は次のように読み替える。
 >
 > | 分類 | `1.0.0` 到達後 | `0.x` の間（現在） |
 > | --- | --- | --- |
-> | MAJOR | major bump | **minor bump**（`0.1.4` → `0.2.0`） |
+> | MAJOR | major bump | **minor bump** |
 > | MINOR | minor bump | patch bump |
 > | PATCH | patch bump | patch bump |
 >
