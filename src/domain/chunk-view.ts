@@ -116,8 +116,8 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   /**
    * Per-cell decoded fluid state when available from the simulation boundary.
    *
-   * It remains optional because mc-kernel 0.4.0 owns block ids only and does not
-   * publish a fluid sidecar. When present, all `FluidView` arrays are required.
+   * It remains optional because mc-kernel owns block ids and does not publish a
+   * fluid sidecar. When present, all `FluidView` arrays are required.
    * It sits on `ChunkView` rather than beside it as a separate parameter so that
    * `ChunkNeighbours` carries it for free — a lake spanning a chunk seam needs
    * the neighbour's levels to compute corner heights along that seam, and a
