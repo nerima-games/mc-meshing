@@ -146,7 +146,7 @@ export const AIR = 0
 export const blockCount = (height: number): number
 export const blockCountOf = (height: number): number
 
-export type ChunkCoord = { readonly cx: number; readonly cz: number }
+export type ChunkCoord = import('@nerima-games/mc-kernel').ChunkCoord
 export type ChunkView = {
   readonly coord: ChunkCoord
   readonly height: number
@@ -167,7 +167,9 @@ export const emptyChunk = (height?: number): ChunkView
 ```
 
 ストレージは X、Z、Y の順で、`blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE`。
-`ChunkView.coord` は kernel のチャンク座標を保持し、`ChunkView.height` はチャンクごとの垂直範囲である。
+`ChunkView.coord` は kernel が公開する `ChunkCoord` をそのまま保持し、`ChunkView.height` は
+メッシング用に検証されたチャンクごとの垂直範囲である。座標・ブロック ID は kernel のブランド型を
+正本とし、このパッケージは別の座標型やブロック ID 型を宣言しない。
 `CHUNK_HEIGHT` はデフォルト値にすぎない。`blockCountOf` は互換 alias であり、`blockCount` と同じ検証を行う。
 `blockIndex` の高さは省略時に `CHUNK_HEIGHT` となる。`getBlock` は `ChunkView` の `blocks` と `height` を
 受け取り、範囲外を `AIR` として返す。隣接チャンクを含む読み出しは `getBlockAcrossBoundary` が担当する。

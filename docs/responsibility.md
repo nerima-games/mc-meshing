@@ -97,8 +97,7 @@
    ここで `ChunkCoord` を宣言すれば、ロスターに 3 つ目の綴りが増える。
    2 つ目（mc-worldgen の `{x, z}`）は kernel の `{cx, cz}` に統合されたばかりである。
 
-将来 mc-kernel を消費するようになったら、必要なら kernel の `ChunkCoord` を
-そのまま使う。本リポジトリ独自の座標型を作ることはしない。
+mc-kernel の `ChunkCoord` をそのまま使っており、本リポジトリ独自の座標型は宣言しない。
 
 ### 3.1 Three.js 非依存は絶対条件
 
