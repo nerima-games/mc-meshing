@@ -1,6 +1,5 @@
 {
   // Shared compiler options for every tsconfig in this repository.
-  // Copied from @nerima-games/mc-kernel; keep the two in sync.
   // Strictness policy: `strict: true` PLUS every additional strictness flag
   // spelled out explicitly, so that a future TypeScript release changing a
   // default cannot silently weaken this repository.
@@ -8,9 +7,8 @@
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    // mc-meshing is platform-agnostic pure computation: no DOM, no WebWorker,
-    // no Node globals, and in particular no Three.js. Meshing runs in a worker in
-    // production and in Node under vitest; the type environment must permit both.
+    // mc-kernel is platform-agnostic: no DOM, no WebWorker, no Node globals.
+    // Repos that need those add them in their own tsconfig.base.json.
     "lib": ["ES2024"],
     "types": [],
 
@@ -49,7 +47,8 @@
     "isolatedModules": true,
     // Public declarations must be derivable from each source file's explicit
     // annotations. This prevents an implementation-only inference change from
-    // silently changing the package API.
+    // silently changing the package API; Effect's Tag idiom is handled by an
+    // explicitly typed base in clock.ts.
     "isolatedDeclarations": true,
     // A type-only import must say so. The emitted JavaScript then follows from
     // the import statement alone, with no whole-program analysis deciding which
@@ -57,7 +56,7 @@
     // consumers wants.
     "verbatimModuleSyntax": true,
     // Nothing that needs a runtime transform to have meaning: no enum, no
-    // namespace, no parameter property. The domain is types and pure functions
+    // namespace, no parameter property. The domain is types and const data
     // already, so this pins the property rather than requesting a change.
     "erasableSyntaxOnly": true,
     // A side-effect import that resolves to nothing is an error, not a no-op.
