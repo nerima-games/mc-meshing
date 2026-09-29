@@ -1,5 +1,15 @@
 # @nerima-games/mc-meshing
 
+## 0.3.0
+
+### Minor Changes
+
+- [#28](https://github.com/nerima-games/mc-meshing/pull/28) [`c360c6b`](https://github.com/nerima-games/mc-meshing/commit/c360c6baec29c554738cd70913906f5c3bd28247) Thanks [@takeokunn](https://github.com/takeokunn)! - Require `@nerima-games/mc-kernel` 0.8.0. Consumers must align their kernel dependency with 0.8.0. The public declarations continue to use kernel-owned `ChunkCoord` and `BlockId` brands; no additional public declaration changes are introduced.
+
+### Patch Changes
+
+- [#27](https://github.com/nerima-games/mc-meshing/pull/27) [`e3f2f39`](https://github.com/nerima-games/mc-meshing/commit/e3f2f39e6d0259eaea128f7bcee7baae492de528) Thanks [@takeokunn](https://github.com/takeokunn)! - Align the shared TypeScript configuration with mc-kernel and remove documentation drift.
+
 ## 0.2.0
 
 ### Minor Changes
