@@ -10,3 +10,14 @@ overrides:
   # per plan.md §4 step 14 ("pin the transitive package in pnpm-workspace.yaml
   # overrides as the kernel does").
   nanoid: '>=3.3.18'
+  # pnpm audit: GHSA-68fv-2mgg-jv7q
+  source-map-js: 1.2.2
+  # pnpm audit: GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm,
+  # GHSA-9jrq-w75r-8gcw, GHSA-rq7h-c2jc-7f22
+  vite: 7.3.7
+  # pnpm audit: GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp
+  '@vitest/mocker': 4.1.12
+  # pnpm audit: GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm
+  launch-editor: 2.14.2
+  # pnpm audit: GHSA-pqg4-j6r4-53mv
+  shell-quote: 1.11.0
