@@ -36,9 +36,7 @@
 現在の `package.json` は、ビルド済み成果物を検証可能にする段階まで進んでいる:
 
 - `dependencies` に `effect` と `@nerima-games/mc-kernel` を宣言する。依存する版数は `package.json` で管理する。
-- kernel の破壊的な公開 API 更新に追随するときは、下流利用者が kernel と本パッケージを同じ世代へ
-  揃える必要がある。今回の変更もその契約に該当し、利用者は kernel 0.8.0 に揃えることを changeset
-  で告知する。公開 d.ts の型は kernel の `ChunkCoord` / `BlockId` を引き続き利用する。
+- When following a breaking kernel API update, downstream users must align the kernel and this package to the same generation. This migration follows that contract and announces the kernel 0.9.0 requirement in the changeset. Public declarations continue to use the kernel's `ChunkCoord` and `BlockId` types.
 - `exports` は **`dist/` の ESM と declaration** を指し、開発用の `src/` / `test/` は tarball に含めない。
 - `pnpm build` が `dist/` を生成し、`pnpm package:verify` が tarball の内容と展開後の import を検証する。
 - `prepublishOnly` は `pnpm verify && pnpm package:verify` を実行する。
@@ -153,7 +151,4 @@ API_STANDARD.md §4 および mc-kernel の `docs/versioning.md`）。
 そのものを捕まえるのは `pnpm typecheck` と個々の domain テスト（ゴールデンハッシュ等）であり、
 `test/public-api.test.ts` は「barrel が何を re-export しているか」という名前の面だけを見る。
 
-なお `MeshLayers` の出力コレクションや `MeshConfig` の集合が native `Set`（`ReadonlySet<number>`）
-であることのような、上の §5 で MAJOR に分類した型レベルの契約は、`pnpm typecheck` が
-`tsconfig.build.json` を通して検証する。`FACES` の順序や `MESH_LAYER_PRIORITY` の値のような
-「型には出ないが意味を持つ」契約は、引き続きゴールデンハッシュのテストの仕事である。
+Type-level contracts classified as MAJOR in §5, such as native `Set` collections in `MeshConfig` with `ReadonlySet<BlockId>`, are checked by `pnpm typecheck` through `tsconfig.build.json`. This checks the current declarations against compile-time contracts, not against the previous release's declarations. Review declaration changes across releases manually. Contracts that types cannot express, such as `FACES` order and `MESH_LAYER_PRIORITY` values, remain covered by golden-hash tests.

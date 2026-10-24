@@ -1,92 +1,86 @@
-# 公開 API
+# Public API
 
-- 出典: plan.md §3.3 と参照実装の検証
-- 実装の正典: `src/index.ts` と各 `src/domain/*.ts`
+The package entry point re-exports the public domain APIs from `src/index.ts`. This guide describes the current contracts for chunk input, meshing, configuration, typed-array packing, and resource-pack resolution.
 
-## 1. メッシング入口と戻り値
+## Chunk input and results
 
-```typescript
+`ChunkView` adapts the kernel chunk data to the mesher's element-array layout. The block array uses `Uint16Array`, which has the same numeric range as kernel `BlockId`.
+
+```ts
+import { Result } from 'effect'
 import { blockCount, meshChunk, type ChunkView } from '@nerima-games/mc-meshing'
 
-const blocks = new Uint16Array(blockCount(kernelChunk.height))
-kernelChunk.blocks.copyTo(blocks)
-const view: ChunkView = {
-  coord: kernelChunk.coord,
-  height: kernelChunk.height,
-  blocks,
-}
-const layers = meshChunk(view, neighbours, config)
-```
+// The caller supplies kernelChunk, neighbours, config, and consumeLayers.
+const meshKernelChunk = () => {
+  const count = blockCount(kernelChunk.height)
+  if (Result.isFailure(count)) {
+    return count
+  }
 
-呼び出し側は mc-kernel の `Chunk` から `coord` と `height` を引き継ぎ、opaque な
-`blocks` を `copyTo` でメッシング用の 16-bit element view にコピーして `ChunkView` を組み立てる。
-`blockCount` は可変高さの範囲を検証し、必要なストレージ長を算出する。`meshChunk` は `ChunkView`、
-隣接チャンク、注入された `MeshConfig` を受け取り、呼び出し側が所有できる `MeshLayers` を返す。
-返り値は cube 面と専用形状を別のコレクションに保持する。
+  const blocks = new Uint16Array(count.success)
+  kernelChunk.blocks.copyTo(blocks)
+  const view: ChunkView = {
+    coord: kernelChunk.coord,
+    height: kernelChunk.height,
+    blocks,
+  }
 
-連続して複数チャンクをメッシュ化する呼び出し元は、面マスクとライト用一時配列を再利用できる。
-`MeshScratch` は呼び出し元が保持する逐次処理用の作業領域であり、同じインスタンスを並行呼び出しで共有してはならない。
-scratch を渡しても返り値の配列と quad は毎回所有され、次のメッシュ化で変更されない。
-
-```typescript
-import { createMeshScratch, meshChunk } from '@nerima-games/mc-meshing'
-
-const scratch = createMeshScratch()
-const layers = meshChunk(view, neighbours, config, scratch)
-```
-
-```typescript
-export type MeshLayers = {
-  readonly opaque: ReadonlyArray<Quad>
-  readonly water: ReadonlyArray<Quad>
-  readonly transparentSolid: ReadonlyArray<Quad>
-  readonly crossPlants: ReadonlyArray<CrossPlantQuad>
-  readonly specialBlocks: ReadonlyArray<SpecialBlockQuad>
-  readonly fluids: ReadonlyArray<FluidQuad>
+  const result = meshChunk(view, neighbours, config)
+  if (Result.isFailure(result)) {
+    return result
+  }
+  consumeLayers(result.success)
+  return Result.succeed(undefined)
 }
 ```
 
-通常の cube 面は同一スライス・方向・block ID・AO の面をグリーディにまとめる。
-`meshChunkNaive` はマージのオラクル、`meshChunkRegion` は dirty region と halo を受け取る局所更新 API である。
-`totalQuadCount` は cube quad 数、`totalQuadArea` はマージ前の面積を数える。
+`blockCount`, `blockCountOf`, and `emptyChunk` return Effect 4 `Result` values because the requested height can be invalid. Check the result before reading `success`. Chunk coordinates are kernel `ChunkCoord` values; this package does not define another coordinate brand.
 
-## 2. 三値の不透明度モデル (`domain/opacity.ts`)
+`ChunkView.blocks` is indexed in X, Z, Y order:
 
-```typescript
+```ts
+blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE
+```
+
+`getBlock` and `getBlockAcrossBoundary` return kernel `BlockId` values. An out-of-range chunk-local read returns `AIR`. Values read from `Uint16Array` already fit the kernel's numeric `BlockId` range; the hot read path does not allocate a `Result` or revalidate every cell. Callers must validate raw numeric IDs before narrowing them into typed-array storage.
+
+Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` contains `levels`, `sources`, and `falling` arrays. Light fields use kernel `LightLevel`; propagation and grid construction remain the caller's responsibility.
+
+## Mesh configuration and block IDs
+
+```ts
+import type { BlockId } from '@nerima-games/mc-kernel'
+
+export type MeshConfig = {
+  readonly waterBlockIds: ReadonlySet<BlockId>
+  readonly transparentSolidBlockIds: ReadonlySet<BlockId>
+  readonly crossPlantBlockIds: ReadonlySet<BlockId>
+  readonly fluidMaxLevels: ReadonlyMap<BlockId, number>
+}
+
+export const EMPTY_MESH_CONFIG: MeshConfig
+export const MINECRAFT_MESH_CONFIG: Result.Result<MeshConfig, MeshConfigFailure>
+export const MAX_BLOCK_ID: number // re-export of kernel BLOCK_ID_MAX
+
+export const layerOfBlockId: (config: MeshConfig, blockId: BlockId) => MeshLayer
+export const buildLayerLookup: (config: MeshConfig) => Result.Result<Uint8Array, LayerLookupFailure>
+export const buildFluidLookup: (config: MeshConfig) => Result.Result<Uint16Array, FluidLookupFailure>
+export const buildCrossPlantLookup: (config: MeshConfig) => Result.Result<Uint8Array, CrossPlantLookupFailure>
+```
+
+Configuration collections use native `Set` and `Map` with kernel `BlockId` keys. The collections are caller-owned and must not be mutated after their first use by a mesher. Create new collections and a new `MeshConfig` when changing block classification; lookup tables are cached by `MeshConfig` object identity.
+
+Use the kernel's validating `BlockId.result(value)` or `BlockId.option(value)` API at an untrusted numeric boundary. Calling the brand constructor directly is the throwing form. Fluid maximum levels must be integers from `0` through `255`; invalid IDs or levels are reported through `Result` failures.
+
+`waterBlockIds` and `transparentSolidBlockIds` classify cube faces into the three mesh layers. `crossPlantBlockIds` selects a dedicated cross-plant shape, while `fluidMaxLevels` supplies the level ceiling for configured fluid blocks.
+
+## Faces and mesh layers
+
+```ts
 export type MeshLayer = 'opaque' | 'water' | 'transparentSolid'
 export const MESH_LAYER_PRIORITY: ReadonlyArray<MeshLayer> // transparentSolid, water, opaque
 export const MESH_LAYERS: ReadonlyArray<MeshLayer> // opaque, water, transparentSolid
 
-export type MeshConfig = {
-  readonly waterBlockIds: ReadonlySet<number>
-  readonly transparentSolidBlockIds: ReadonlySet<number>
-  readonly crossPlantBlockIds: ReadonlySet<number>
-  readonly fluidMaxLevels: ReadonlyMap<number, number>
-}
-export const EMPTY_MESH_CONFIG: MeshConfig
-export const MINECRAFT_MESH_CONFIG: MeshConfig
-export const MAX_BLOCK_ID = 65535 // re-exported from @nerima-games/mc-kernel's BLOCK_ID_MAX
-
-export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer
-export const buildLayerLookup = (config: MeshConfig): Uint8Array
-export const occludes = (lookup: Uint8Array, blockId: number): boolean
-export const buildFluidLookup = (config: MeshConfig): Uint16Array
-export const isFluidBlock = (lookup: Uint16Array, blockId: number): boolean
-```
-
-`waterBlockIds` と `transparentSolidBlockIds` は native `Set` であり、`MESH_LAYER_PRIORITY` は両方に
-含まれる ID の分類順を値として固定する。`crossPlantBlockIds` は材質層ではなく形状を選び、
-`fluidMaxLevels` は流体セルの高さを決めるための注入値である。
-流体ブロック ID は整数 `0..MAX_BLOCK_ID`、最大レベルは整数 `0..255` でなければならない。
-`buildFluidLookup` は最大レベル `255` を保持できる `Uint16Array` を構築し、範囲外の値には
-`RangeError` を送出する。
-これらの `Set` / `Map` は `meshChunk` の初回利用後に変更しないこと。分類を変更する場合は、
-新しいコレクションと `MeshConfig` を作る。内部 lookup table はコレクションの identity で
-メモ化される。
-
-## 3. 面 (`domain/faces.ts`)
-
-```typescript
 export type FaceDirection = 'xPos' | 'xNeg' | 'yPos' | 'yNeg' | 'zPos' | 'zNeg'
 export type FaceRole = 'top' | 'bottom' | 'side'
 export type FacePlacementFor<Direction extends FaceDirection> =
@@ -96,13 +90,7 @@ export type FacePlacementFor<Direction extends FaceDirection> =
   : Direction extends 'yNeg' ? { readonly direction: 'yNeg'; readonly role: 'bottom' }
   : Direction extends 'zPos' ? { readonly direction: 'zPos'; readonly role: 'side' }
   : { readonly direction: 'zNeg'; readonly role: 'side' }
-export type FacePlacement =
-  | { readonly direction: 'xPos'; readonly role: 'side' }
-  | { readonly direction: 'xNeg'; readonly role: 'side' }
-  | { readonly direction: 'yPos'; readonly role: 'top' }
-  | { readonly direction: 'yNeg'; readonly role: 'bottom' }
-  | { readonly direction: 'zPos'; readonly role: 'side' }
-  | { readonly direction: 'zNeg'; readonly role: 'side' }
+export type FacePlacement = FacePlacementFor<FaceDirection>
 export type FaceFor<Direction extends FaceDirection> = FacePlacementFor<Direction> &
   (Direction extends 'xPos' ? { readonly nx: 1; readonly ny: 0; readonly nz: 0 }
   : Direction extends 'xNeg' ? { readonly nx: -1; readonly ny: 0; readonly nz: 0 }
@@ -122,105 +110,73 @@ export type OppositeDirectionFor<Direction extends FaceDirection> =
   : Direction extends 'yNeg' ? 'yPos'
   : Direction extends 'zPos' ? 'zNeg'
   : 'zPos'
-export const FACE_DIRECTIONS: ReadonlyArray<FaceDirection>
 export const FACES: ReadonlyArray<Face>
-export const VERTICES_PER_QUAD = 4
-export const INDICES_PER_QUAD = 6
-export function faceOf<Direction extends FaceDirection>(direction: Direction): FaceFor<Direction>
-export const facePlacementOf = <Direction extends FaceDirection>(direction: Direction): FacePlacementFor<Direction>
-export function oppositeDirection<Direction extends FaceDirection>(direction: Direction): OppositeDirectionFor<Direction>
-export function tangentAxes<Direction extends FaceDirection>(direction: Direction): TangentAxesFor<Direction>
+export const faceOf: <Direction extends FaceDirection>(direction: Direction) => FaceFor<Direction>
+export const oppositeDirection: <Direction extends FaceDirection>(direction: Direction) => OppositeDirectionFor<Direction>
+export const tangentAxes: <Direction extends FaceDirection>(direction: Direction) => TangentAxesFor<Direction>
 ```
 
-面の順序は `+X, -X, +Y, -Y, +Z, -Z` であり、頂点 winding と texture / normal の解釈に結び付くため公開値として固定する。
-`FaceFor<Direction>` は方向に対応する法線と `role` の相関を保持するため、`faceOf('yPos')` の戻り値は `ny: 1` と `role: 'top'` まで静的に確定する。
-同様に `TangentAxesFor<Direction>` は面の `width` / `height` 軸を、`OppositeDirectionFor<Direction>` は逆方向を、リテラル方向から静的に確定する。
+The canonical face order is `+X, -X, +Y, -Y, +Z, -Z`. Face direction, normal, and role are correlated in the literal types. This order and the winding of generated vertices are part of the geometry contract.
 
-## 4. チャンク (`domain/chunk-view.ts`)
+`MeshLayers` owns separate arrays for cube faces, cross plants, special blocks, and fluids:
 
-```typescript
-export const CHUNK_SIZE = 16
-export const CHUNK_HEIGHT = 256
-export const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
-export const AIR = 0
-export const blockCount = (height: number): number
-export const blockCountOf = (height: number): number
-
-export type ChunkCoord = import('@nerima-games/mc-kernel').ChunkCoord
-export type ChunkView = {
-  readonly coord: ChunkCoord
-  readonly height: number
-  readonly blocks: Readonly<Uint16Array>
-  readonly fluid?: FluidView
-  readonly railShapes?: RailShapeView
-  readonly light?: LightView
+```ts
+export type MeshLayers = {
+  readonly opaque: ReadonlyArray<Quad>
+  readonly water: ReadonlyArray<Quad>
+  readonly transparentSolid: ReadonlyArray<Quad>
+  readonly crossPlants: ReadonlyArray<CrossPlantQuad>
+  readonly specialBlocks: ReadonlyArray<SpecialBlockQuad>
+  readonly fluids: ReadonlyArray<FluidQuad>
 }
-export const blockIndex = (lx: number, y: number, lz: number, height?: number): number
-export const getBlock = (
-  chunk: Pick<ChunkView, 'blocks' | 'height'>,
-  lx: number,
-  y: number,
-  lz: number,
-): BlockId
-export const getBlockAcrossBoundary = (...): BlockId
-export const emptyChunk = (height?: number): ChunkView
 ```
 
-ストレージは X、Z、Y の順で、`blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE`。
-`ChunkView.coord` は kernel が公開する `ChunkCoord` をそのまま保持し、`ChunkView.height` は
-メッシング用に検証されたチャンクごとの垂直範囲である。座標・ブロック ID は kernel のブランド型を
-正本とし、このパッケージは別の座標型やブロック ID 型を宣言しない。
-`CHUNK_HEIGHT` はデフォルト値にすぎない。`blockCountOf` は互換 alias であり、`blockCount` と同じ検証を行う。
-`blockIndex` の高さは省略時に `CHUNK_HEIGHT` となる。`getBlock` は `ChunkView` の `blocks` と `height` を
-受け取り、範囲外を `AIR` として返す。隣接チャンクを含む読み出しは `getBlockAcrossBoundary` が担当する。
+The greedy mesher merges coplanar opaque cube faces that share direction, block ID, AO, and corner light. Transparent cube faces remain unit-sized. `meshChunkNaive` is the unmerged oracle; `meshChunkRegion` emits geometry owned by a dirty half-open region. Its halo is used only for visibility, AO, and fluid reads, and never owns output cells.
 
-`FluidView` は同じインデックス配置の `levels`、`sources`、`falling` を持つ復号済み状態である。
-`ChunkView.fluid` 自体は入力側に sidecar がない場合のため optional だが、存在する場合は 3 配列をすべて渡す。
-流体の伝播規則やバイト符号化はこのパッケージの責務ではない。
-`RailShapeView` は同じインデックス配置の vanilla rail state code である。`RAIL_SHAPES`、
-`railShapeCodeOf`、`railShapeOf` で 10 個の blockstate 名と compact code を対応付ける。
-sidecar が無いセルは `north_south` の形状としてメッシュ化されるが、出力 quad の `railShape` は
-明示的な sidecar 値がある場合だけ持つ。
-`LightView` は同じインデックス配置の `blockLight` と `skyLight` を持ち、値は 0..15 の光量である。
-ライトグリッドの生成・伝播は呼び出し側の責務であり、メッシャーは注入されたグリッドを面の四隅へ
-サンプリングする。`light` が無い場合、メッシュは光量属性を出力しない。
-
-## 5. メッシング (`domain/mesh.ts`)
-
-```typescript
-export type Quad = {
-  readonly blockId: BlockId
-  readonly lx: number; readonly y: number; readonly lz: number
-  readonly width: number; readonly height: number
-  readonly ao: number
-  readonly light?: QuadLight
-} & FacePlacement
-
-export const meshChunk = (
+```ts
+export const meshChunk: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   scratch?: MeshScratch,
-): MeshLayers
-export const meshChunkNaive = (...): MeshLayers
-export const meshChunkRegion = (...): RegionMesh
+) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure>
+
+export const meshChunkNaive: (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  config: MeshConfig,
+) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure>
+
+export const meshChunkRegion: (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  config: MeshConfig,
+  dirtyRegion: MeshRegion,
+) => Result.Result<RegionMesh, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure>
+
+export class MeshScratch {
+  static create(): MeshScratch
+}
+export const createMeshScratch: () => MeshScratch
+
+export type MeshRegion = {
+  readonly min: readonly [lx: number, y: number, lz: number]
+  readonly max: readonly [lx: number, y: number, lz: number]
+}
+export type RegionMesh = {
+  readonly dirtyRegion: MeshRegion
+  readonly ownedRegion: MeshRegion
+  readonly layers: MeshLayers
+}
 ```
 
-`specialBlocks` は mc-kernel が宣言する cactus、slab、pressure plate、rail、lily pad の専用 geometry を
-`SpecialBlockQuad` として返す。`SpecialBlockQuad` は `Face` と同じ方向・法線・`role` の相関を持ち、
-`kind: 'rail'` のときだけ
-`railKind: 'normal' | 'powered'` を持ち、その他の形状には rail 固有データを含めない。registry の rail kind は保持するが、
-`ChunkView.railShapes` があれば `railShape` も保持する。rail の平面・曲線状態は vanilla の平面モデル、
-ascending 状態は vanilla の raised NE / SW model に対応する上下 2 面として生成される。
+All three entry points return `Result`. They report invalid lookup configuration, kernel registry failures, and meshing failures to the caller. `createMeshScratch()` creates a scratch instance that reuses mask and light work arrays across sequential calls; do not share one scratch instance between concurrent calls. Returned arrays and quads remain owned by each result and are not changed by later calls. `MeshRegion.min` is inclusive and `MeshRegion.max` is exclusive, in local X, Y, Z order.
 
-`fluids` は `fluidMaxLevels` に登録された流体について出力される。流体面は四隅の高さを保持するためセル単位で出力し、
-上面には renderer がテクスチャを流すための `FluidFlow` と AO を持たせる。通常の cube 面だけがグリーディマージ対象である。
+`totalQuadCount` counts cube quads and `totalQuadArea` counts their area before merging. Fluid and special-shape quads are separate.
 
-### 5.1 描画用 typed array packing (`domain/mesh-buffers.ts`)
+## Packed mesh buffers
 
-```typescript
-export const MESH_BUFFER_LAYERS: ReadonlyArray<MeshBufferLayer>
-
+```ts
 export type PackedMeshBuffers = {
   readonly positions: Float32Array
   readonly normals: Int8Array
@@ -232,67 +188,101 @@ export type PackedMeshBuffers = {
   readonly groups: ReadonlyArray<MeshBufferGroup>
 }
 
-export const packMeshLayers = (layers: MeshLayers): PackedMeshBuffers
+export const packMeshLayers: (layers: MeshLayers) => PackedMeshBuffers
 ```
 
-`packMeshLayers` は `MeshLayers` の cube、cross-plant、fluid、special-block quad を安定したレイヤー順で
-所有された typed array に変換する。頂点属性は位置 xyz (`Float32Array`)、法線 xyz (`Int8Array`)、block ID
-(`Uint16Array`)、AO、block light と sky light (`Uint8Array`)、index は `Uint32Array` で、各レイヤーの範囲は `groups` から取得する。
-結果は GPU に upload
-できるデータだが、WebGL / GPU device、texture、material の所有権は持たない。
+`packMeshLayers` converts cube, cross-plant, fluid, and special-block quads into owned typed arrays in a stable layer order. It produces uploadable geometry data but does not own a WebGL context, GPU device, texture, or material.
 
-## 6. Resource-pack JSON (`domain/resource-pack-*.ts`)
+## Resource-pack JSON
 
-`domain/resource-pack-schema.ts` は対応する JSON subset を `unknown` 値または JSON 文字列から検証し、
-`ResourcePackAssets` に変換する。zip / filesystem からの asset discovery や PNG loader は持たない。
-検証済みの `ResourcePackAssets` を渡すと、純粋な resolver と model mesher が blockstate から model quad までを解決する。
+`ResourcePackAssetsSchema` validates the supported JSON subset. The parsers accept unknown JSON-compatible values or a JSON string and return failures as data. They do not discover assets from a zip or filesystem and do not load PNG files.
 
-```typescript
+```ts
+import { Result, Schema, SchemaIssue } from 'effect'
+
 export type ResourcePackAssets = {
   readonly blockstates: Readonly<Record<string, BlockStateDefinition>>
   readonly models: Readonly<Record<string, BlockModel>>
 }
 
 export const ResourcePackAssetsSchema: Schema.Schema<ResourcePackAssets>
-export class ResourcePackParseError extends Error
-export const parseResourcePackAssets = (value: unknown): ResourcePackAssets
-export const parseResourcePackAssetsJson = (value: string): ResourcePackAssets
-export const normalizeResourceName = (name: string, kind: 'blockstate' | 'model'): string
-export const resolveBlockStateModels = (...): ReadonlyArray<ResolvedBlockStateModel>
-export const resolveBlockModel = (...): ResolvedBlockModel
-export const resolveModelTexture = (...): string
-export const meshBlockModel = (...): ReadonlyArray<ResourceModelQuad>
-export const meshBlockState = (...): ReadonlyArray<ResourceModelQuad>
+export type ResourcePackParseInput = 'object' | 'json'
+export type ResourcePackParseFailure = {
+  readonly _tag: 'ResourcePackParseFailure'
+  readonly input: ResourcePackParseInput
+  readonly issue: SchemaIssue.Issue
+  readonly message: string
+}
+
+export const parseResourcePackAssets: (
+  value: unknown,
+) => Result.Result<ResourcePackAssets, ResourcePackParseFailure>
+export const parseResourcePackAssetsJson: (
+  value: string,
+) => Result.Result<ResourcePackAssets, ResourcePackParseFailure>
 ```
 
-`BlockStateVariantList` は `readonly [BlockStateVariant, ...BlockStateVariant[]]` であり、
-variants の配列値と multipart の `apply` 配列は空にできない。`ResourcePackAssetsSchema` と
-パーサーもこの境界を検証する。モデルの `elements` や条件の配列とは異なり、variant 選択には必ず
-1 つ以上の候補が必要である。`BlockStateDefinition` は `variants` または `multipart` の排他的
-union で、両方を持つ定義やどちらも持たない定義は受け付けない。
-パーサー境界ではモデルの座標・UV・`tintindex` を有限数に限定し、variant の `weight` を有限かつ 0 より大きい値に限定する。
+Normalized asset names use separate brands. The JSON-facing fields and asset record keys remain plain strings; normalization validates and converts them at the resolver boundary.
 
-variants、multipart の `OR` / `AND` 条件、重み付き選択、親 model、texture variable、`ambientocclusion`、block / element rotation、UV、
-UV lock、`cullface`、`tintindex` を扱う。element rotation は旧来の `axis` / `angle` 形式と、Snapshot 25w46a の
-`x` / `y` / `z` 形式を受け付け、後者は X → Y → Z の順に任意の有限角度で適用する。両方がある場合は旧来の
-`axis` / `angle` を優先し、`rescale` も保持する。返り値は renderer 非依存の純粋な quad 記述子であり、各 quad に
-解決済みモデルの `ambientOcclusion` と、回転後ジオメトリから求めた正規化済み `normal` も保持する。element
-rotation は face 名や `cullface` の方向を変更せず、blockstate の回転はそれらの向きを変換する。PNG、texture atlas、
-material、tint / biome color、generic な state-dependent model と block-state sidecar の接続はこの層の外側にある。
-入力モデルの `faces` と `cullface` は Java Edition の面名（`down` / `up` / `north` / `south` / `west` / `east`）で表し、
-出力 quad の `direction` と `cullface` は §3 の内部 `FaceDirection` で表す。
+```ts
+import { Result } from 'effect'
+import type { Brand } from 'effect'
 
-## 7. 参照実装の各部が本リポジトリでどうなったか
+export type ResourceName = Brand.Branded<string, 'ResourceName'>
+export type ModelName = Brand.Branded<string, 'ModelName'>
+export type TextureName = Brand.Branded<string, 'TextureName'>
 
-| 項目 | 参照実装 | 扱い |
-| --- | --- | --- |
-| グリーディマージ本体 | `greedy-meshing-algorithms.ts` + `-accumulator.ts` + `-passes.ts` | **移植済み**: `domain/mesh.ts` |
-| アンビエントオクルージョン | `greedy-meshing-ao.ts` | **移植済み**: `domain/ambient-occlusion.ts` と `domain/light-sampling.ts`。注入済みライトの四隅サンプリングまで実装済み。グリッド生成・伝播は外部 |
-| 流体の高さ / 状態 | `greedy-meshing-fluids.ts` + `-fluid-state.ts` | **移植済み**: `domain/fluid-mesh.ts`。伝播とバイト符号化は `FluidView` 境界より上流の外部責務 |
-| 植生メッシュ | `plant-mesh.ts` | 十字板は `domain/plant-mesh.ts`、kernel 専用形状は `domain/special-mesh.ts` |
-| LOD 段の選択 | `lod-simplification.ts` | 段の選択は mc-render、簡約本体は `domain/lod.ts` |
-| subregion 差分メッシュ | `subregion-greedy.ts` + `-splice.ts` | `meshChunkRegion` として一部移植済み。差分 splice 最適化は保留 |
-| アキュムレータプール | `greedy-meshing-accumulator.ts` | 出力配列のプールは採用しない。`MeshScratch` は面マスク／ライト作業配列だけを再利用し、出力所有権を維持 |
-| worker プール / プロトコル | `packages/worker/.../meshing-worker*.ts` | mc-render の責務 |
-| マテリアル | `chunk-mesh-materials.ts` | mc-render の責務 |
-| `yLimit` | `greedy-meshing.ts:94-101` | `domain/mesh.ts` の `solidCeiling` として移植済み |
+export function normalizeResourceName(name: string, kind: 'blockstate'):
+  Result.Result<ResourceName, ResourcePackResolutionFailure>
+export function normalizeResourceName(name: string, kind: 'model'):
+  Result.Result<ModelName, ResourcePackResolutionFailure>
+
+export const resolveBlockStateModels: (
+  name: ResourceName,
+  properties: BlockStateProperties,
+  assets: ResourcePackAssets,
+  options?: BlockStateResolveOptions,
+) => Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure>
+
+export const resolveBlockModel: (
+  name: ModelName,
+  assets: ResourcePackAssets,
+) => Result.Result<ResolvedBlockModel, ResourcePackResolutionFailure>
+
+export const resolveModelTexture: (
+  model: ResolvedBlockModel,
+  reference: string,
+) => Result.Result<TextureName, ResourcePackResolutionFailure>
+
+export const meshBlockModel: (
+  name: ModelName,
+  assets: ResourcePackAssets,
+  transform?: ResourceModelTransform,
+) => Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure>
+
+export const meshBlockState: (
+  name: ResourceName,
+  properties: BlockStateProperties,
+  assets: ResourcePackAssets,
+  options?: BlockStateResolveOptions,
+) => Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure>
+```
+
+Resolved blockstate selections and model quads carry `ModelName`; resolved model quads carry `TextureName`. Texture references in raw model faces remain strings because values such as `#side` must be resolved through the model's texture map.
+
+The supported subset includes variants, multipart OR/AND conditions, weighted selection, parent models, texture variables, ambient occlusion, block and element rotation, UVs, UV lock, cull faces, and tint indices. Element rotation accepts the legacy `axis`/`angle` form and the multi-axis `x`/`y`/`z` form; multi-axis rotations are applied X, then Y, then Z. Geometry outputs are renderer-independent quads with resolved ambient occlusion and normalized normals. PNG decoding, texture atlases, materials, tint or biome colors, and generic state-dependent model wiring remain outside this package.
+
+Blockstate variants must contain at least one candidate. A definition contains either `variants` or `multipart`, not both or neither. The parser rejects non-finite geometry, UV, and tint values, and non-positive or non-finite variant weights.
+
+## Reference implementation mapping
+
+| Area | This package |
+| --- | --- |
+| Greedy merge | `domain/mesh.ts` |
+| Ambient occlusion and injected-light sampling | `domain/ambient-occlusion.ts`, `domain/light-sampling.ts` |
+| Fluid surface geometry | `domain/fluid-mesh.ts`; state propagation and byte encoding belong upstream |
+| Cross plants and kernel special shapes | `domain/plant-mesh.ts`, `domain/special-mesh.ts` |
+| LOD simplification | `domain/lod.ts`; distance selection belongs to mc-render |
+| Dirty-region greedy meshing | `meshChunkRegion`; region splice optimization is not included |
+| Scratch reuse | `MeshScratch` reuses mask and light work arrays; output arrays are not pooled |
+| Worker protocol and materials | mc-render |
