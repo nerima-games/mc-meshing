@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { chunkCoord } from '@nerima-games/mc-kernel'
+import { Result } from 'effect'
+import { ChunkAxis as chunkAxis, chunkCoord } from '@nerima-games/mc-kernel'
 import {
   CHUNK_SIZE,
   blockIndex,
   type ChunkView,
 } from '../src/domain/chunk-view'
-import { meshChunk } from '../src/domain/mesh'
+import { meshChunk as meshChunkResult } from '../src/domain/mesh'
 import { createMeshScratch, MeshScratch } from '../src/domain/mesh-scratch'
 import { EMPTY_MESH_CONFIG } from '../src/domain/opacity'
 
@@ -13,25 +14,35 @@ const sampleChunk = (light?: ChunkView['light']): ChunkView => {
   const height = 4
   const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
   blocks[blockIndex(1, 1, 1, height)] = 1
-  return light ? { blocks, coord: chunkCoord(0, 0), height, light } : { blocks, coord: chunkCoord(0, 0), height }
+  const coord = chunkCoord(chunkAxis(0), chunkAxis(0))
+  return light ? { blocks, coord, height, light } : { blocks, coord, height }
 }
+
+const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
+}
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>) => expectSuccess(meshChunkResult(...args))
 
 describe('mesh scratch workspace', () => {
   it('reuses each workspace and grows it when a larger request arrives', () => {
     const scratch = createMeshScratch()
     expect(scratch).toBeInstanceOf(MeshScratch)
 
-    const first = scratch.buffersFor(4, false)
-    const sameSize = scratch.buffersFor(4, false)
+    const first = expectSuccess(scratch.buffersFor(4, false))
+    const sameSize = expectSuccess(scratch.buffersFor(4, false))
     expect(sameSize.mask).toBe(first.mask)
     expect(sameSize.light).toBeUndefined()
 
-    const withLight = scratch.buffersFor(8, true)
+    const withLight = expectSuccess(scratch.buffersFor(8, true))
     expect(withLight.mask).not.toBe(first.mask)
     expect(withLight.light?.block).toHaveLength(8)
     expect(withLight.light?.sky).toHaveLength(8)
 
-    const sameLitSize = scratch.buffersFor(8, true)
+    const sameLitSize = expectSuccess(scratch.buffersFor(8, true))
     expect(sameLitSize.mask).toBe(withLight.mask)
     expect(sameLitSize.light?.block).toBe(withLight.light?.block)
     expect(sameLitSize.light?.sky).toBe(withLight.light?.sky)
@@ -40,8 +51,12 @@ describe('mesh scratch workspace', () => {
   it('rejects invalid buffer lengths', () => {
     const scratch = createMeshScratch()
 
-    expect(() => scratch.buffersFor(-1, false)).toThrow(RangeError)
-    expect(() => scratch.buffersFor(1.5, false)).toThrow(RangeError)
+    expect(scratch.buffersFor(-1, false)).toStrictEqual(
+      Result.fail({ _tag: 'InvalidMeshScratchLength', required: -1 }),
+    )
+    expect(scratch.buffersFor(1.5, false)).toStrictEqual(
+      Result.fail({ _tag: 'InvalidMeshScratchLength', required: 1.5 }),
+    )
   })
 
   it('keeps cold and reusable meshing equivalent without aliasing output', () => {

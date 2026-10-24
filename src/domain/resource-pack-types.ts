@@ -1,5 +1,15 @@
 /* oxlint-disable no-magic-numbers -- These numeric unions are part of Minecraft's JSON protocol. */
+import type { Brand } from 'effect'
 import type { FaceDirection } from './faces.js'
+
+/** Canonical blockstate asset names returned by the resource-name resolver. */
+export type ResourceName = Brand.Branded<string, 'ResourceName'>
+
+/** Canonical model names returned by the resource-name resolver. */
+export type ModelName = Brand.Branded<string, 'ModelName'>
+
+/** Canonical texture asset names returned by texture resolution. */
+export type TextureName = Brand.Branded<string, 'TextureName'>
 
 /** A block state property set read from a Java resource-pack state. */
 export type BlockStateProperties = Readonly<Record<string, string>>
@@ -94,7 +104,7 @@ export type ResourcePackAssets = {
 }
 
 export type ResolvedBlockStateModel = {
-  readonly model: string
+  readonly model: ModelName
   readonly x: ModelRotation
   readonly y: ModelRotation
   readonly z: ModelRotation
@@ -113,7 +123,7 @@ export type ResourceModelTransform = {
 }
 
 export type ResolvedBlockModel = {
-  readonly name: string
+  readonly name: ModelName
   readonly ambientOcclusion: boolean
   readonly textures: Readonly<Record<string, string>>
   readonly elements: ReadonlyArray<ModelElement>
@@ -123,13 +133,13 @@ export type ResourceModelVertex = readonly [number, number, number]
 export type ResourceModelUv = readonly [number, number]
 
 export type ResourceModelQuad = {
-  readonly model: string
+  readonly model: ModelName
   readonly ambientOcclusion: boolean
   readonly direction: FaceDirection
   readonly normal: ResourceModelVertex
   readonly vertices: readonly [ResourceModelVertex, ResourceModelVertex, ResourceModelVertex, ResourceModelVertex]
   readonly uv: readonly [ResourceModelUv, ResourceModelUv, ResourceModelUv, ResourceModelUv]
-  readonly texture: string
+  readonly texture: TextureName
   readonly shade: boolean
   readonly cullface?: FaceDirection
   readonly tintIndex?: number

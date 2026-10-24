@@ -8,8 +8,11 @@
  * the documented one.
  */
 import { describe, expect, it } from './effect-test.js'
-import { Effect } from 'effect'
+import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
+import { Effect, Result } from 'effect'
 import * as meshing from '../src/index'
+
+const blockId = (value: number): meshing.BlockId => Result.getOrThrow(KernelBlockId.result(value))
 
 describe('public API surface', () => {
   it.effect('exports the kernel branded id type for registry-derived values', () =>
@@ -106,7 +109,6 @@ describe('public API surface', () => {
         'resolveBlockModel',
         'resolveModelTexture',
         'ResourcePackAssetsSchema',
-        'ResourcePackParseError',
         'parseResourcePackAssets',
         'parseResourcePackAssetsJson',
         'meshBlockModel',
@@ -115,6 +117,18 @@ describe('public API surface', () => {
       const actual = new Set(Object.keys(meshing))
       for (const name of expected) {
         expect(actual.has(name)).toBe(true)
+      }
+    }),
+  )
+
+  it.effect('exposes structured parser failures through Result instead of an Error subclass', () =>
+    Effect.sync(() => {
+      const parsed = meshing.parseResourcePackAssetsJson('{')
+      expect(Result.isFailure(parsed)).toBe(true)
+      if (Result.isFailure(parsed)) {
+        const failure: meshing.ResourcePackParseFailure = parsed.failure
+        expect(failure).toMatchObject({ _tag: 'ResourcePackParseFailure', input: 'json' })
+        expect(failure.message.length).toBeGreaterThan(0)
       }
     }),
   )
@@ -172,17 +186,34 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
 
   it.effect('the layer lookup table covers every representable block id', () =>
     Effect.sync(() => {
+      const water = blockId(2)
+      const glass = blockId(3)
+      const maxBlockId = blockId(meshing.MAX_BLOCK_ID)
       const config = {
-        crossPlantBlockIds: new Set<number>(),
-        fluidMaxLevels: new Map<number, number>(),
-        transparentSolidBlockIds: new Set([3, 255]),
-        waterBlockIds: new Set([2]),
+        crossPlantBlockIds: new Set<meshing.BlockId>(),
+        fluidMaxLevels: new Map<meshing.BlockId, number>(),
+        transparentSolidBlockIds: new Set([glass]),
+        waterBlockIds: new Set([water]),
       }
-      const lookup = meshing.buildLayerLookup(config)
+      const lookup = Result.getOrThrow(meshing.buildLayerLookup(config))
       expect(lookup.length).toBe(meshing.MAX_BLOCK_ID + 1)
-      for (let blockId = 0; blockId <= meshing.MAX_BLOCK_ID; blockId += 1) {
-        expect(meshing.MESH_LAYERS[lookup[blockId] ?? -1]).toBe(meshing.layerOfBlockId(config, blockId))
+      expect(lookup[water]).toBe(meshing.MESH_LAYERS.indexOf(meshing.layerOfBlockId(config, water)))
+      expect(lookup[glass]).toBe(meshing.MESH_LAYERS.indexOf(meshing.layerOfBlockId(config, glass)))
+      expect(lookup[maxBlockId]).toBe(meshing.MESH_LAYERS.indexOf(meshing.layerOfBlockId(config, maxBlockId)))
+    }),
+  )
+
+  it.effect('rejects a runtime block id that violates the BlockId brand', () =>
+    Effect.sync(() => {
+      const invalidConfig = {
+        crossPlantBlockIds: new Set<meshing.BlockId>(),
+        fluidMaxLevels: new Map<meshing.BlockId, number>(),
+        transparentSolidBlockIds: new Set<meshing.BlockId>(),
+        waterBlockIds: new Set([-1]),
       }
+      // @ts-expect-error This exercises the JavaScript boundary behind a branded public type.
+      const lookup = meshing.buildLayerLookup(invalidConfig)
+      expect(Result.isFailure(lookup)).toBe(true)
     }),
   )
 
@@ -190,17 +221,21 @@ describe('the structural guarantees plan.md §5.2 makes non-negotiable', () => {
     Effect.sync(() => {
       // If water or glass occluded, the underside of a lake and the far pane of
       // A glass box would not render — the classic "world is inside out" bug.
+      const air = meshing.AIR
+      const stone = blockId(1)
+      const water = blockId(2)
+      const glass = blockId(3)
       const config = {
-        crossPlantBlockIds: new Set<number>(),
-        fluidMaxLevels: new Map<number, number>(),
-        transparentSolidBlockIds: new Set([3]),
-        waterBlockIds: new Set([2]),
+        crossPlantBlockIds: new Set<meshing.BlockId>(),
+        fluidMaxLevels: new Map<meshing.BlockId, number>(),
+        transparentSolidBlockIds: new Set([glass]),
+        waterBlockIds: new Set([water]),
       }
-      const lookup = meshing.buildLayerLookup(config)
-      expect(meshing.occludes(lookup, meshing.AIR)).toBe(false)
-      expect(meshing.occludes(lookup, 1)).toBe(true)
-      expect(meshing.occludes(lookup, 2)).toBe(false)
-      expect(meshing.occludes(lookup, 3)).toBe(false)
+      const lookup = Result.getOrThrow(meshing.buildLayerLookup(config))
+      expect(meshing.occludes(lookup, air)).toBe(false)
+      expect(meshing.occludes(lookup, stone)).toBe(true)
+      expect(meshing.occludes(lookup, water)).toBe(false)
+      expect(meshing.occludes(lookup, glass)).toBe(false)
     }),
   )
 })

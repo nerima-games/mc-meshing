@@ -81,7 +81,8 @@ export type LodLevel = (typeof LOD_LEVELS)[number]
  * Derived from `LOD_LEVELS` by spread rather than re-spelling `0, 1, 2`, so a
  * fourth level cannot be added to one and not the other.
  */
-export const LodLevelSchema: Schema.Schema<LodLevel> = Schema.Literal(...LOD_LEVELS)
+// oxlint-disable-next-line new-cap -- Effect Schema exposes capitalized factory functions, not constructors.
+export const LodLevelSchema: Schema.Schema<LodLevel> = Schema.Literals(LOD_LEVELS)
 
 /**
  * Blocks per LOD grid cell. The reference's `STEP_FOR_LOD`, unchanged.

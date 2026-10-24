@@ -1,13 +1,24 @@
 import { describe, expect, it } from './effect-test.js'
-import { Effect } from 'effect'
-import { chunkCoord } from '@nerima-games/mc-kernel'
-import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
-import { type MeshLayers, type MeshRegion, meshChunkNaive, meshChunkRegion } from '../src/domain/mesh'
+import { Effect, Option, Result } from 'effect'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, type ChunkView, blockIndex, emptyChunk as emptyChunkResult } from '../src/domain/chunk-view'
+import { type MeshLayers, type MeshRegion, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 
-const STONE = 1
-const WATER = 2
-const FLOWER = 3
+const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
+}
+
+const meshChunkNaive = (...args: Parameters<typeof meshChunkNaiveResult>) => expectSuccess(meshChunkNaiveResult(...args))
+const meshChunkRegion = (...args: Parameters<typeof meshChunkRegionResult>) => expectSuccess(meshChunkRegionResult(...args))
+const emptyChunk = (height?: number): ChunkView => expectSuccess(emptyChunkResult(height))
+
+const STONE = Option.getOrThrow(blockIdOf('stone'))
+const WATER = Option.getOrThrow(blockIdOf('water'))
+const FLOWER = Option.getOrThrow(blockIdOf('dandelion'))
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set([FLOWER]),
   fluidMaxLevels: new Map([[WATER, 8]]),
@@ -21,12 +32,12 @@ const chunkWith = (
 ): ChunkView => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, id] of cells) {blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = id}
-  if (fluidCells.length === 0) {return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }}
+  if (fluidCells.length === 0) {return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }}
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const [x, y, z, level] of fluidCells) {levels[blockIndex(x, y, z, CHUNK_HEIGHT)] = level}
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 const inRegion = (region: MeshRegion, x: number, y: number, z: number): boolean =>
@@ -58,26 +69,26 @@ const project = (layers: MeshLayers, region: MeshRegion): MeshLayers => ({
 })
 
 describe('subregion meshing', () => {
-  it.effect('expands a dirty AABB by one cell and matches the corresponding naive cells', () =>
+  it.effect('meshes only the dirty cell and matches its naive projection', () =>
     Effect.sync(() => {
       const chunk = chunkWith([
         [7, 20, 8, STONE], [8, 20, 8, STONE], [9, 20, 8, STONE],
         [8, 21, 8, FLOWER], [8, 19, 8, WATER], [12, 20, 8, STONE],
       ])
       const result = meshChunkRegion(chunk, {}, CONFIG, { max: [9, 21, 9], min: [8, 20, 8] })
-      expect(result.ownedRegion).toStrictEqual({ max: [10, 22, 10], min: [7, 19, 7] })
-      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, {}, CONFIG), result.ownedRegion))
+      expect(result.ownedRegion).toStrictEqual(result.dirtyRegion)
+      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, {}, CONFIG), result.dirtyRegion))
       expect(meshChunkRegion(chunk, {}, CONFIG, result.dirtyRegion)).toStrictEqual(result)
     }),
   )
 
-  it.effect('clamps the halo at a chunk boundary while consulting the neighbour for faces and AO', () =>
+  it.effect('uses the neighbour for visibility and AO without emitting its halo cells', () =>
     Effect.sync(() => {
       const chunk = chunkWith([[15, 40, 8, STONE]])
       const xPos = chunkWith([[0, 40, 8, STONE], [0, 41, 8, STONE]])
       const result = meshChunkRegion(chunk, { xPos }, CONFIG, { max: [16, 41, 9], min: [15, 40, 8] })
-      expect(result.ownedRegion).toStrictEqual({ max: [16, 42, 10], min: [14, 39, 7] })
-      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, { xPos }, CONFIG), result.ownedRegion))
+      expect(result.ownedRegion).toStrictEqual(result.dirtyRegion)
+      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, { xPos }, CONFIG), result.dirtyRegion))
       expect(result.layers.opaque.some((quad) => quad.direction === 'xPos')).toBe(false)
     }),
   )
@@ -95,7 +106,7 @@ describe('subregion meshing', () => {
         ],
       )
       const result = meshChunkRegion(chunk, {}, CONFIG, { max: [9, 65, 9], min: [8, 64, 8] })
-      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, {}, CONFIG), result.ownedRegion))
+      expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, {}, CONFIG), result.dirtyRegion))
       expect(result.layers.fluids.find((quad) => quad.direction === 'yPos')?.flow?.direction).toStrictEqual([1, 0])
     }),
   )

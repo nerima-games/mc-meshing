@@ -11,8 +11,9 @@
  *   meshing-ao-crosses-a-loaded-boundary
  */
 import { describe, expect, it } from './effect-test.js'
-import { Effect, FastCheck } from 'effect'
-import { chunkCoord } from '@nerima-games/mc-kernel'
+import { Effect, Option, Result } from 'effect'
+import * as FastCheck from 'fast-check'
+import { BlockId as KernelBlockId, ChunkAxis, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
 import { AO_LEVELS, AO_MAX, AO_NONE, ambientOcclusionAt } from '../src/domain/ambient-occlusion'
 import {
   BLOCKS_PER_CHUNK,
@@ -24,29 +25,60 @@ import {
 } from '../src/domain/chunk-view'
 import { FACE_DIRECTIONS, type FaceDirection } from '../src/domain/faces'
 
-const STONE = 1
-const WATER = 2
-const GLASS = 3
+const makeBlockId = (value: number): BlockId => Result.getOrThrow(KernelBlockId.result(value))
+const STONE = makeBlockId(1)
+const WATER = makeBlockId(2)
+const GLASS = makeBlockId(3)
+const UNKNOWN_BLOCK_ID = makeBlockId(255)
+const ORIGIN_AXIS = Result.getOrThrow(ChunkAxis.result(0))
 
 /** Well clear of every chunk face, so no test below is measuring a boundary by accident. */
 const CENTRE = [8, 64, 8] as const
 
 type Cell = readonly [number, number, number]
 
-const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
+const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, BlockId]>): ChunkView => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks }
 }
 
-const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, number] => [
+const shifted = (cell: Cell, offset: Cell): readonly [number, number, number, BlockId] => [
   cell[0] + offset[0],
   cell[1] + offset[1],
   cell[2] + offset[2],
   STONE,
 ]
+
+
+const boundedInteger = (minimum: number, maximum: number) => FastCheck.integer({ min: minimum, max: maximum })
+
+const arbitraryDirection = FastCheck.integer({ min: 0, max: FACE_DIRECTIONS.length - 1 }).map((index) =>
+  Option.getOrThrow(Option.fromNullishOr(FACE_DIRECTIONS[index])),
+)
+
+const occluderBlockIds: ReadonlyArray<BlockId> = [STONE, WATER, GLASS]
+
+const arbitraryOccluderBlockId = FastCheck.integer({ min: 0, max: occluderBlockIds.length - 1 }).map((index) =>
+  Option.getOrThrow(Option.fromNullishOr(occluderBlockIds[index])),
+)
+
+const arbitraryOccluderCell = FastCheck.tuple(
+  boundedInteger(6, 10),
+  boundedInteger(62, 66),
+  boundedInteger(6, 10),
+  arbitraryOccluderBlockId,
+)
+
+const arbitraryOccluderCells = FastCheck.array(arbitraryOccluderCell, { maxLength: 12, minLength: 0 })
+
+const arbitraryAddedPosition = FastCheck.tuple(
+  boundedInteger(6, 10),
+  boundedInteger(62, 66),
+  boundedInteger(6, 10),
+)
 
 /**
  * THE TABLE THIS FILE EXISTS FOR: the four offsets, from the emitting cell, of
@@ -313,43 +345,34 @@ describe('the clamp', () => {
     }),
   )
 
-  it.effect('is always in range and never decreases when a block is added', () =>
-    Effect.sync(() => {
-      // Monotonicity is the shape of the rule rather than any particular value:
-      // Occlusion counts non-air cells, so filling an air cell can only add to
-      // The count, never remove from it. An implementation that subtracted
-      // Somewhere, or that read the emitting block's own id into the count,
-      // Breaks this without breaking any fixed fixture.
-      FastCheck.assert(
-        FastCheck.property(
-          FastCheck.constantFrom(...FACE_DIRECTIONS),
-          FastCheck.array(
-            FastCheck.tuple(
-              FastCheck.integer({ max: 10, min: 6 }),
-              FastCheck.integer({ max: 66, min: 62 }),
-              FastCheck.integer({ max: 10, min: 6 }),
-              FastCheck.constantFrom(STONE, WATER, GLASS),
-            ),
-            { maxLength: 12, minLength: 0 },
+  it.effect(
+    'is always in range and never decreases when a block is added',
+    () =>
+      Effect.sync(() =>
+        FastCheck.assert(
+          FastCheck.property(
+            FastCheck.record({
+              addedPosition: arbitraryAddedPosition,
+              cells: arbitraryOccluderCells,
+              direction: arbitraryDirection,
+            }),
+            ({ addedPosition: [addX, addY, addZ], cells, direction }) => {
+              const before = chunkWith([[...CENTRE, STONE], ...cells])
+              const after = chunkWith([[...CENTRE, STONE], ...cells, [addX, addY, addZ, STONE]])
+              const beforeAo = ambientOcclusionAt(before, {}, direction, ...CENTRE)
+              const afterAo = ambientOcclusionAt(after, {}, direction, ...CENTRE)
+              return (
+                beforeAo >= AO_NONE &&
+                beforeAo <= AO_MAX &&
+                afterAo >= AO_NONE &&
+                afterAo <= AO_MAX &&
+                afterAo >= beforeAo
+              )
+            },
           ),
-          FastCheck.tuple(
-            FastCheck.integer({ max: 10, min: 6 }),
-            FastCheck.integer({ max: 66, min: 62 }),
-            FastCheck.integer({ max: 10, min: 6 }),
-          ),
-          (direction, cells, [addX, addY, addZ]) => {
-            const before = chunkWith([[...CENTRE, STONE], ...cells])
-            const after = chunkWith([[...CENTRE, STONE], ...cells, [addX, addY, addZ, STONE]])
-            const beforeAo = ambientOcclusionAt(before, {}, direction, ...CENTRE)
-            const afterAo = ambientOcclusionAt(after, {}, direction, ...CENTRE)
-            return (
-              beforeAo >= AO_NONE && beforeAo <= AO_MAX && afterAo >= AO_NONE && afterAo <= AO_MAX && afterAo >= beforeAo
-            )
-          },
+          { numRuns: 200 },
         ),
-        { numRuns: 200 },
-      )
-    }),
+      ),
   )
 })
 
@@ -362,7 +385,7 @@ describe('what counts as an occluder', () => {
       // OCCLUDES a face. Nothing in this repository has measured whether that is
       // Right; this test pins the rule as ported so that changing it has to be a
       // Decision rather than a drift. See docs/design-notes.md M-10.
-      for (const blockId of [STONE, WATER, GLASS, 255]) {
+      for (const blockId of [STONE, WATER, GLASS, UNKNOWN_BLOCK_ID]) {
         const chunk = chunkWith([
           [...CENTRE, STONE],
           [CENTRE[0], CENTRE[1] + 1, CENTRE[2] + 1, blockId],
@@ -374,7 +397,7 @@ describe('what counts as an occluder', () => {
 
   it.effect('the emitting block is not its own occluder, whatever it is made of', () =>
     Effect.sync(() => {
-      for (const blockId of [STONE, WATER, GLASS, 255]) {
+      for (const blockId of [STONE, WATER, GLASS, UNKNOWN_BLOCK_ID]) {
         const chunk = chunkWith([[...CENTRE, blockId]])
         for (const direction of FACE_DIRECTIONS) {
           expect(ambientOcclusionAt(chunk, {}, direction, ...CENTRE)).toBe(AO_NONE)
@@ -476,7 +499,7 @@ describe('chunk boundaries', () => {
       // Could reorder the exposure check and the AO computation.
       const chunk = chunkWith([[9, 64, 8, STONE]])
       expect(ambientOcclusionAt(chunk, {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
-      expect(ambientOcclusionAt(emptyChunk(), {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
+      expect(ambientOcclusionAt(Result.getOrThrow(emptyChunk()), {}, 'yPos', ...CENTRE)).toBe(AO_NONE)
     }),
   )
 })

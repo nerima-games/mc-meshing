@@ -6,8 +6,9 @@
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
+import { Result } from 'effect'
 import { AIR, type BlockId, blockIdAt } from './block-data.js'
-import { CHUNK_SIZE_XZ, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
+import { CHUNK_SIZE_XZ, ChunkAxis as chunkAxis, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
 import type { LightView } from './light-types.js'
 import type { RailShapeView } from './rail-types.js'
 
@@ -19,7 +20,7 @@ export const CHUNK_SIZE: number = CHUNK_SIZE_XZ
 /** Canonical vertical extent used by the fixtures and the default chunk. */
 export const CHUNK_HEIGHT = 256
 const MIN_CHUNK_HEIGHT = 1
-const ORIGIN_CHUNK_AXIS = 0
+const ORIGIN_CHUNK_AXIS = chunkAxis(0)
 
 /**
  * Number of block cells in a chunk with the supplied vertical extent.
@@ -28,14 +29,19 @@ const ORIGIN_CHUNK_AXIS = 0
  * Keeping this check at the meshing boundary prevents a malformed view from
  * producing an incorrectly sized typed array or an out-of-range index.
  */
-export const blockCount = (height: number): number => {
-  if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
-    throw new RangeError(`Chunk height must be an integer from 1 to ${MAX_CHUNK_HEIGHT}, received ${height}`)
-  }
-  return CHUNK_SIZE * height * CHUNK_SIZE
+export type ChunkHeightFailure = {
+  readonly _tag: 'InvalidChunkHeight'
+  readonly height: number
 }
 
-export const blockCountOf: (height: number) => number = blockCount
+export const blockCount = (height: number): Result.Result<number, ChunkHeightFailure> => {
+  if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
+    return Result.fail({ _tag: 'InvalidChunkHeight', height })
+  }
+  return Result.succeed(CHUNK_SIZE * height * CHUNK_SIZE)
+}
+
+export const blockCountOf: (height: number) => Result.Result<number, ChunkHeightFailure> = blockCount
 
 /**
  * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.
@@ -130,14 +136,15 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   readonly light?: LightView
 }
 
-export const BLOCKS_PER_CHUNK: number = blockCountOf(CHUNK_HEIGHT)
+export const BLOCKS_PER_CHUNK: number = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
-export const emptyChunk = (height: number = CHUNK_HEIGHT): ChunkView => ({
-  blocks: new Uint16Array(blockCountOf(height)),
-  coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
-  height,
-})
+export const emptyChunk = (height: number = CHUNK_HEIGHT): Result.Result<ChunkView, ChunkHeightFailure> =>
+  Result.map(blockCountOf(height), (count) => ({
+    blocks: new Uint16Array(count),
+    coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
+    height,
+  }))
 
 /** First valid index along any chunk-local axis (`lx`, `y`, or `lz`). */
 const FIRST_LOCAL_INDEX = 0

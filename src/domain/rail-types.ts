@@ -1,3 +1,5 @@
+import { Option, Result } from 'effect'
+
 /** The ten blockstate values used by Minecraft's vanilla rail block. */
 export const RAIL_SHAPES = [
   'north_south',
@@ -34,26 +36,31 @@ const RAIL_SHAPE_CODES: Readonly<Record<RailShape, number>> = {
 
 /** Converts a named rail state into the compact value stored in `RailShapeView`. */
 export const railShapeCodeOf = (shape: RailShape): number => RAIL_SHAPE_CODES[shape]
+export type RailShapeFailure = {
+  readonly _tag: 'InvalidRailShapeCode'
+  readonly code: number
+}
+
 
 /** Converts a compact rail state into its blockstate name. */
-export const railShapeOf = (code: number): RailShape => {
-  // Indexing an array with a non-integer, negative, or too-large numeric key
-  // yields `undefined` in JS, so this one check covers every invalid `code`
-  // (non-integer, negative, or `>= RAIL_SHAPE_COUNT`) without re-testing each
-  // case separately, and it is the same check `typeof shape === 'undefined'`
-  // narrowing needs anyway.
+export const railShapeOf = (code: number): Result.Result<RailShape, RailShapeFailure> => {
   const shape = RAIL_SHAPES[code]
-  if (typeof shape === 'undefined') {
-    throw new RangeError(`Invalid rail shape code: ${code}`)
-  }
-  return shape
+  return typeof shape === 'undefined'
+    ? Result.fail({ _tag: 'InvalidRailShapeCode', code })
+    : Result.succeed(shape)
 }
 
 /** Reads one optional state value, treating an absent sidecar cell as unknown. */
-export const railShapeAt = (view: RailShapeView | undefined, index: number): RailShape | undefined => {
-  const code = view?.[index]
-  if (typeof code !== 'number') {
-    return
+export const railShapeAt = (
+  view: Option.Option<RailShapeView>,
+  index: number,
+): Result.Result<Option.Option<RailShape>, RailShapeFailure> => {
+  if (Option.isNone(view)) {
+    return Result.succeed(Option.none())
   }
-  return railShapeOf(code)
+  const code = view.value[index]
+  if (typeof code === 'undefined') {
+    return Result.succeed(Option.none())
+  }
+  return Result.map(railShapeOf(code), Option.some)
 }

@@ -113,6 +113,7 @@
  * inherit that invalidation hazard.
  * See docs/design-notes.md, regression `meshing-result-is-owned-not-aliased`.
  */
+import { Result } from 'effect'
 import {
   CHUNK_SIZE,
   type ChunkNeighbours,
@@ -126,10 +127,17 @@ import {
   STEP,
   isFaceExposed,
   layerAt,
+  layerLookupFromTable,
+  type LayerLookup,
+  type LayerLookupTableFailure,
   solidCeiling,
 } from './mesh-support.js'
 import { FACES, type Face, type FacePlacement, facePlacementOf } from './faces.js'
-import { type MeshConfig, buildLayerLookup } from './opacity.js'
+import {
+  type LayerLookupFailure,
+  type MeshConfig,
+  buildLayerLookup,
+} from './opacity.js'
 import {
   type MeshLayers,
   type MeshRegion,
@@ -138,56 +146,58 @@ import {
 } from './mesh-types.js'
 import {
   buildCrossPlantLookup,
+  type CrossPlantLookupFailure,
   isCrossPlant,
   meshCrossPlants,
 } from './plant-mesh.js'
 import {
   buildFluidLookup,
+  type FluidLookupFailure,
   isFluidBlock,
   meshFluidSurfaces,
 } from './fluid-mesh.js'
 import {
+  SPECIAL_BLOCK_LOOKUP,
   isSpecialBlock,
   meshSpecialBlocks,
+  type SpecialBlockLookup,
+  type SpecialMeshFailure,
 } from './special-mesh.js'
 import { AIR } from './block-data.js'
 import type { CrossPlantQuad } from './plant-types.js'
 import type { FluidQuad } from './fluid-types.js'
-import type { MeshScratch } from './mesh-scratch.js'
+import type { MeshScratch, MeshScratchFailure } from './mesh-scratch.js'
 import type { SpecialBlockQuad } from './special-types.js'
 import { ambientOcclusionAt } from './ambient-occlusion.js'
-import { meshAllFaces } from './mesh-greedy.js'
+import { meshAllFaces, type GreedyMaskFailure } from './mesh-greedy.js'
 import { quadLightAt } from './light-sampling.js'
 export type { MeshLayers, MeshRegion, Quad, RegionMesh } from './mesh-types.js'
 export { totalQuadArea, totalQuadCount } from './mesh-types.js'
 
-// MeshConfig collections are caller-owned and treated as immutable.
-// The layer table cache uses both collection identities.
-const LAYER_LOOKUP_CACHE = new WeakMap<object, WeakMap<object, Uint8Array>>()
+// Config objects and their collections are immutable after first use. A new
+// config object always gets its own validation and lookup build.
+type LayerLookupFailureWithTable = LayerLookupFailure | LayerLookupTableFailure
 
-const layerLookupForMesh = (config: MeshConfig): Uint8Array => {
-  let byWater = LAYER_LOOKUP_CACHE.get(config.waterBlockIds)
-  if (!byWater) {
-    byWater = new WeakMap<object, Uint8Array>()
-    LAYER_LOOKUP_CACHE.set(config.waterBlockIds, byWater)
-  }
-  const cached = byWater.get(config.transparentSolidBlockIds)
-  if (cached) {
+const LAYER_LOOKUP_CACHE = new WeakMap<MeshConfig, Result.Result<LayerLookup, LayerLookupFailureWithTable>>()
+
+const layerLookupForMesh = (config: MeshConfig): Result.Result<LayerLookup, LayerLookupFailureWithTable> => {
+  const cached = LAYER_LOOKUP_CACHE.get(config)
+  if (typeof cached !== 'undefined') {
     return cached
   }
-  const lookup = buildLayerLookup(config)
-  byWater.set(config.transparentSolidBlockIds, lookup)
+  const lookup = Result.flatMap(buildLayerLookup(config), layerLookupFromTable)
+  LAYER_LOOKUP_CACHE.set(config, lookup)
   return lookup
 }
 
 // Shape tables are derived from caller-owned collection identities.
 // The mesh code only reads these private tables, so empty configured collections are cheap.
-const CROSS_PLANT_LOOKUP_CACHE = new WeakMap<object, Uint8Array>()
+const CROSS_PLANT_LOOKUP_CACHE = new WeakMap<object, Result.Result<Uint8Array, CrossPlantLookupFailure>>()
 
-const crossPlantLookupForMesh = (config: MeshConfig): Uint8Array => {
+const crossPlantLookupForMesh = (config: MeshConfig): Result.Result<Uint8Array, CrossPlantLookupFailure> => {
   const blockIds = config.crossPlantBlockIds
   const cached = CROSS_PLANT_LOOKUP_CACHE.get(blockIds)
-  if (cached) {
+  if (typeof cached !== 'undefined') {
     return cached
   }
   const lookup = buildCrossPlantLookup(config)
@@ -195,12 +205,12 @@ const crossPlantLookupForMesh = (config: MeshConfig): Uint8Array => {
   return lookup
 }
 
-const FLUID_LOOKUP_CACHE = new WeakMap<object, Uint16Array>()
+const FLUID_LOOKUP_CACHE = new WeakMap<object, Result.Result<Uint16Array, FluidLookupFailure>>()
 
-const fluidLookupForMesh = (config: MeshConfig): Uint16Array => {
+const fluidLookupForMesh = (config: MeshConfig): Result.Result<Uint16Array, FluidLookupFailure> => {
   const maxLevels = config.fluidMaxLevels
   const cached = FLUID_LOOKUP_CACHE.get(maxLevels)
-  if (cached) {
+  if (typeof cached !== 'undefined') {
     return cached
   }
   const lookup = buildFluidLookup(config)
@@ -209,23 +219,24 @@ const fluidLookupForMesh = (config: MeshConfig): Uint16Array => {
 }
 
 /**
- * Route to one of exactly three per-layer buckets by `layerAt`'s index.
- * Exported so the defensive branch (an index `layerAt` should never
- * return, since `buildLayerLookup` only ever writes `MESH_LAYERS.indexOf(...)`
- * and `buckets` has exactly `MESH_LAYERS.length` entries in the same order)
- * has a direct test instead of an untestable one buried inside `makeSink`.
+ * Resolve a bucket for a layer index supplied outside the validated mesh loop.
  */
-export const bucketFor = <Bucket,>(buckets: readonly [Bucket, Bucket, Bucket], index: number): Bucket => {
+export type BucketFailure = { readonly _tag: 'InvalidMeshLayerIndex'; readonly index: number }
+
+export const bucketFor = <Bucket,>(
+  buckets: readonly [Bucket, Bucket, Bucket],
+  index: number,
+): Result.Result<Bucket, BucketFailure> => {
   const bucket = buckets[index]
   if (typeof bucket === 'undefined') {
-    throw new RangeError(`unreachable: layer index ${index} outside the three MESH_LAYERS buckets`)
+    return Result.fail({ _tag: 'InvalidMeshLayerIndex', index })
   }
-  return bucket
+  return Result.succeed(bucket)
 }
 
 /** The three per-layer sinks, and the routing rule, in one place. */
 const makeSink = (
-  lookup: Uint8Array,
+  lookup: LayerLookup,
   crossPlants: ReadonlyArray<CrossPlantQuad>,
   fluids: ReadonlyArray<FluidQuad>,
   specialBlocks: ReadonlyArray<SpecialBlockQuad>,
@@ -236,14 +247,21 @@ const makeSink = (
   const opaque: Array<Quad> = []
   const water: Array<Quad> = []
   const transparentSolid: Array<Quad> = []
-  const buckets: readonly [Array<Quad>, Array<Quad>, Array<Quad>] = [opaque, water, transparentSolid]
   return {
     layers: { crossPlants, fluids, opaque, specialBlocks, transparentSolid, water },
     // MESH_LAYERS is ['opaque', 'water', 'transparentSolid'] and the lookup
     // Stores an index into it, so the routing is the index — no re-spelling of
     // The priority order, which lives in `opacity.ts` and is tested there.
     push: (quad: Quad): void => {
-      bucketFor(buckets, layerAt(lookup, quad.blockId)).push(quad)
+      const layer = layerAt(lookup, quad.blockId)
+      if (layer === 0) {
+        opaque.push(quad)
+      } else if (layer === 1) {
+        water.push(quad)
+      } else {
+        // `layerLookupFromTable` checked every value against MESH_LAYERS once.
+        transparentSolid.push(quad)
+      }
     },
   }
 }
@@ -251,8 +269,9 @@ const makeSink = (
 type ChunkMeshContext = {
   readonly fluids: Uint16Array
   readonly layers: MeshLayers
-  readonly lookup: Uint8Array
+  readonly lookup: LayerLookup
   readonly plants: Uint8Array
+  readonly specialLookup: SpecialBlockLookup
   readonly push: (quad: Quad) => void
   readonly yLimit: number
 }
@@ -261,23 +280,29 @@ const chunkMeshContextOf = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
-): ChunkMeshContext => {
-  const lookup = layerLookupForMesh(config)
-  const plants = crossPlantLookupForMesh(config)
-  const fluids = fluidLookupForMesh(config)
-  const yLimit = solidCeiling(chunk.blocks, chunk.height)
-  // Plants and fluid surfaces are meshed BEFORE the sink is built, because the
-  // Sink owns the result object and both are part of it. Both are bounded by the
-  // Same `yLimit`: a plant and a fluid are non-air blocks, so neither can exist
-  // Above the highest one.
-  const { layers, push } = makeSink(
-    lookup,
-    meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit }),
-    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, yLimit),
-    meshSpecialBlocks(chunk, neighbours, yLimit),
+  specialLookup: SpecialBlockLookup,
+): Result.Result<
+  ChunkMeshContext,
+  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure
+> =>
+  Result.flatMap(layerLookupForMesh(config), (lookup) =>
+    Result.flatMap(fluidLookupForMesh(config), (fluids) => {
+      return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
+        const yLimit = solidCeiling(chunk.blocks, chunk.height)
+        return Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, yLimit), (specialBlocks) => {
+          // These companion layers are built before the sink so the returned
+          // result owns each list alongside the cube-face buckets.
+          const { layers, push } = makeSink(
+            lookup,
+            meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit }),
+            meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, yLimit),
+            specialBlocks,
+          )
+          return { fluids, layers, lookup, plants, specialLookup, push, yLimit }
+        })
+      })
+    }),
   )
-  return { fluids, layers, lookup, plants, push, yLimit }
-}
 
 const lightMasksOf = (
   chunk: ChunkView,
@@ -301,12 +326,14 @@ const meshBuffersOf = (
   chunk: ChunkView,
   length: number,
   scratch: MeshScratch | undefined,
-): MeshWorkBuffers => {
-  const buffers = scratch?.buffersFor(length, Boolean(chunk.light))
-  if (buffers) {
-    return { light: buffers.light, mask: buffers.mask }
+): Result.Result<MeshWorkBuffers, MeshScratchFailure> => {
+  if (scratch) {
+    return Result.map(scratch.buffersFor(length, Boolean(chunk.light)), (buffers) => ({
+      light: buffers.light,
+      mask: buffers.mask,
+    }))
   }
-  return { light: lightMasksOf(chunk, length), mask: new Uint32Array(length) }
+  return Result.succeed({ light: lightMasksOf(chunk, length), mask: new Uint32Array(length) })
 }
 
 /**
@@ -325,28 +352,34 @@ export const meshChunk = (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   scratch?: MeshScratch,
-): MeshLayers => {
-  const { fluids, layers, lookup, plants, push, yLimit } = chunkMeshContextOf(chunk, neighbours, config)
-  if (yLimit === EMPTY_CHUNK_CEILING) {
-    return layers
-  }
+): Result.Result<
+  MeshLayers,
+  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
+> =>
+  Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+    Result.flatMap(chunkMeshContextOf(chunk, neighbours, config, specialLookup), (context) => {
+      const { fluids, layers, lookup, plants, push, yLimit } = context
+      if (yLimit === EMPTY_CHUNK_CEILING) {
+        return Result.succeed(layers)
+      }
 
-  const required = CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE)
-  const { light, mask } = meshBuffersOf(chunk, required, scratch)
-  meshAllFaces({
-    chunk,
-    fluids,
-    light,
-    lookup,
-    mask,
-    neighbours,
-    plants,
-    push,
-    yLimit,
-  })
-
-  return layers
-}
+      const required = CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE)
+      return Result.flatMap(meshBuffersOf(chunk, required, scratch), ({ light, mask }) =>
+        Result.map(meshAllFaces({
+          chunk,
+          fluids,
+          light,
+          lookup,
+          mask,
+          neighbours,
+          plants,
+          specialLookup,
+          push,
+          yLimit,
+        }), () => layers),
+      )
+    }),
+  )
 
 /**
  * Everything the two UNMERGED meshers — `meshChunkNaive` (whole chunk) and
@@ -357,8 +390,9 @@ export const meshChunk = (
 type FaceScanContext = {
   readonly chunk: ChunkView
   readonly neighbours: ChunkNeighbours
-  readonly lookup: Uint8Array
+  readonly lookup: LayerLookup
   readonly plants: Uint8Array
+  readonly specialLookup: SpecialBlockLookup
   readonly fluids: Uint16Array
   readonly face: Face
   readonly placement: FacePlacement
@@ -384,7 +418,7 @@ const emitUnitFace = (ctx: FaceScanContext, lx: number, y: number, lz: number): 
     blockId !== AIR &&
     !isCrossPlant(ctx.plants, blockId) &&
     !isFluidBlock(ctx.fluids, blockId) &&
-    !isSpecialBlock(blockId)
+    !isSpecialBlock(ctx.specialLookup, blockId)
   ) {
     const neighbourId = getBlockAcrossBoundary(
       ctx.chunk,
@@ -393,7 +427,7 @@ const emitUnitFace = (ctx: FaceScanContext, lx: number, y: number, lz: number): 
       y + ctx.face.ny,
       lz + ctx.face.nz,
     )
-    if (isFaceExposed(ctx.lookup, ctx.plants, blockId, neighbourId)) {
+    if (isFaceExposed(ctx, blockId, neighbourId)) {
       const light = quadLightAt(
         ctx.chunk,
         ctx.neighbours,
@@ -457,36 +491,46 @@ export const meshChunkNaive = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
-): MeshLayers => {
-  const lookup = layerLookupForMesh(config)
-  const plants = crossPlantLookupForMesh(config)
-  const fluids = fluidLookupForMesh(config)
-  // The full chunk height, not `solidCeiling`: the oracle deliberately does no such
-  // Optimisation, so that `solidCeiling` itself is something the property tests
-  // Can catch being wrong. The plates and the fluid surfaces are identical
-  // Either way, which is exactly what makes that comparison worth making.
-  const { layers, push } = makeSink(
-    lookup,
-    meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
-    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, chunk.height),
-    meshSpecialBlocks(chunk, neighbours, chunk.height),
+): Result.Result<
+  MeshLayers,
+  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure
+> =>
+  Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+    Result.flatMap(layerLookupForMesh(config), (lookup) =>
+      Result.flatMap(fluidLookupForMesh(config), (fluids) => {
+        return Result.flatMap(crossPlantLookupForMesh(config), (plants) =>
+          // The full chunk height, not `solidCeiling`: the oracle deliberately does no such
+          // optimisation, so that `solidCeiling` itself is something the property tests
+          // can catch being wrong. The plates and the fluid surfaces are identical
+          // either way, which is exactly what makes that comparison worth making.
+          Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) => {
+            const { layers, push } = makeSink(
+              lookup,
+              meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
+              meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, chunk.height),
+              specialBlocks,
+            )
+
+            for (const face of FACES) {
+              scanChunkFace({
+                chunk,
+                face,
+                fluids,
+                lookup,
+                neighbours,
+                placement: facePlacementOf(face.direction),
+                plants,
+                specialLookup,
+                push,
+              })
+            }
+
+            return layers
+          }),
+        )
+      }),
+    ),
   )
-
-  for (const face of FACES) {
-    scanChunkFace({
-      chunk,
-      face,
-      fluids,
-      lookup,
-      neighbours,
-      placement: facePlacementOf(face.direction),
-      plants,
-      push,
-    })
-  }
-
-  return layers
-}
 
 const clampInteger = (value: number, lower: number, upper: number): number => {
   // Was `Number.isFinite(value) ? value : lower`. A non-finite input (NaN,
@@ -522,119 +566,72 @@ const isEmptyRegion = (region: MeshRegion): boolean => {
   return minLx >= maxLx || minY >= maxY || minLz >= maxLz
 }
 
-/** Cells on every side of the dirty region that face-exposure/AO/fluid-corner reads can still reach. */
-const HALO_CELLS = 1
-
-/** Expand `dirty` by `HALO_CELLS` on every axis, clamped to the chunk. */
-const haloRegion = (dirty: MeshRegion, height: number): MeshRegion => {
-  const [dirtyMinLx, dirtyMinY, dirtyMinLz] = dirty.min
-  const [dirtyMaxLx, dirtyMaxY, dirtyMaxLz] = dirty.max
-  return {
-    max: [
-      Math.min(CHUNK_SIZE, dirtyMaxLx + HALO_CELLS),
-      Math.min(height, dirtyMaxY + HALO_CELLS),
-      Math.min(CHUNK_SIZE, dirtyMaxLz + HALO_CELLS),
-    ],
-    min: [
-      Math.max(FIRST_INDEX, dirtyMinLx - HALO_CELLS),
-      Math.max(FIRST_INDEX, dirtyMinY - HALO_CELLS),
-      Math.max(FIRST_INDEX, dirtyMinLz - HALO_CELLS),
-    ],
-  }
-}
-
-/** The three block-id lookup tables every mesher in this file needs, fetched together. */
-const meshLookupsFor = (config: MeshConfig): { lookup: Uint8Array; plants: Uint8Array; fluids: Uint16Array } => ({
-  fluids: fluidLookupForMesh(config),
-  lookup: layerLookupForMesh(config),
-  plants: crossPlantLookupForMesh(config),
-})
-
-/** Visit every `(lx, y, lz)` cell inside `owned`, for one face direction. */
-const scanRegionFace = (ctx: FaceScanContext, owned: MeshRegion): void => {
-  const [minLx, minY, minLz] = owned.min
-  const [maxLx, maxY, maxLz] = owned.max
-  for (let lx = minLx; lx < maxLx; lx += STEP) {
-    for (let lz = minLz; lz < maxLz; lz += STEP) {
-      for (let y = minY; y < maxY; y += STEP) {
-        emitUnitFace(ctx, lx, y, lz)
-      }
-    }
-  }
-}
-
-/** Mesh every face direction into `push`, for the `owned` region of one chunk. */
-const meshAllRegionFaces = (
-  chunk: ChunkView,
-  neighbours: ChunkNeighbours,
-  lookup: Uint8Array,
-  plants: Uint8Array,
-  fluids: Uint16Array,
-  owned: MeshRegion,
-  push: (quad: Quad) => void,
-): void => {
-  for (const face of FACES) {
-    scanRegionFace(
-      {
-        chunk,
-        face,
-        fluids,
-        lookup,
-        neighbours,
-        placement: facePlacementOf(face.direction),
-        plants,
-        push,
-      },
-      owned,
-    )
-  }
-}
-
 /**
- * Remesh the cells whose geometry can be affected by a dirty chunk-local AABB.
- *
- * Face exposure, AO and fluid corners read at most one neighbouring cell, so
- * `ownedRegion` is the normalized dirty region plus a one-cell halo, clamped to
- * this chunk. Output uses unit faces rather than greedy quads so every geometry
- * item has exactly one owning cell and region buffers can be replaced safely.
+ * Mesh only dirty cells while consulting the complete chunk and its neighbours
+ * for visibility, AO, and fluid corner data. The input halo influences those
+ * reads; it never owns or contributes output cells.
  */
 export const meshChunkRegion = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   dirtyRegion: MeshRegion,
-): RegionMesh => {
+): Result.Result<
+  RegionMesh,
+  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
+> => {
   const dirty = normalizeRegion(dirtyRegion, chunk.height)
-  const empty = isEmptyRegion(dirty)
-  if (empty) {
-    return {
-      dirtyRegion: dirty,
-      layers: {
-        crossPlants: [],
-        fluids: [],
-        opaque: [],
-        specialBlocks: [],
-        transparentSolid: [],
-        water: [],
-      },
-      ownedRegion: dirty,
-    }
-  }
-  const owned = haloRegion(dirty, chunk.height)
-  const [, maxY] = owned.max
-  const { lookup, plants, fluids } = meshLookupsFor(config)
-  const { layers, push } = makeSink(
-    lookup,
-    meshCrossPlants({ bounds: owned, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
-    meshFluidSurfaces(chunk, neighbours, fluids, lookup, plants, maxY, owned),
-    meshSpecialBlocks(chunk, neighbours, maxY, owned),
+  const [, maxY] = dirty.max
+
+  return Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+    Result.flatMap(layerLookupForMesh(config), (lookup) =>
+      Result.flatMap(fluidLookupForMesh(config), (fluids) => {
+        return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
+          if (isEmptyRegion(dirty)) {
+            return Result.succeed({
+              dirtyRegion: dirty,
+              layers: {
+                crossPlants: [],
+                fluids: [],
+                opaque: [],
+                specialBlocks: [],
+                transparentSolid: [],
+                water: [],
+              },
+              ownedRegion: dirty,
+            })
+          }
+
+          return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) => {
+            const { layers, push } = makeSink(
+              lookup,
+              meshCrossPlants({ bounds: dirty, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
+              meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, maxY, dirty),
+              specialBlocks,
+            )
+            const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
+            const light = lightMasksOf(chunk, required)
+            const mask = new Uint32Array(required)
+            return Result.map(meshAllFaces({
+                chunk,
+                fluids,
+                light,
+                lookup,
+                mask,
+                neighbours,
+                plants,
+                region: dirty,
+                specialLookup,
+                push,
+                yLimit: maxY,
+              }), () => ({
+                dirtyRegion: dirty,
+                layers,
+                ownedRegion: dirty,
+              }))
+          })
+        })
+      }),
+    ),
   )
-
-  meshAllRegionFaces(chunk, neighbours, lookup, plants, fluids, owned, push)
-
-  return {
-    dirtyRegion: dirty,
-    layers,
-    ownedRegion: owned,
-  }
 }

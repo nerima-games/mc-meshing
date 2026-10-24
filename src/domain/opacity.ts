@@ -46,8 +46,12 @@
  * `MESH_LAYER_PRIORITY` exists so the order is a value that can be tested, not
  * a shape baked into a conditional that a future edit can silently reorder.
  */
+import { Option, Result } from 'effect'
+import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
+import type { BlockId } from './block-data.js'
 import {
   AIR,
+  type BlockDataFailure,
   MAX_BLOCK_ID,
   MINECRAFT_CROSS_PLANT_BLOCK_IDS,
   MINECRAFT_FLUID_MAX_LEVELS,
@@ -88,7 +92,7 @@ export const MESH_LAYERS: readonly [MeshLayer, MeshLayer, MeshLayer] = [
  * THE SETS ARE NATIVE `Set`, AND THAT IS A HARD REQUIREMENT (plan.md §5.2)
  * ---------------------------------------------------------------------------
  *
- * `ReadonlySet<number>` here means the built-in TypeScript type, backed by a
+ * `ReadonlySet<BlockId>` here means the built-in TypeScript type, backed by a
  * native `Set`. Effect's `HashSet` is BANNED in this type. Its `has` compares
  * by structural equality, which for a boxed number goes through Equal/Hash
  * dispatch — MEASURED at 1.9x a native Set's hash lookup, and at 12.3x the
@@ -116,9 +120,9 @@ export const MESH_LAYERS: readonly [MeshLayer, MeshLayer, MeshLayer] = [
  */
 export type MeshConfig = {
   /** Fluid surfaces. Rendered with the water shader. Typically just WATER. */
-  readonly waterBlockIds: ReadonlySet<number>
+  readonly waterBlockIds: ReadonlySet<BlockId>
   /** See-through solids. Rendered with the atlas material plus alpha blending. */
-  readonly transparentSolidBlockIds: ReadonlySet<number>
+  readonly transparentSolidBlockIds: ReadonlySet<BlockId>
   /**
    * Blocks drawn as two diagonal panes rather than as a cube: flowers, tall
    * grass, mushrooms, saplings. See `domain/plant-mesh.ts`.
@@ -130,7 +134,7 @@ export type MeshConfig = {
    * case — so collapsing them would lose one of the two answers.
    *
    */
-  readonly crossPlantBlockIds: ReadonlySet<number>
+  readonly crossPlantBlockIds: ReadonlySet<BlockId>
   /**
    * Blocks drawn as a variable-height fluid volume rather than a cube, mapped to
    * the highest LEVEL that fluid's propagation can reach. See
@@ -154,29 +158,49 @@ export type MeshConfig = {
    * normally in this one only — it is a fluid, but it is not blended.
    *
    */
-  readonly fluidMaxLevels: ReadonlyMap<number, number>
+  readonly fluidMaxLevels: ReadonlyMap<BlockId, number>
 }
 
 export const EMPTY_MESH_CONFIG: MeshConfig = {
-  crossPlantBlockIds: new Set<number>(),
-  fluidMaxLevels: new Map<number, number>(),
-  transparentSolidBlockIds: new Set<number>(),
-  waterBlockIds: new Set<number>(),
+  crossPlantBlockIds: new Set<BlockId>(),
+  fluidMaxLevels: new Map<BlockId, number>(),
+  transparentSolidBlockIds: new Set<BlockId>(),
+  waterBlockIds: new Set<BlockId>(),
 }
 
-export const MINECRAFT_MESH_CONFIG: MeshConfig = {
-  crossPlantBlockIds: MINECRAFT_CROSS_PLANT_BLOCK_IDS,
-  fluidMaxLevels: MINECRAFT_FLUID_MAX_LEVELS,
-  transparentSolidBlockIds: MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS,
-  waterBlockIds: MINECRAFT_WATER_BLOCK_IDS,
-}
+export type MeshConfigFailure =
+  | BlockDataFailure
+  | { readonly _tag: 'MissingTransparentSolidBlockIds' }
+
+export const MINECRAFT_MESH_CONFIG: Result.Result<MeshConfig, MeshConfigFailure> = Result.flatMap(
+  MINECRAFT_WATER_BLOCK_IDS,
+  (waterBlockIds): Result.Result<MeshConfig, MeshConfigFailure> =>
+    Result.flatMap(
+      MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS,
+      (transparentSolidBlockIds): Result.Result<MeshConfig, MeshConfigFailure> => {
+        if (Option.isNone(transparentSolidBlockIds)) {
+          return Result.fail<MeshConfigFailure>({ _tag: 'MissingTransparentSolidBlockIds' })
+        }
+        return Result.flatMap(
+          MINECRAFT_CROSS_PLANT_BLOCK_IDS,
+          (crossPlantBlockIds): Result.Result<MeshConfig, MeshConfigFailure> =>
+            Result.map(MINECRAFT_FLUID_MAX_LEVELS, (fluidMaxLevels): MeshConfig => ({
+              crossPlantBlockIds,
+              fluidMaxLevels,
+              transparentSolidBlockIds: transparentSolidBlockIds.value,
+              waterBlockIds,
+            })),
+        )
+      },
+    ),
+)
 
 /**
  * Classify one block id. Total: every id lands in exactly one layer.
  *
  * Correct but NOT for the inner loop — use `buildLayerLookup` there.
  */
-export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer => {
+export const layerOfBlockId = (config: MeshConfig, blockId: BlockId): MeshLayer => {
   if (config.transparentSolidBlockIds.has(blockId)) {
     return 'transparentSolid'
   }
@@ -203,18 +227,48 @@ export const layerOfBlockId = (config: MeshConfig, blockId: number): MeshLayer =
 /** `MAX_BLOCK_ID` is inclusive, so the table needs one more slot than that. */
 const TABLE_SIZE_OFFSET = 1
 
-/** Loop increment for a table build that visits each block id exactly once. */
-const BLOCK_ID_STEP = 1
-
 /** Size of a byte-indexed table covering every representable block id. */
 const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
 
-export const buildLayerLookup = (config: MeshConfig): Uint8Array => {
-  const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
-  for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += BLOCK_ID_STEP) {
-    lookup[blockId] = MESH_LAYERS.indexOf(layerOfBlockId(config, blockId))
+type BlockIdValidationFailure = ReturnType<typeof KernelBlockId.result> extends Result.Result<
+  BlockId,
+  infer Failure
+>
+  ? Failure
+  : never
+
+export type LayerLookupFailure = BlockIdValidationFailure
+
+const validateBlockIds = (config: MeshConfig): Result.Result<void, BlockIdValidationFailure> => {
+  const collections: ReadonlyArray<Iterable<BlockId>> = [config.waterBlockIds, config.transparentSolidBlockIds]
+  for (const collection of collections) {
+    for (const blockId of collection) {
+      const validated = KernelBlockId.result(blockId)
+      if (Result.isFailure(validated)) {
+        return Result.fail(validated.failure)
+      }
+    }
   }
-  return lookup
+  return Result.void
+}
+
+export const buildLayerLookup = (config: MeshConfig): Result.Result<Uint8Array, LayerLookupFailure> => {
+  // Validate only the ids this table indexes. Fluid and plant builders validate
+  // their own collections at their public boundaries.
+  const validIds = validateBlockIds(config)
+  if (Result.isFailure(validIds)) {
+    return Result.fail(validIds.failure)
+  }
+  const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
+  const waterLayer = MESH_LAYERS.indexOf('water')
+  const transparentSolidLayer = MESH_LAYERS.indexOf('transparentSolid')
+  for (const blockId of config.waterBlockIds) {
+    lookup[blockId] = waterLayer
+  }
+  for (const blockId of config.transparentSolidBlockIds) {
+    lookup[blockId] = transparentSolidLayer
+  }
+  return Result.succeed(lookup)
 }
 
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
@@ -228,5 +282,5 @@ const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
  * produces the classic "the world is inside out" bug, so it is stated once,
  * here, and shared by every face pass.
  */
-export const occludes = (lookup: Uint8Array, blockId: number): boolean =>
+export const occludes = (lookup: Uint8Array, blockId: BlockId): boolean =>
   blockId !== AIR && lookup[blockId] === OPAQUE_LAYER

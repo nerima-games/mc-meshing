@@ -21,6 +21,7 @@ import { type FluidQuad, NO_FLUID_QUADS } from './fluid-types.js'
 import { quadLightAt } from './light-sampling.js'
 
 export type { FluidFlow, FluidQuad, FluidVertex } from './fluid-types.js'
+export type { FluidLookupFailure } from './fluid-sampling.js'
 export { buildFluidLookup, isFluidBlock, SOURCE_SURFACE_HEIGHT } from './fluid-sampling.js'
 
 const NO_FLUID = -1

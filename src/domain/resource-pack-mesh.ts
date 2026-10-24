@@ -5,8 +5,10 @@ import type {
   ModelElement,
   ModelElementRotation,
   ModelFace,
+  ModelName,
   ModelRotation,
   ResolvedBlockModel,
+  ResourceName,
   ResourceModelFaceDirection,
   ResourceModelQuad,
   ResourceModelTransform,
@@ -14,8 +16,31 @@ import type {
   ResourceModelVertex,
   ResourcePackAssets,
 } from './resource-pack-types.js'
+import { Option, Result } from 'effect'
 import { FACE_DIRECTIONS, type FaceDirection } from './faces.js'
-import { resolveBlockModel, resolveBlockStateModels, resolveModelTexture } from './resource-pack-resolver.js'
+import {
+  type ResourcePackResolutionFailure,
+  resolveBlockModel,
+  resolveBlockStateModels,
+  resolveModelTexture,
+} from './resource-pack-resolver.js'
+
+export type ResourceModelMeshFailureCode =
+  | 'invalid-element-rotation'
+  | 'non-axis-aligned-face'
+  | 'degenerate-face'
+
+export type ResourceModelMeshFailure = {
+  readonly _tag: 'ResourceModelMeshFailure'
+  readonly code: ResourceModelMeshFailureCode
+  readonly message: string
+}
+
+const failResourceModelMesh = (
+  code: ResourceModelMeshFailureCode,
+  message: string,
+): Result.Result<never, ResourceModelMeshFailure> =>
+  Result.fail({ _tag: 'ResourceModelMeshFailure', code, message })
 
 const FIRST_INDEX = 0
 const INDEX_STEP = 1
@@ -99,13 +124,15 @@ const faceVerticesFromBounds = (
         pointOf(minX, maxY, maxZ),
         pointOf(minX, minY, maxZ),
       ]
-    default:
+    case 'zNeg':
       return [
         pointOf(minX, minY, minZ),
         pointOf(minX, maxY, minZ),
         pointOf(maxX, maxY, minZ),
         pointOf(maxX, minY, minZ),
       ]
+    default:
+      throw new Error('Unexpected face direction')
   }
 }
 
@@ -213,41 +240,51 @@ const legacyElementRotationOf = (
   point: Point,
   origin: Point,
   rotation: ModelElementRotation,
-): Point | undefined => {
+): Result.Result<Option.Option<Point>, ResourceModelMeshFailure> => {
   const { angle, axis, rescale } = rotation
   if (typeof axis === 'undefined' && typeof angle === 'undefined') {
-    return
+    return Result.succeed(Option.none())
   }
   if (typeof axis === 'undefined' || typeof angle === 'undefined') {
-    throw new RangeError('Element rotation axis and angle must be provided together')
+    return failResourceModelMesh(
+      'invalid-element-rotation',
+      'Element rotation axis and angle must be provided together',
+    )
   }
-  return rotateElementAround(point, { axis, degrees: angle, origin, rescale })
+  return Result.succeed(Option.some(rotateElementAround(point, { axis, degrees: angle, origin, rescale })))
 }
 
 const multiAxisElementRotationOf = (
   point: Point,
   origin: Point,
   rotation: ModelElementRotation,
-): Point => {
+): Result.Result<Point, ResourceModelMeshFailure> => {
   const { rescale, x, y, z } = rotation
   if (typeof x === 'undefined' && typeof y === 'undefined' && typeof z === 'undefined') {
-    throw new RangeError('Element rotation must define axis/angle or x/y/z')
+    return failResourceModelMesh(
+      'invalid-element-rotation',
+      'Element rotation must define axis/angle or x/y/z',
+    )
   }
   const xRotated = rotateElementAround(point, { axis: 'x', degrees: x ?? FIRST_INDEX, origin, rescale })
   const yRotated = rotateElementAround(xRotated, { axis: 'y', degrees: y ?? FIRST_INDEX, origin, rescale })
-  return rotateElementAround(yRotated, { axis: 'z', degrees: z ?? FIRST_INDEX, origin, rescale })
+  return Result.succeed(rotateElementAround(yRotated, { axis: 'z', degrees: z ?? FIRST_INDEX, origin, rescale }))
 }
 
-const applyElementRotation = (point: Point, rotation: ModelElementRotation | undefined): Point => {
+const applyElementRotation = (
+  point: Point,
+  rotation: ModelElementRotation | undefined,
+): Result.Result<Point, ResourceModelMeshFailure> => {
   if (typeof rotation === 'undefined') {
-    return point
+    return Result.succeed(point)
   }
   const origin = elementRotationOriginOf(rotation)
-  const legacyRotation = legacyElementRotationOf(point, origin, rotation)
-  if (typeof legacyRotation !== 'undefined') {
-    return legacyRotation
-  }
-  return multiAxisElementRotationOf(point, origin, rotation)
+  return Result.flatMap(legacyElementRotationOf(point, origin, rotation), (legacyRotation) => {
+    if (Option.isSome(legacyRotation)) {
+      return Result.succeed(legacyRotation.value)
+    }
+    return multiAxisElementRotationOf(point, origin, rotation)
+  })
 }
 
 const fullTransformOf = (transform: ResourceModelTransform): Required<ResourceModelTransform> => ({
@@ -304,15 +341,18 @@ const directionByNormal: Readonly<Record<AxisNormalKey, FaceDirection>> = {
 
 const isAxisNormalKey = (key: string): key is AxisNormalKey => Object.hasOwn(directionByNormal, key)
 
-const directionOf = (normal: Point): FaceDirection => {
+const directionOf = (normal: Point): Result.Result<FaceDirection, ResourceModelMeshFailure> => {
   const key = `${Math.round(normal[FIRST_INDEX])},${Math.round(normal[INDEX_STEP])},${Math.round(normal[SECOND_INDEX])}`
   if (!isAxisNormalKey(key)) {
-    throw new RangeError(`Transformed face normal is not axis-aligned: ${key}`)
+    return failResourceModelMesh('non-axis-aligned-face', `Transformed face normal is not axis-aligned: ${key}`)
   }
-  return directionByNormal[key]
+  return Result.succeed(directionByNormal[key])
 }
 
-const transformDirection = (direction: FaceDirection, transform: Required<ResourceModelTransform>): FaceDirection => {
+const transformDirection = (
+  direction: FaceDirection,
+  transform: Required<ResourceModelTransform>,
+): Result.Result<FaceDirection, ResourceModelMeshFailure> => {
   const xRotated = rotateVector(directionNormals[direction], 'x', transform.x)
   const yRotated = rotateVector(xRotated, 'y', transform.y)
   return directionOf(rotateVector(yRotated, 'z', transform.z))
@@ -360,17 +400,18 @@ const uvForFace = (
   direction: FaceDirection,
   transformedVertices: PointQuad,
   transform: Required<ResourceModelTransform>,
-): ResourceModelUvQuad => {
+): Result.Result<ResourceModelUvQuad, ResourceModelMeshFailure> => {
   const base = uvCoordinatesOf(face)
   if (!transform.uvlock) {
-    return base
+    return Result.succeed(base)
   }
   const [minX, minY, minZ, maxX, maxY, maxZ] = boundsOf(transformedVertices)
-  const targetDirection = transformDirection(direction, transform)
-  const targetVertices = faceVerticesFromBounds(targetDirection, [minX, minY, minZ, maxX, maxY, maxZ])
-  return mapQuad(transformedVertices, (point, index) => {
-    const targetIndex = CORNER_INDEXES.find((candidate) => samePoint(point, targetVertices[candidate]))
-    return uvAt(base, index, targetIndex)
+  return Result.map(transformDirection(direction, transform), (targetDirection) => {
+    const targetVertices = faceVerticesFromBounds(targetDirection, [minX, minY, minZ, maxX, maxY, maxZ])
+    return mapQuad(transformedVertices, (point, index) => {
+      const targetIndex = CORNER_INDEXES.find((candidate) => samePoint(point, targetVertices[candidate]))
+      return uvAt(base, index, targetIndex)
+    })
   })
 }
 
@@ -386,30 +427,36 @@ const crossProduct = (left: Point, right: Point): Point => pointOf(
   left[FIRST_INDEX] * right[INDEX_STEP] - left[INDEX_STEP] * right[FIRST_INDEX],
 )
 
-const normalOf = (vertices: PointQuad): ResourceModelVertex => {
+const normalOf = (vertices: PointQuad): Result.Result<ResourceModelVertex, ResourceModelMeshFailure> => {
   const normal = crossProduct(vectorBetween(vertices[FIRST_INDEX], vertices[INDEX_STEP]), vectorBetween(vertices[FIRST_INDEX], vertices[SECOND_INDEX]))
   const length = Math.hypot(normal[FIRST_INDEX], normal[INDEX_STEP], normal[SECOND_INDEX])
   if (!(length > POINT_EPSILON)) {
-    throw new RangeError('Resource model face must have non-zero area')
+    return failResourceModelMesh('degenerate-face', 'Resource model face must have non-zero area')
   }
-  return [
+  return Result.succeed([
     rounded(normal[FIRST_INDEX] / length),
     rounded(normal[INDEX_STEP] / length),
     rounded(normal[SECOND_INDEX] / length),
-  ]
+  ])
 }
 
 type FaceMetadata = { cullface?: FaceDirection; tintIndex?: number }
 
-const faceMetadataOf = (face: ModelFace, transform: Required<ResourceModelTransform>): FaceMetadata => {
+const faceMetadataOf = (
+  face: ModelFace,
+  transform: Required<ResourceModelTransform>,
+): Result.Result<FaceMetadata, ResourceModelMeshFailure> => {
   const metadata: FaceMetadata = {}
-  if (typeof face.cullface !== 'undefined') {
-    metadata.cullface = transformDirection(internalFaceDirectionOf[face.cullface], transform)
-  }
   if (typeof face.tintindex !== 'undefined') {
     metadata.tintIndex = face.tintindex
   }
-  return metadata
+  if (typeof face.cullface === 'undefined') {
+    return Result.succeed(metadata)
+  }
+  return Result.map(
+    transformDirection(internalFaceDirectionOf[face.cullface], transform),
+    (direction) => ({ ...metadata, cullface: direction }),
+  )
 }
 
 const shadeOf = (element: ModelElement): boolean => {
@@ -422,53 +469,102 @@ const shadeOf = (element: ModelElement): boolean => {
 const meshResolvedModel = (
   model: ResolvedBlockModel,
   transform: Required<ResourceModelTransform>,
-): ReadonlyArray<ResourceModelQuad> =>
-  model.elements.flatMap((element) =>
-    FACE_DIRECTIONS.flatMap((direction) => {
+): Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure> => {
+  const quads: Array<ResourceModelQuad> = []
+  for (const element of model.elements) {
+    for (const direction of FACE_DIRECTIONS) {
       const face = element.faces[resourceFaceDirectionOf[direction]]
       if (typeof face === 'undefined') {
-        return []
+        continue
       }
       const localVertices = faceVerticesOf(direction, element.from, element.to)
-      const transformedVertices = mapQuad(
-        localVertices,
-        (point) => applyBlockRotation(applyElementRotation(point, element.rotation), transform),
-      )
-      const quadBase = {
+      const first = applyElementRotation(localVertices[FIRST_INDEX], element.rotation)
+      if (Result.isFailure(first)) {
+        return Result.fail(first.failure)
+      }
+      const second = applyElementRotation(localVertices[INDEX_STEP], element.rotation)
+      if (Result.isFailure(second)) {
+        return Result.fail(second.failure)
+      }
+      const third = applyElementRotation(localVertices[SECOND_INDEX], element.rotation)
+      if (Result.isFailure(third)) {
+        return Result.fail(third.failure)
+      }
+      const fourth = applyElementRotation(localVertices[THIRD_INDEX], element.rotation)
+      if (Result.isFailure(fourth)) {
+        return Result.fail(fourth.failure)
+      }
+      const transformedVertices: PointQuad = [
+        applyBlockRotation(first.success, transform),
+        applyBlockRotation(second.success, transform),
+        applyBlockRotation(third.success, transform),
+        applyBlockRotation(fourth.success, transform),
+      ]
+      const normal = normalOf(transformedVertices)
+      if (Result.isFailure(normal)) {
+        return Result.fail(normal.failure)
+      }
+      const transformedDirection = transformDirection(direction, transform)
+      if (Result.isFailure(transformedDirection)) {
+        return Result.fail(transformedDirection.failure)
+      }
+      const texture = resolveModelTexture(model, face.texture)
+      if (Result.isFailure(texture)) {
+        return Result.fail(texture.failure)
+      }
+      const uv = uvForFace(face, direction, transformedVertices, transform)
+      if (Result.isFailure(uv)) {
+        return Result.fail(uv.failure)
+      }
+      const metadata = faceMetadataOf(face, transform)
+      if (Result.isFailure(metadata)) {
+        return Result.fail(metadata.failure)
+      }
+      quads.push({
         ambientOcclusion: model.ambientOcclusion,
-        direction: transformDirection(direction, transform),
+        direction: transformedDirection.success,
         model: model.name,
-        normal: normalOf(transformedVertices),
+        normal: normal.success,
         shade: shadeOf(element),
-        texture: resolveModelTexture(model, face.texture),
-        uv: uvForFace(face, direction, transformedVertices, transform),
+        texture: texture.success,
+        uv: uv.success,
         vertices: transformedVertices,
-      }
-      return {
-        ...quadBase,
-        ...faceMetadataOf(face, transform),
-      }
-    }),
-  )
+        ...metadata.success,
+      })
+    }
+  }
+  return Result.succeed(quads)
+}
 
 /** Mesh all faces in a resolved block model into normalized chunk-local quads. */
 export const meshBlockModel = (
-  name: string,
+  name: ModelName,
   assets: ResourcePackAssets,
   transform: ResourceModelTransform = {},
-): ReadonlyArray<ResourceModelQuad> => {
-  const model = resolveBlockModel(name, assets)
-  return meshResolvedModel(model, fullTransformOf(transform))
-}
+): Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure> =>
+  Result.flatMap(resolveBlockModel(name, assets), (model) =>
+    meshResolvedModel(model, fullTransformOf(transform)),
+  )
 
 /** Resolve and mesh every model selected by a blockstate variant or multipart. */
 export const meshBlockState = (
-  name: string,
+  name: ResourceName,
   properties: BlockStateProperties,
   assets: ResourcePackAssets,
   options?: BlockStateResolveOptions,
-): ReadonlyArray<ResourceModelQuad> =>
-  resolveBlockStateModels(name, properties, assets, options).flatMap((state) => {
-    const model = resolveBlockModel(state.model, assets)
-    return meshResolvedModel(model, fullTransformOf(state))
+): Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure> =>
+  Result.flatMap(resolveBlockStateModels(name, properties, assets, options), (states) => {
+    const quads: Array<ResourceModelQuad> = []
+    for (const state of states) {
+      const model = resolveBlockModel(state.model, assets)
+      if (Result.isFailure(model)) {
+        return Result.fail(model.failure)
+      }
+      const meshed = meshResolvedModel(model.success, fullTransformOf(state))
+      if (Result.isFailure(meshed)) {
+        return Result.fail(meshed.failure)
+      }
+      quads.push(...meshed.success)
+    }
+    return Result.succeed(quads)
   })

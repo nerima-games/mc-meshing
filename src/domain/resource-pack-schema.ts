@@ -14,49 +14,51 @@ import {
   type ModelFace,
   type ResourcePackAssets,
 } from './resource-pack-types.js'
-import { Schema } from 'effect'
+import { Result, Schema, SchemaIssue, SchemaParser } from 'effect'
 
-const modelRotationSchema = Schema.Literal(0, 90, 180, 270)
-const modelAxisSchema = Schema.Literal('x', 'y', 'z')
-const faceDirectionSchema = Schema.Literal(...RESOURCE_MODEL_FACE_DIRECTIONS)
-const finiteNumberSchema = Schema.Number.pipe(Schema.finite())
+type ResourcePackSchema<Value> = Schema.Schema<Value> & Schema.ConstraintDecoder<Value, never>
+
+const modelRotationSchema = Schema.Literals([0, 90, 180, 270])
+const modelAxisSchema = Schema.Literals(['x', 'y', 'z'])
+const faceDirectionSchema = Schema.Literals(RESOURCE_MODEL_FACE_DIRECTIONS)
+const finiteNumberSchema = Schema.Finite
 const modelElementAngleSchema = finiteNumberSchema
-const positiveFiniteNumberSchema = finiteNumberSchema.pipe(Schema.greaterThan(0))
-const numberTuple3Schema = Schema.Tuple(finiteNumberSchema, finiteNumberSchema, finiteNumberSchema)
-const numberTuple4Schema = Schema.Tuple(
+const positiveFiniteNumberSchema = finiteNumberSchema.check(Schema.isGreaterThan(0))
+const numberTuple3Schema = Schema.Tuple([finiteNumberSchema, finiteNumberSchema, finiteNumberSchema])
+const numberTuple4Schema = Schema.Tuple([
   finiteNumberSchema,
   finiteNumberSchema,
   finiteNumberSchema,
   finiteNumberSchema,
-)
+])
 
-const modelFaceSchema: Schema.Schema<ModelFace> = Schema.Struct({
+const modelFaceSchema: ResourcePackSchema<ModelFace> = Schema.Struct({
   texture: Schema.String,
-  uv: Schema.optionalWith(numberTuple4Schema, { exact: true }),
-  rotation: Schema.optionalWith(modelRotationSchema, { exact: true }),
-  cullface: Schema.optionalWith(faceDirectionSchema, { exact: true }),
-  tintindex: Schema.optionalWith(finiteNumberSchema, { exact: true }),
+  uv: Schema.optionalKey(numberTuple4Schema),
+  rotation: Schema.optionalKey(modelRotationSchema),
+  cullface: Schema.optionalKey(faceDirectionSchema),
+  tintindex: Schema.optionalKey(finiteNumberSchema),
 })
 
-const modelFacesSchema: Schema.Schema<ModelElement['faces']> = Schema.Struct({
-  down: Schema.optionalWith(modelFaceSchema, { exact: true }),
-  up: Schema.optionalWith(modelFaceSchema, { exact: true }),
-  north: Schema.optionalWith(modelFaceSchema, { exact: true }),
-  south: Schema.optionalWith(modelFaceSchema, { exact: true }),
-  west: Schema.optionalWith(modelFaceSchema, { exact: true }),
-  east: Schema.optionalWith(modelFaceSchema, { exact: true }),
+const modelFacesSchema: ResourcePackSchema<ModelElement['faces']> = Schema.Struct({
+  down: Schema.optionalKey(modelFaceSchema),
+  up: Schema.optionalKey(modelFaceSchema),
+  north: Schema.optionalKey(modelFaceSchema),
+  south: Schema.optionalKey(modelFaceSchema),
+  west: Schema.optionalKey(modelFaceSchema),
+  east: Schema.optionalKey(modelFaceSchema),
 })
 
-const modelElementRotationSchema: Schema.Schema<ModelElementRotation> = Schema.Struct({
+const modelElementRotationSchema: ResourcePackSchema<ModelElementRotation> = Schema.Struct({
   origin: numberTuple3Schema,
-  axis: Schema.optionalWith(modelAxisSchema, { exact: true }),
-  angle: Schema.optionalWith(modelElementAngleSchema, { exact: true }),
-  x: Schema.optionalWith(modelElementAngleSchema, { exact: true }),
-  y: Schema.optionalWith(modelElementAngleSchema, { exact: true }),
-  z: Schema.optionalWith(modelElementAngleSchema, { exact: true }),
-  rescale: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  axis: Schema.optionalKey(modelAxisSchema),
+  angle: Schema.optionalKey(modelElementAngleSchema),
+  x: Schema.optionalKey(modelElementAngleSchema),
+  y: Schema.optionalKey(modelElementAngleSchema),
+  z: Schema.optionalKey(modelElementAngleSchema),
+  rescale: Schema.optionalKey(Schema.Boolean),
 }).pipe(
-  Schema.filter((rotation) => {
+  Schema.check(Schema.makeFilter((rotation: ModelElementRotation) => {
     const hasAxis = typeof rotation.axis !== 'undefined'
     const hasAngle = typeof rotation.angle !== 'undefined'
     const hasAxisRotation =
@@ -64,100 +66,97 @@ const modelElementRotationSchema: Schema.Schema<ModelElementRotation> = Schema.S
       typeof rotation.y !== 'undefined' ||
       typeof rotation.z !== 'undefined'
     return hasAxis === hasAngle && (hasAxis || hasAxisRotation)
-  }),
+  })),
 )
 
-const modelElementSchema: Schema.Schema<ModelElement> = Schema.Struct({
+const modelElementSchema: ResourcePackSchema<ModelElement> = Schema.Struct({
   from: numberTuple3Schema,
   to: numberTuple3Schema,
-  rotation: Schema.optionalWith(modelElementRotationSchema, { exact: true }),
-  shade: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  rotation: Schema.optionalKey(modelElementRotationSchema),
+  shade: Schema.optionalKey(Schema.Boolean),
   faces: modelFacesSchema,
 })
 
-const blockModelSchema: Schema.Schema<BlockModel> = Schema.Struct({
-  parent: Schema.optionalWith(Schema.String, { exact: true }),
-  ambientocclusion: Schema.optionalWith(Schema.Boolean, { exact: true }),
-  textures: Schema.optionalWith(Schema.Record({ key: Schema.String, value: Schema.String }), { exact: true }),
-  elements: Schema.optionalWith(Schema.Array(modelElementSchema), { exact: true }),
+const blockModelSchema: ResourcePackSchema<BlockModel> = Schema.Struct({
+  parent: Schema.optionalKey(Schema.String),
+  ambientocclusion: Schema.optionalKey(Schema.Boolean),
+  textures: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  elements: Schema.optionalKey(Schema.Array(modelElementSchema)),
 })
 
-const blockStateVariantSchema: Schema.Schema<BlockStateVariant> = Schema.Struct({
+const blockStateVariantSchema: ResourcePackSchema<BlockStateVariant> = Schema.Struct({
   model: Schema.String,
-  x: Schema.optionalWith(modelRotationSchema, { exact: true }),
-  y: Schema.optionalWith(modelRotationSchema, { exact: true }),
-  z: Schema.optionalWith(modelRotationSchema, { exact: true }),
-  uvlock: Schema.optionalWith(Schema.Boolean, { exact: true }),
-  weight: Schema.optionalWith(positiveFiniteNumberSchema, { exact: true }),
+  x: Schema.optionalKey(modelRotationSchema),
+  y: Schema.optionalKey(modelRotationSchema),
+  z: Schema.optionalKey(modelRotationSchema),
+  uvlock: Schema.optionalKey(Schema.Boolean),
+  weight: Schema.optionalKey(positiveFiniteNumberSchema),
 })
-const blockStateVariantListSchema: Schema.Schema<BlockStateVariantList> = Schema.NonEmptyArray(blockStateVariantSchema)
+const blockStateVariantListSchema: ResourcePackSchema<BlockStateVariantList> = Schema.NonEmptyArray(blockStateVariantSchema)
 
-const blockStateConditionSchema: Schema.Schema<BlockStateCondition> = Schema.suspend(() =>
-  Schema.Union(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
+const blockStateConditionSchema: ResourcePackSchema<BlockStateCondition> = Schema.suspend(() =>
+  Schema.Union([
+    Schema.Record(Schema.String, Schema.String),
     Schema.Struct({ OR: Schema.Array(blockStateConditionSchema) }),
     Schema.Struct({ AND: Schema.Array(blockStateConditionSchema) }),
-  ),
+  ]),
 )
 
-const blockStateMultipartSchema: Schema.Schema<BlockStateMultipart> = Schema.Struct({
-  when: Schema.optionalWith(blockStateConditionSchema, { exact: true }),
-  apply: Schema.Union(blockStateVariantSchema, blockStateVariantListSchema),
+const blockStateMultipartSchema: ResourcePackSchema<BlockStateMultipart> = Schema.Struct({
+  when: Schema.optionalKey(blockStateConditionSchema),
+  apply: Schema.Union([blockStateVariantSchema, blockStateVariantListSchema]),
 })
 
 const blockStateVariantsDefinitionSchema = Schema.Struct({
-  variants: Schema.Record({
-    key: Schema.String,
-    value: Schema.Union(blockStateVariantSchema, blockStateVariantListSchema),
-  }),
-  multipart: Schema.optionalWith(Schema.Never, { exact: true }),
+  variants: Schema.Record(Schema.String, Schema.Union([blockStateVariantSchema, blockStateVariantListSchema])),
+  multipart: Schema.optionalKey(Schema.Never),
 })
 
 const blockStateMultipartDefinitionSchema = Schema.Struct({
-  variants: Schema.optionalWith(Schema.Never, { exact: true }),
+  variants: Schema.optionalKey(Schema.Never),
   multipart: Schema.Array(blockStateMultipartSchema),
 })
 
-const blockStateDefinitionSchema: Schema.Schema<BlockStateDefinition> = Schema.Union(
+const blockStateDefinitionSchema: ResourcePackSchema<BlockStateDefinition> = Schema.Union([
   blockStateVariantsDefinitionSchema,
   blockStateMultipartDefinitionSchema,
-)
+])
 
 /** Effect Schema for the supported, loader-independent resource-pack JSON subset. */
-export const ResourcePackAssetsSchema: Schema.Schema<ResourcePackAssets> = Schema.Struct({
-  blockstates: Schema.Record({ key: Schema.String, value: blockStateDefinitionSchema }),
-  models: Schema.Record({ key: Schema.String, value: blockModelSchema }),
+export const ResourcePackAssetsSchema: ResourcePackSchema<ResourcePackAssets> = Schema.Struct({
+  blockstates: Schema.Record(Schema.String, blockStateDefinitionSchema),
+  models: Schema.Record(Schema.String, blockModelSchema),
 })
 
-const resourcePackAssetsJsonSchema = Schema.parseJson(ResourcePackAssetsSchema)
+const resourcePackAssetsJsonSchema = Schema.fromJsonString(ResourcePackAssetsSchema)
 
 export type ResourcePackParseInput = 'object' | 'json'
 
-/** Raised when an unknown value does not satisfy the resource-pack data contract. */
-export class ResourcePackParseError extends Error {
-  override readonly name = 'ResourcePackParseError'
-  readonly input: ResourcePackParseInput
 
-  constructor(input: ResourcePackParseInput, cause: unknown) {
-    super(`Invalid resource-pack ${input} input: ${String(cause)}`, { cause })
-    this.input = input
-  }
+export type ResourcePackParseFailure = {
+  readonly _tag: 'ResourcePackParseFailure'
+  readonly input: ResourcePackParseInput
+  readonly issue: SchemaIssue.Issue
+  readonly message: string
 }
+
+const parseFailureOf = (input: ResourcePackParseInput, issue: SchemaIssue.Issue): ResourcePackParseFailure => ({
+  _tag: 'ResourcePackParseFailure',
+  input,
+  issue,
+  message: `Invalid resource-pack ${input} input: ${SchemaIssue.makeFormatterDefault()(issue)}`,
+})
 
 /** Decode an unknown JSON-compatible value into the supported resource-pack types. */
-export const parseResourcePackAssets = (value: unknown): ResourcePackAssets => {
-  try {
-    return Schema.decodeUnknownSync(ResourcePackAssetsSchema, { onExcessProperty: 'error' })(value)
-  } catch (cause) {
-    throw new ResourcePackParseError('object', cause)
-  }
-}
+export const parseResourcePackAssets = (value: unknown): Result.Result<ResourcePackAssets, ResourcePackParseFailure> =>
+  Result.mapError(
+    SchemaParser.decodeUnknownResult(ResourcePackAssetsSchema, { onExcessProperty: 'error' })(value),
+    (issue) => parseFailureOf('object', issue),
+  )
 
 /** Parse and decode a JSON document into the supported resource-pack types. */
-export const parseResourcePackAssetsJson = (value: string): ResourcePackAssets => {
-  try {
-    return Schema.decodeUnknownSync(resourcePackAssetsJsonSchema, { onExcessProperty: 'error' })(value)
-  } catch (cause) {
-    throw new ResourcePackParseError('json', cause)
-  }
-}
+export const parseResourcePackAssetsJson = (value: string): Result.Result<ResourcePackAssets, ResourcePackParseFailure> =>
+  Result.mapError(
+    SchemaParser.decodeUnknownResult(resourcePackAssetsJsonSchema, { onExcessProperty: 'error' })(value),
+    (issue) => parseFailureOf('json', issue),
+  )

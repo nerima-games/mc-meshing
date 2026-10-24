@@ -1,4 +1,4 @@
-import { Brand } from 'effect'
+import { Brand, Option, Result } from 'effect'
 import { AIR, type BlockId, MAX_BLOCK_ID, blockIdAt } from './block-data.js'
 import {
   CHUNK_SIZE,
@@ -10,16 +10,17 @@ import { FACES, type Face, type FacePlacement, facePlacementOf } from './faces.j
 import {
   FIRST_INDEX,
   STEP,
+  type LayerLookup,
   isFaceExposed,
   layerAt,
 } from './mesh-support.js'
 import { MESH_LAYERS } from './opacity.js'
-import type { Quad } from './mesh-types.js'
-import type { QuadLight } from './light-types.js'
+import type { MeshRegion, Quad } from './mesh-types.js'
+import type { LightCorners, LightLevel, QuadLight } from './light-types.js'
 import { ambientOcclusionAt } from './ambient-occlusion.js'
 import { isCrossPlant } from './plant-mesh.js'
 import { isFluidBlock } from './fluid-mesh.js'
-import { isSpecialBlock } from './special-mesh.js'
+import { isSpecialBlock, type SpecialBlockLookup } from './special-mesh.js'
 import { quadLightAt } from './light-sampling.js'
 
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
@@ -37,7 +38,7 @@ const LIGHT_CORNER_SHIFT = 4
 const SECOND_LIGHT_CORNER = 2
 const THIRD_LIGHT_CORNER = 3
 
-const packFaceCell = (blockId: number, ao: number): number => blockId | (ao << AO_SHIFT)
+export const packFaceCell = (blockId: number, ao: number): number => blockId | (ao << AO_SHIFT)
 
 const packLightCorners = (values: readonly number[]): number => {
   let packed = NO_FACE
@@ -49,11 +50,14 @@ const packLightCorners = (values: readonly number[]): number => {
 
 const packLightChannel = (light: QuadLight, channel: 'block' | 'sky'): number => packLightCorners(light[channel])
 
-const lightCornersFromPacked = (packed: number): readonly [number, number, number, number] => [
-  packed & LIGHT_NIBBLE_MASK,
-  (packed >> LIGHT_CORNER_SHIFT) & LIGHT_NIBBLE_MASK,
-  (packed >> (LIGHT_CORNER_SHIFT * SECOND_LIGHT_CORNER)) & LIGHT_NIBBLE_MASK,
-  (packed >> (LIGHT_CORNER_SHIFT * THIRD_LIGHT_CORNER)) & LIGHT_NIBBLE_MASK,
+// Each masked nibble is in the kernel LightLevel range 0..15.
+const lightLevelFromPackedNibble = Brand.nominal<LightLevel>()
+
+const lightCornersFromPacked = (packed: number): LightCorners => [
+  lightLevelFromPackedNibble(packed & LIGHT_NIBBLE_MASK),
+  lightLevelFromPackedNibble((packed >> LIGHT_CORNER_SHIFT) & LIGHT_NIBBLE_MASK),
+  lightLevelFromPackedNibble((packed >> (LIGHT_CORNER_SHIFT * SECOND_LIGHT_CORNER)) & LIGHT_NIBBLE_MASK),
+  lightLevelFromPackedNibble((packed >> (LIGHT_CORNER_SHIFT * THIRD_LIGHT_CORNER)) & LIGHT_NIBBLE_MASK),
 ]
 
 const quadLightFromPacked = (block: number, sky: number): QuadLight => ({
@@ -79,15 +83,13 @@ const packedLightPropertiesOf = (
   return {}
 }
 
-// `cell & MAX_BLOCK_ID` (a mask of 0xFFFF) is always an integer in
-// [0, MAX_BLOCK_ID] by construction of the bitwise AND itself — see
-// `block-data.ts`'s `uncheckedBlockId` for why `Brand.nominal` applies here
-// instead of a guard with a branch no caller can ever take.
-const uncheckedBlockId = Brand.nominal<BlockId>()
+// Chunk block ids use the kernel's full uint16 domain, and AO starts at bit 16.
+// Masking therefore proves the value is a BlockId before it leaves this boundary.
+const blockIdFromPackedFaceCell = Brand.nominal<BlockId>()
 
-const faceCellBlockId = (cell: number): BlockId => uncheckedBlockId(cell & MAX_BLOCK_ID)
+export const faceCellBlockId = (cell: number): BlockId => blockIdFromPackedFaceCell(cell & MAX_BLOCK_ID)
 
-const faceCellAo = (cell: number): number => cell >> AO_SHIFT
+export const faceCellAo = (cell: number): number => cell >> AO_SHIFT
 
 type EmitQuad = (
   outer: number,
@@ -202,6 +204,7 @@ type GreedyExpansionContext = {
   readonly innerSize: number
   readonly masks: GreedyMasks
   readonly outerSize: number
+  readonly maskFailure: { failure: Option.Option<GreedyMaskFailure> }
 }
 
 const growRuns = (
@@ -233,17 +236,28 @@ const growRuns = (
  * branch (an index `expandGreedy`'s loop bounds should never produce) has a
  * direct test instead of an untestable one buried inside `expandCell`.
  */
-export const maskCellAt = (mask: Uint32Array, base: number): number => {
+export type GreedyMaskFailure = {
+  readonly _tag: 'GreedyMaskIndexOutOfRange'
+  readonly index: number
+}
+
+export const maskCellAt = (mask: Uint32Array, base: number): Result.Result<number, GreedyMaskFailure> => {
   const cell = mask[base]
   if (typeof cell === 'undefined') {
-    throw new RangeError(`unreachable: greedy mask index ${base} out of range`)
+    return Result.fail({ _tag: 'GreedyMaskIndexOutOfRange', index: base })
   }
-  return cell
+  return Result.succeed(cell)
 }
 
 const expandCell = (ctx: GreedyExpansionContext, depth: number, outer: number, inner: number): void => {
   const base = outer * ctx.innerSize + inner
-  const cell = maskCellAt(ctx.masks.mask, base)
+  const cell = ctx.masks.mask[base]
+  if (typeof cell === 'undefined') {
+    if (Option.isNone(ctx.maskFailure.failure)) {
+      ctx.maskFailure.failure = Option.some({ _tag: 'GreedyMaskIndexOutOfRange', index: base })
+    }
+    return
+  }
   if (cell === NO_FACE) {
     return
   }
@@ -267,13 +281,16 @@ type ColumnPassContext = {
   readonly chunk: ChunkView
   readonly face: Face
   readonly fluids: Uint16Array
-  readonly lookup: Uint8Array
+  readonly lookup: LayerLookup
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly placement: FacePlacement
   readonly plants: Uint8Array
+  readonly specialLookup: SpecialBlockLookup
   readonly push: (quad: Quad) => void
   readonly light: LightMasks | undefined
+  readonly region: MeshRegion | undefined
+  readonly maskFailure: { failure: Option.Option<GreedyMaskFailure> }
 }
 
 type MeshPassContext = ColumnPassContext & {
@@ -283,12 +300,14 @@ type MeshPassContext = ColumnPassContext & {
 export type MeshAllFacesContext = {
   readonly chunk: ChunkView
   readonly fluids: Uint16Array
-  readonly lookup: Uint8Array
+  readonly lookup: LayerLookup
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly plants: Uint8Array
+  readonly specialLookup: SpecialBlockLookup
   readonly push: (quad: Quad) => void
   readonly light: LightMasks | undefined
+  readonly region?: MeshRegion
   readonly yLimit: number
 }
 
@@ -310,10 +329,10 @@ const resolveExposedCell = (
   lx: number,
   y: number,
   lz: number,
-  neighbourId: number,
+  neighbourId: BlockId,
   maskIndex: number,
 ): void => {
-  if (isFaceExposed(ctx.lookup, ctx.plants, blockId, neighbourId)) {
+  if (isFaceExposed(ctx, blockId, neighbourId)) {
     const ao = ambientOcclusionAt(ctx.chunk, ctx.neighbours, ctx.face.direction, lx, y, lz)
     const light = lightAt(ctx, lx, y, lz)
     if (layerAt(ctx.lookup, blockId) === OPAQUE_LAYER) {
@@ -338,11 +357,11 @@ const resolveExposedCell = (
   }
 }
 
-const isPaintableCell = (ctx: ColumnPassContext, blockId: number): boolean =>
+const isPaintableCell = (ctx: ColumnPassContext, blockId: BlockId): boolean =>
   blockId !== AIR &&
   !isCrossPlant(ctx.plants, blockId) &&
   !isFluidBlock(ctx.fluids, blockId) &&
-  !isSpecialBlock(blockId)
+  !isSpecialBlock(ctx.specialLookup, blockId)
 
 const clearMasks = (ctx: ColumnPassContext, length: number): void => {
   ctx.mask.fill(NO_FACE, FIRST_INDEX, length)
@@ -354,10 +373,15 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
   const { blocks, height } = ctx.chunk
   const xBase = lx * height * CHUNK_SIZE
   clearMasks(ctx, CHUNK_SIZE * yLimit)
-  for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
+  if (lx < regionMinLx || lx >= regionMaxLx) {
+    return
+  }
+  for (let lz = regionMinLz; lz < regionMaxLz; lz += STEP) {
     const columnBase = xBase + lz * height
     const rowBase = lz * yLimit
-    for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
+    for (let y = regionMinY; y < Math.min(regionMaxY, yLimit); y += STEP) {
       const blockId = blockIdAt(blocks, columnBase + y)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
@@ -377,10 +401,15 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
 const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
   const { blocks, height } = ctx.chunk
   clearMasks(ctx, CHUNK_SIZE * CHUNK_SIZE)
-  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, ctx.chunk.height, CHUNK_SIZE]
+  if (y < regionMinY || y >= regionMaxY) {
+    return
+  }
+  for (let lx = regionMinLx; lx < regionMaxLx; lx += STEP) {
     const columnBase = lx * height * CHUNK_SIZE + y
     const rowBase = lx * CHUNK_SIZE
-    for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+    for (let lz = regionMinLz; lz < regionMaxLz; lz += STEP) {
       const blockId = blockIdAt(blocks, columnBase + lz * height)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
@@ -400,10 +429,15 @@ const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
 const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): void => {
   const { blocks, height } = ctx.chunk
   clearMasks(ctx, CHUNK_SIZE * yLimit)
-  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
+  if (lz < regionMinLz || lz >= regionMaxLz) {
+    return
+  }
+  for (let lx = regionMinLx; lx < regionMaxLx; lx += STEP) {
     const columnBase = lz * height + lx * height * CHUNK_SIZE
     const rowBase = lx * yLimit
-    for (let y = FIRST_INDEX; y < yLimit; y += STEP) {
+    for (let y = regionMinY; y < Math.min(regionMaxY, yLimit); y += STEP) {
       const blockId = blockIdAt(blocks, columnBase + y)
       if (isPaintableCell(ctx, blockId)) {
         resolveExposedCell(
@@ -443,9 +477,12 @@ const meshXPass = (ctx: MeshPassContext): void => {
     innerSize: ctx.yLimit,
     masks,
     outerSize: CHUNK_SIZE,
+    maskFailure: ctx.maskFailure,
   }
 
-  for (let lx = FIRST_INDEX; lx < CHUNK_SIZE; lx += STEP) {
+  const [minLx, ,] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [maxLx, ,] = ctx.region?.max ?? [CHUNK_SIZE, ctx.yLimit, CHUNK_SIZE]
+  for (let lx = minLx; lx < maxLx; lx += STEP) {
     fillXSliceMask(ctx, lx, ctx.yLimit)
     expandGreedy(expansion, lx)
   }
@@ -474,9 +511,12 @@ const meshYPass = (ctx: MeshPassContext): void => {
     innerSize: CHUNK_SIZE,
     masks,
     outerSize: CHUNK_SIZE,
+    maskFailure: ctx.maskFailure,
   }
 
-  for (let y = FIRST_INDEX; y < ctx.yLimit; y += STEP) {
+  const [, minY,] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [, maxY,] = ctx.region?.max ?? [CHUNK_SIZE, ctx.yLimit, CHUNK_SIZE]
+  for (let y = minY; y < Math.min(maxY, ctx.yLimit); y += STEP) {
     fillYSliceMask(ctx, y)
     expandGreedy(expansion, y)
   }
@@ -505,15 +545,18 @@ const meshZPass = (ctx: MeshPassContext): void => {
     innerSize: ctx.yLimit,
     masks,
     outerSize: CHUNK_SIZE,
+    maskFailure: ctx.maskFailure,
   }
 
-  for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
+  const [, , minLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [, , maxLz] = ctx.region?.max ?? [CHUNK_SIZE, ctx.yLimit, CHUNK_SIZE]
+  for (let lz = minLz; lz < maxLz; lz += STEP) {
     fillZSliceMask(ctx, lz, ctx.yLimit)
     expandGreedy(expansion, lz)
   }
 }
 
-const meshFace = (ctx: MeshPassContext): void => {
+function meshFace(ctx: MeshPassContext): void {
   if (ctx.face.nx !== NO_OFFSET) {
     meshXPass(ctx)
   } else if (ctx.face.ny !== NO_OFFSET) {
@@ -523,7 +566,8 @@ const meshFace = (ctx: MeshPassContext): void => {
   }
 }
 
-export const meshAllFaces = (ctx: MeshAllFacesContext): void => {
+export const meshAllFaces = (ctx: MeshAllFacesContext): Result.Result<void, GreedyMaskFailure> => {
+  const maskFailure: { failure: Option.Option<GreedyMaskFailure> } = { failure: Option.none() }
   for (const face of FACES) {
     const faceContext: MeshPassContext = {
       chunk: ctx.chunk,
@@ -535,9 +579,16 @@ export const meshAllFaces = (ctx: MeshAllFacesContext): void => {
       neighbours: ctx.neighbours,
       placement: facePlacementOf(face.direction),
       plants: ctx.plants,
+      specialLookup: ctx.specialLookup,
       push: ctx.push,
+      region: ctx.region,
+      maskFailure,
       yLimit: ctx.yLimit,
     }
     meshFace(faceContext)
   }
+  if (Option.isSome(maskFailure.failure)) {
+    return Result.fail(maskFailure.failure.value)
+  }
+  return Result.void
 }

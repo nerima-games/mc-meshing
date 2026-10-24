@@ -1,20 +1,23 @@
 import { describe, expect, it } from 'vitest'
+import { Result } from 'effect'
 import {
-  meshBlockModel,
-  meshBlockState,
+  meshBlockModel as meshBlockModelResult,
+  meshBlockState as meshBlockStateResult,
 } from '../src/domain/resource-pack-mesh.js'
 import {
-  normalizeResourceName,
-  resolveBlockModel,
-  resolveBlockStateModels,
-  resolveModelTexture,
+  normalizeResourceName as normalizeResourceNameResult,
+  resolveBlockModel as resolveBlockModelResult,
+  resolveBlockStateModels as resolveBlockStateModelsResult,
+  resolveModelTexture as resolveModelTextureResult,
 } from '../src/domain/resource-pack-resolver.js'
 import type {
+  ModelName,
   ModelElement,
   ModelElementRotation,
   ModelFace,
   ResourceModelFaceDirection,
   ResourceModelTransform,
+  ResourceName,
   ResourcePackAssets,
 } from '../src/domain/resource-pack-types.js'
 
@@ -26,6 +29,35 @@ import type {
  * `as`/`!`), so it doesn't trip the org's `no-type-assertion` ast-grep rule.
  */
 const invalidFixture = <T,>(value: any): T => value
+
+const successOf = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
+}
+
+const failureOf = <Value, Failure>(result: Result.Result<Value, Failure>): Failure => {
+  if (Result.isFailure(result)) {
+    return result.failure
+  }
+  throw new Error('Expected a Result failure')
+}
+
+const normalizeResourceName = (...args: Parameters<typeof normalizeResourceNameResult>) =>
+  successOf(normalizeResourceNameResult(...args))
+const resolveBlockModel = (...args: Parameters<typeof resolveBlockModelResult>) =>
+  successOf(resolveBlockModelResult(...args))
+const resolveBlockStateModels = (...args: Parameters<typeof resolveBlockStateModelsResult>) =>
+  successOf(resolveBlockStateModelsResult(...args))
+const resolveModelTexture = (...args: Parameters<typeof resolveModelTextureResult>) =>
+  successOf(resolveModelTextureResult(...args))
+const meshBlockModel = (...args: Parameters<typeof meshBlockModelResult>) =>
+  successOf(meshBlockModelResult(...args))
+const meshBlockState = (...args: Parameters<typeof meshBlockStateResult>) =>
+  successOf(meshBlockStateResult(...args))
+const modelName = (name: string): ModelName => successOf(normalizeResourceNameResult(name, 'model'))
+const resourceName = (name: string): ResourceName => successOf(normalizeResourceNameResult(name, 'blockstate'))
 
 const face = (texture: string, options: Omit<ModelFace, 'texture'> = {}): ModelFace => ({
   texture,
@@ -177,64 +209,77 @@ describe('resource-pack resolver', () => {
     expect(normalizeResourceName(' models/demo.json ', 'model')).toBe('minecraft:demo')
     expect(normalizeResourceName('blockstates/demo.json', 'blockstate')).toBe('minecraft:demo')
     expect(normalizeResourceName('custom:block/demo', 'model')).toBe('custom:block/demo')
-    expect(() => normalizeResourceName('  ', 'model')).toThrow(RangeError)
-    expect(() => normalizeResourceName('models/.json', 'model')).toThrow(RangeError)
+    expect(failureOf(normalizeResourceNameResult('bad:', 'model'))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-resource-name',
+    })
+    expect(failureOf(normalizeResourceNameResult('  ', 'model'))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-resource-name',
+    })
+    expect(failureOf(normalizeResourceNameResult('models/.json', 'model'))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-resource-name',
+    })
   })
 
   it('resolves variants, fallback entries, weights, and normalized transforms', () => {
     const specific = resolveBlockStateModels(
-      'blockstates/demo.json',
+      resourceName('blockstates/demo.json'),
       { facing: 'north', open: 'false' },
       assets,
       { seed: 7 },
     )
     expect(specific).toEqual([{ model: 'minecraft:block/child', x: 0, y: 90, z: 0, uvlock: true }])
 
-    const single = resolveBlockStateModels('demo', { single: 'one' }, assets)
+    const single = resolveBlockStateModels(resourceName('demo'), { single: 'one' }, assets)
     expect(single[0]?.model).toBe('minecraft:block/child')
 
-    const fallback = resolveBlockStateModels('demo', { facing: 'west' }, assets)
+    const fallback = resolveBlockStateModels(resourceName('demo'), { facing: 'west' }, assets)
     expect(fallback[0]?.model).toBe('minecraft:block/inherit')
 
-    const weighted = resolveBlockStateModels('demo', { facing: 'east' }, assets, { seed: 1 })
+    const weighted = resolveBlockStateModels(resourceName('demo'), { facing: 'east' }, assets, { seed: 1 })
     expect(weighted[0]?.model).toBe('minecraft:block/weighted-a')
-    const weightedLast = resolveBlockStateModels('demo', { facing: 'east' }, assets, { seed: 12 })
+    const weightedLast = resolveBlockStateModels(resourceName('demo'), { facing: 'east' }, assets, { seed: 12 })
     expect(weightedLast[0]?.model).toBe('minecraft:block/weighted-b')
 
     const bareStateAssets: ResourcePackAssets = {
       blockstates: { bare: { variants: { '': { model: 'block/bare' } } } },
       models: {},
     }
-    expect(resolveBlockStateModels('bare', {}, bareStateAssets)[0]?.model).toBe('minecraft:block/bare')
+    expect(resolveBlockStateModels(resourceName('bare'), {}, bareStateAssets)[0]?.model).toBe('minecraft:block/bare')
   })
 
   it('resolves multipart OR and AND conditions', () => {
-    expect(resolveBlockStateModels('multi', { powered: 'true', open: 'true' }, assets)).toHaveLength(3)
-    expect(resolveBlockStateModels('multi', { powered: 'false', facing: 'east' }, assets)).toHaveLength(2)
-    expect(resolveBlockStateModels('multi', { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
+    expect(resolveBlockStateModels(resourceName('multi'), { powered: 'true', open: 'true' }, assets)).toHaveLength(3)
+    expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'east' }, assets)).toHaveLength(2)
+    expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
   })
 
   it('reports malformed or missing blockstates', () => {
-    expect(() => resolveBlockStateModels('missing', {}, assets)).toThrow('Missing blockstate asset')
-    expect(() => resolveBlockStateModels('demo', {}, { ...assets, blockstates: { 'minecraft:demo': { variants: { bad: { model: 'block/bare' } } } } })).toThrow(
-      'No blockstate variant',
-    )
-    expect(() =>
-      resolveBlockStateModels('demo', {}, {
+    expect(failureOf(resolveBlockStateModelsResult(resourceName('missing'), {}, assets))).toMatchObject({
+      code: 'missing-blockstate',
+      message: 'Missing blockstate asset: minecraft:missing',
+    })
+    expect(failureOf(resolveBlockStateModelsResult(resourceName('demo'), {}, { ...assets, blockstates: { 'minecraft:demo': { variants: { bad: { model: 'block/bare' } } } } }))).toMatchObject({
+      code: 'no-matching-variant',
+    })
+    expect(failureOf(
+      resolveBlockStateModelsResult(resourceName('demo'), {}, {
         ...assets,
         blockstates: invalidFixture<ResourcePackAssets['blockstates']>({ 'minecraft:demo': {} }),
       }),
-    ).toThrow('must define variants or multipart')
-    expect(() =>
-      resolveBlockStateModels('demo', {}, {
+    )).toMatchObject({ code: 'invalid-blockstate-definition' })
+    expect(failureOf(
+      resolveBlockStateModelsResult(resourceName('demo'), {}, {
         ...assets,
         blockstates: invalidFixture<ResourcePackAssets['blockstates']>({
           'minecraft:demo': { variants: { '': [] } },
         }),
       }),
-    ).toThrow('must not be empty')
-    expect(() =>
-      resolveBlockStateModels('demo', {}, {
+    )).toMatchObject({ code: 'empty-variant-list' })
+    expect(failureOf(
+      resolveBlockStateModelsResult(resourceName('demo'), {}, {
         ...assets,
         blockstates: {
           'minecraft:demo': {
@@ -247,9 +292,9 @@ describe('resource-pack resolver', () => {
           },
         },
       }),
-    ).toThrow('positive and finite')
-    expect(() =>
-      resolveBlockStateModels('demo', {}, {
+    )).toMatchObject({ code: 'invalid-variant-weight' })
+    expect(failureOf(
+      resolveBlockStateModelsResult(resourceName('demo'), {}, {
         ...assets,
         blockstates: {
           'minecraft:demo': {
@@ -262,11 +307,11 @@ describe('resource-pack resolver', () => {
           },
         },
       }),
-    ).toThrow('positive and finite')
+    )).toMatchObject({ code: 'invalid-variant-weight' })
   })
 
   it('merges parent models and resolves texture variables', () => {
-    const inherited = resolveBlockModel('block/inherit', assets)
+    const inherited = resolveBlockModel(modelName('block/inherit'), assets)
     expect(inherited).toMatchObject({
       name: 'minecraft:block/inherit',
       ambientOcclusion: false,
@@ -277,16 +322,16 @@ describe('resource-pack resolver', () => {
     })
     expect(inherited.elements).toEqual([baseElement])
 
-    const child = resolveBlockModel('block/child', assets)
+    const child = resolveBlockModel(modelName('block/child'), assets)
     expect(child.ambientOcclusion).toBe(true)
     expect(child.elements).toHaveLength(1)
-    expect(resolveBlockModel('block/bare', assets).name).toBe('minecraft:block/bare')
-    expect(resolveBlockModel('block/empty', assets)).toMatchObject({
+    expect(resolveBlockModel(modelName('block/bare'), assets).name).toBe('minecraft:block/bare')
+    expect(resolveBlockModel(modelName('block/empty'), assets)).toMatchObject({
       ambientOcclusion: true,
       textures: {},
       elements: [],
     })
-    expect(resolveBlockModel('builtin/generated', assets).elements).toEqual([])
+    expect(resolveBlockModel(modelName('builtin/generated'), assets).elements).toEqual([])
 
     const textureModel = {
       ...inherited,
@@ -294,15 +339,19 @@ describe('resource-pack resolver', () => {
     }
     expect(resolveModelTexture(textureModel, '#outer')).toBe('minecraft:test')
     expect(resolveModelTexture(textureModel, 'custom:direct')).toBe('custom:direct')
-    expect(() => resolveModelTexture(textureModel, '#missing')).toThrow('Missing texture variable')
-    expect(() => resolveModelTexture({ ...textureModel, textures: { loop: '#loop' } }, '#loop')).toThrow(
-      'Texture reference cycle',
-    )
-    expect(() => resolveModelTexture(textureModel, '  ')).toThrow('must not be empty')
+    expect(failureOf(resolveModelTextureResult(textureModel, '#missing'))).toMatchObject({
+      code: 'missing-texture-variable',
+    })
+    expect(failureOf(resolveModelTextureResult({ ...textureModel, textures: { loop: '#loop' } }, '#loop'))).toMatchObject({
+      code: 'texture-reference-cycle',
+    })
+    expect(failureOf(resolveModelTextureResult(textureModel, '  '))).toMatchObject({
+      code: 'invalid-texture-reference',
+    })
   })
 
   it('reports missing models and parent cycles', () => {
-    expect(() => resolveBlockModel('missing', assets)).toThrow('Missing model asset')
+    expect(failureOf(resolveBlockModelResult(modelName('missing'), assets))).toMatchObject({ code: 'missing-model' })
     const cyclic: ResourcePackAssets = {
       blockstates: {},
       models: {
@@ -310,16 +359,16 @@ describe('resource-pack resolver', () => {
         'minecraft:block/b': { parent: 'block/a' },
       },
     }
-    expect(() => resolveBlockModel('block/a', cyclic)).toThrow('parent cycle')
-    expect(() => resolveBlockModel('block/a', { blockstates: {}, models: { 'minecraft:block/a': { parent: 'block/missing' } } })).toThrow(
-      'Missing model asset',
-    )
+    expect(failureOf(resolveBlockModelResult(modelName('block/a'), cyclic))).toMatchObject({ code: 'block-model-cycle' })
+    expect(failureOf(resolveBlockModelResult(modelName('block/a'), { blockstates: {}, models: { 'minecraft:block/a': { parent: 'block/missing' } } }))).toMatchObject({
+      code: 'missing-model',
+    })
   })
 })
 
 describe('resource-pack mesh', () => {
   it('meshes every face direction, texture metadata, and block rotation', () => {
-    const quads = meshBlockModel('block/base', assets, { y: 90, uvlock: true })
+    const quads = meshBlockModel(modelName('block/base'), assets, { y: 90, uvlock: true })
     expect(quads).toHaveLength(6)
     expect(quads[0]).toMatchObject({
       model: 'minecraft:block/base',
@@ -338,12 +387,12 @@ describe('resource-pack mesh', () => {
   })
 
   it('meshes element rotations, rescale, UV fallback, and multipart states', () => {
-    const rotations = meshBlockModel('block/rotations', assets, { x: 90, y: 180, z: 270, uvlock: true })
+    const rotations = meshBlockModel(modelName('block/rotations'), assets, { x: 90, y: 180, z: 270, uvlock: true })
     expect(rotations).toHaveLength(3)
     expect(rotations.every((quad) => quad.vertices.every((point) => point.every(Number.isFinite)))).toBe(true)
     expect(rotations.every((quad) => quad.normal.every(Number.isFinite))).toBe(true)
 
-    const multiAxis = meshBlockModel('block/multi-axis', assets)
+    const multiAxis = meshBlockModel(modelName('block/multi-axis'), assets)
     expect(multiAxis).toHaveLength(1)
     expect(multiAxis[0]).toMatchObject({ direction: 'yPos', cullface: 'yPos', shade: false })
     const [normalX, normalY, normalZ] = multiAxis[0]?.normal ?? [0, 0, 0]
@@ -385,7 +434,7 @@ describe('resource-pack mesh', () => {
       },
     }
     const partialRotations = ['block/partial-x', 'block/partial-y', 'block/partial-z'].flatMap(
-      (model) => meshBlockModel(model, partialRotationAssets),
+      (model) => meshBlockModel(modelName(model), partialRotationAssets),
     )
     expect(partialRotations).toHaveLength(3)
     expect(
@@ -394,27 +443,30 @@ describe('resource-pack mesh', () => {
       ),
     ).toBe(true)
 
-    const legacy = meshBlockModel('block/legacy-only', assets)
-    const precedence = meshBlockModel('block/legacy-precedence', assets)
+    const legacy = meshBlockModel(modelName('block/legacy-only'), assets)
+    const precedence = meshBlockModel(modelName('block/legacy-precedence'), assets)
     expect(precedence[0]?.vertices).toEqual(legacy[0]?.vertices)
     expect(precedence[0]?.normal).toEqual(legacy[0]?.normal)
 
-    const stateQuads = meshBlockState('demo', { facing: 'north', open: 'false' }, assets, { seed: 3 })
+    const stateQuads = meshBlockState(resourceName('demo'), { facing: 'north', open: 'false' }, assets, { seed: 3 })
     expect(stateQuads).toHaveLength(2)
     expect(stateQuads.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
     expect(stateQuads.every((quad) => quad.ambientOcclusion)).toBe(true)
 
-    const multipartQuads = meshBlockState('multi', { powered: 'true', open: 'true' }, assets)
+    const multipartQuads = meshBlockState(resourceName('multi'), { powered: 'true', open: 'true' }, assets)
     expect(multipartQuads).toHaveLength(9)
   })
 
   it('meshes models without elements as an empty result', () => {
-    expect(meshBlockModel('builtin/generated', assets)).toEqual([])
+    expect(meshBlockModel(modelName('builtin/generated'), assets)).toEqual([])
   })
 
   it('rejects non-axis-aligned runtime block rotations', () => {
     const invalidTransform = invalidFixture<ResourceModelTransform>({ y: 45 })
-    expect(() => meshBlockModel('block/base', assets, invalidTransform)).toThrow('axis-aligned')
+    expect(failureOf(meshBlockModelResult(modelName('block/base'), assets, invalidTransform))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'non-axis-aligned-face',
+    })
   })
 
   it('rejects incomplete element rotations and degenerate faces', () => {
@@ -442,8 +494,17 @@ describe('resource-pack mesh', () => {
       },
     }
 
-    expect(() => meshBlockModel('block/incomplete-rotation', incompleteRotationAssets)).toThrow('provided together')
-    expect(() => meshBlockModel('block/missing-rotation', incompleteRotationAssets)).toThrow('axis/angle or x/y/z')
-    expect(() => meshBlockModel('block/degenerate', incompleteRotationAssets)).toThrow('non-zero area')
+    expect(failureOf(meshBlockModelResult(modelName('block/incomplete-rotation'), incompleteRotationAssets))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'invalid-element-rotation',
+    })
+    expect(failureOf(meshBlockModelResult(modelName('block/missing-rotation'), incompleteRotationAssets))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'invalid-element-rotation',
+    })
+    expect(failureOf(meshBlockModelResult(modelName('block/degenerate'), incompleteRotationAssets))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'degenerate-face',
+    })
   })
 })

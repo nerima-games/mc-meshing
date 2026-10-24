@@ -10,12 +10,51 @@ import type {
   BlockStateVariant,
   BlockStateVariantList,
   ModelElement,
+  ModelName,
   ResolvedBlockModel,
   ResolvedBlockStateModel,
+  ResourceName,
   ResourcePackAssets,
+  TextureName,
 } from './resource-pack-types.js'
+import { Brand, Option, Result } from 'effect'
 
 export type ResourceAssetKind = 'blockstate' | 'model'
+
+
+export type ResourcePackResolutionFailureCode =
+  | 'invalid-resource-name'
+  | 'invalid-texture-reference'
+  | 'missing-blockstate'
+  | 'empty-variant-list'
+  | 'invalid-variant-weight'
+  | 'no-matching-variant'
+  | 'missing-model'
+  | 'invalid-blockstate-definition'
+  | 'block-model-cycle'
+  | 'texture-reference-cycle'
+  | 'missing-texture-variable'
+
+export type ResourcePackResolutionFailure = {
+  readonly _tag: 'ResourcePackResolutionFailure'
+  readonly code: ResourcePackResolutionFailureCode
+  readonly message: string
+}
+
+const resolutionFailure = (
+  code: ResourcePackResolutionFailureCode,
+  message: string,
+): ResourcePackResolutionFailure => ({
+  _tag: 'ResourcePackResolutionFailure',
+  code,
+  message,
+})
+
+const failResolution = (
+  code: ResourcePackResolutionFailureCode,
+  message: string,
+): Result.Result<never, ResourcePackResolutionFailure> =>
+  Result.fail(resolutionFailure(code, message))
 
 const JSON_SUFFIX = '.json'
 const JSON_SUFFIX_LENGTH = JSON_SUFFIX.length
@@ -35,6 +74,36 @@ const RANDOM_SEED_MIX_A = 0x9e3779b9
 const RANDOM_SEED_MIX_B = 0x85ebca6b
 const RANDOM_SHIFT = 13
 const UNIT_INTERVAL_SIZE = 0x100000000
+
+const isCanonicalName = (name: string): boolean => {
+  const separator = name.indexOf(NAMESPACE_SEPARATOR)
+  return name === name.trim() && separator > FIRST_INDEX && separator < name.length - INDEX_STEP
+}
+
+const resourceNameBrand = Brand.nominal<ResourceName>()
+const modelNameBrand = Brand.nominal<ModelName>()
+const textureNameBrand = Brand.nominal<TextureName>()
+
+const resourceNameOf = (name: string): Result.Result<ResourceName, ResourcePackResolutionFailure> => {
+  if (!isCanonicalName(name)) {
+    return failResolution('invalid-resource-name', 'Expected a normalized resource name')
+  }
+  return Result.succeed(resourceNameBrand(name))
+}
+
+const modelNameOf = (name: string): Result.Result<ModelName, ResourcePackResolutionFailure> => {
+  if (!isCanonicalName(name)) {
+    return failResolution('invalid-resource-name', 'Expected a normalized model name')
+  }
+  return Result.succeed(modelNameBrand(name))
+}
+
+const textureNameOf = (name: string): Result.Result<TextureName, ResourcePackResolutionFailure> => {
+  if (!isCanonicalName(name)) {
+    return failResolution('invalid-texture-reference', 'Expected a normalized texture name')
+  }
+  return Result.succeed(textureNameBrand(name))
+}
 
 const stripJsonSuffix = (name: string): string => {
   if (!name.endsWith(JSON_SUFFIX)) {
@@ -65,55 +134,75 @@ const namespacedPathOf = (path: string): string => {
 }
 
 /** Normalize a resource-pack path to a namespaced logical asset name. */
-export const normalizeResourceName = (name: string, kind: ResourceAssetKind): string => {
+export function normalizeResourceName(
+  name: string,
+  kind: 'blockstate',
+): Result.Result<ResourceName, ResourcePackResolutionFailure>
+export function normalizeResourceName(
+  name: string,
+  kind: 'model',
+): Result.Result<ModelName, ResourcePackResolutionFailure>
+export function normalizeResourceName(
+  name: string,
+  kind: ResourceAssetKind,
+): Result.Result<ResourceName | ModelName, ResourcePackResolutionFailure>
+export function normalizeResourceName(
+  name: string,
+  kind: ResourceAssetKind,
+): Result.Result<ResourceName | ModelName, ResourcePackResolutionFailure> {
   const trimmed = name.trim()
   if (trimmed.length === FIRST_INDEX) {
-    throw new RangeError('Resource names must not be empty')
+    return failResolution('invalid-resource-name', 'Resource names must not be empty')
   }
   const path = pathWithoutDirectory(stripJsonSuffix(trimmed), directoryOf(kind))
   if (path.length === FIRST_INDEX) {
-    throw new RangeError('Resource names must contain a path')
+    return failResolution('invalid-resource-name', 'Resource names must contain a path')
   }
-  return namespacedPathOf(path)
+  const canonicalName = namespacedPathOf(path)
+  if (kind === 'model') {
+    return modelNameOf(canonicalName)
+  }
+  return resourceNameOf(canonicalName)
 }
 
-const normalizeTextureName = (name: string): string => {
+const normalizeTextureName = (name: string): Result.Result<TextureName, ResourcePackResolutionFailure> => {
   const trimmed = name.trim()
   if (trimmed.length === FIRST_INDEX) {
-    throw new RangeError('Texture references must not be empty')
+    return failResolution('invalid-texture-reference', 'Texture references must not be empty')
   }
   const path = pathWithoutDirectory(stripJsonSuffix(trimmed), TEXTURE_DIRECTORY)
-  return namespacedPathOf(path)
+  return textureNameOf(namespacedPathOf(path))
 }
 
-const bareNameOf = (canonical: string): string => {
+const bareNameOf = (canonical: ResourceName | ModelName): string => {
   const separator = canonical.indexOf(NAMESPACE_SEPARATOR)
   return canonical.slice(separator + INDEX_STEP)
 }
 
 const findAsset = <Asset>(
   assets: Readonly<Record<string, Asset>>,
-  name: string,
-  kind: ResourceAssetKind,
-): Asset | undefined => {
-  const canonical = normalizeResourceName(name, kind)
+  canonical: ResourceName | ModelName,
+): Result.Result<Option.Option<Asset>, ResourcePackResolutionFailure> => {
   const candidates = [canonical, bareNameOf(canonical)]
   for (const candidate of candidates) {
     const asset = assets[candidate]
     if (typeof asset !== 'undefined') {
-      return asset
+      return Result.succeed(Option.some(asset))
     }
   }
-  return
+  return Result.succeed(Option.none())
 }
 
-const blockStateDefinitionOf = (assets: ResourcePackAssets, name: string): BlockStateDefinition => {
-  const definition = findAsset(assets.blockstates, name, 'blockstate')
-  if (typeof definition === 'undefined') {
-    throw new Error(`Missing blockstate asset: ${normalizeResourceName(name, 'blockstate')}`)
-  }
-  return definition
-}
+const blockStateDefinitionOf = (
+  assets: ResourcePackAssets,
+  name: ResourceName,
+): Result.Result<BlockStateDefinition, ResourcePackResolutionFailure> =>
+  Result.flatMap(findAsset(assets.blockstates, name), (definition) => {
+    if (Option.isNone(definition)) {
+      return failResolution('missing-blockstate', `Missing blockstate asset: ${name}`)
+    }
+    return Result.succeed(definition.value)
+  })
 
 const propertyValueMatches = (properties: BlockStateProperties, key: string, expected: string): boolean => {
   const actual = properties[key]
@@ -154,23 +243,28 @@ const isVariantList = (
   variant: BlockStateVariant | BlockStateVariantList,
 ): variant is BlockStateVariantList => Array.isArray(variant)
 
-const variantListOf = (variant: BlockStateVariant | BlockStateVariantList): BlockStateVariantList => {
+const variantListOf = (
+  variant: BlockStateVariant | BlockStateVariantList,
+): Result.Result<BlockStateVariantList, ResourcePackResolutionFailure> => {
   if (isVariantList(variant)) {
     const [first, ...rest] = variant
     if (typeof first === 'undefined') {
-      throw new RangeError('A blockstate variant list must not be empty')
+      return failResolution('empty-variant-list', 'A blockstate variant list must not be empty')
     }
-    return [first, ...rest]
+    return Result.succeed([first, ...rest])
   }
-  return [variant]
+  return Result.succeed([variant])
 }
 
-const variantWeightOf = (variant: BlockStateVariant): number => {
+const variantWeightOf = (variant: BlockStateVariant): Result.Result<number, ResourcePackResolutionFailure> => {
   const weight = variant.weight ?? DEFAULT_VARIANT_WEIGHT
   if (!Number.isFinite(weight) || weight <= FIRST_INDEX) {
-    throw new RangeError(`Blockstate variant weight must be positive and finite, received ${weight}`)
+    return failResolution(
+      'invalid-variant-weight',
+      `Blockstate variant weight must be positive and finite, received ${weight}`,
+    )
   }
-  return weight
+  return Result.succeed(weight)
 }
 
 const randomUnitOf = (seed: number): number => {
@@ -180,49 +274,76 @@ const randomUnitOf = (seed: number): number => {
   return (value >>> FIRST_INDEX) / UNIT_INTERVAL_SIZE
 }
 
-const weightedVariantOf = (variants: BlockStateVariantList, seed: number): BlockStateVariant => {
-  const total = variants.reduce((sum, variant) => sum + variantWeightOf(variant), FIRST_INDEX)
-  let cursor = randomUnitOf(seed) * total
-  let selected = variants[FIRST_INDEX]
+const weightedVariantOf = (
+  variants: BlockStateVariantList,
+  seed: number,
+): Result.Result<BlockStateVariant, ResourcePackResolutionFailure> => {
+  const weighted: Array<{ readonly variant: BlockStateVariant; readonly weight: number }> = []
+  let total = FIRST_INDEX
   for (const variant of variants) {
-    cursor -= variantWeightOf(variant)
+    const weight = variantWeightOf(variant)
+    if (Result.isFailure(weight)) {
+      return Result.fail(weight.failure)
+    }
+    total += weight.success
+    weighted.push({ variant, weight: weight.success })
+  }
+  const first = weighted[FIRST_INDEX]
+  if (typeof first === 'undefined') {
+    return failResolution('empty-variant-list', 'A blockstate variant list must not be empty')
+  }
+  if (!Number.isFinite(total)) {
+    return failResolution('invalid-variant-weight', `Blockstate variant weights overflowed: ${total}`)
+  }
+  let cursor = randomUnitOf(seed) * total
+  let selected = first.variant
+  for (const item of weighted) {
+    cursor -= item.weight
     if (cursor < FIRST_INDEX) {
-      selected = variant
+      selected = item.variant
       break
     }
   }
-  return selected
+  return Result.succeed(selected)
 }
 
-const chooseVariant = (variants: BlockStateVariantList, seed: number): BlockStateVariant =>
+const chooseVariant = (variants: BlockStateVariantList, seed: number): Result.Result<BlockStateVariant, ResourcePackResolutionFailure> =>
   weightedVariantOf(variants, seed)
 
-const resolvedVariantOf = (variant: BlockStateVariant): ResolvedBlockStateModel => ({
-  model: normalizeResourceName(variant.model, 'model'),
-  uvlock: variant.uvlock ?? false,
-  x: variant.x ?? DEFAULT_ROTATION,
-  y: variant.y ?? DEFAULT_ROTATION,
-  z: variant.z ?? DEFAULT_ROTATION,
-})
+const resolvedVariantOf = (
+  variant: BlockStateVariant,
+): Result.Result<ResolvedBlockStateModel, ResourcePackResolutionFailure> =>
+  Result.map(normalizeResourceName(variant.model, 'model'), (model) => ({
+    model,
+    uvlock: variant.uvlock ?? false,
+    x: variant.x ?? DEFAULT_ROTATION,
+    y: variant.y ?? DEFAULT_ROTATION,
+    z: variant.z ?? DEFAULT_ROTATION,
+  }))
 
 const resolvedVariantsOf = (
   variant: BlockStateVariant | BlockStateVariantList,
   seed: number,
-): ReadonlyArray<ResolvedBlockStateModel> => [resolvedVariantOf(chooseVariant(variantListOf(variant), seed))]
+): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> =>
+  Result.flatMap(variantListOf(variant), (variants) =>
+    Result.flatMap(chooseVariant(variants, seed), (chosen) =>
+      Result.map(resolvedVariantOf(chosen), (resolved) => [resolved]),
+    ),
+  )
 
 const matchingVariantOf = (
   variants: Readonly<Record<string, BlockStateVariant | BlockStateVariantList>>,
   properties: BlockStateProperties,
-): BlockStateVariant | BlockStateVariantList => {
+): Result.Result<BlockStateVariant | BlockStateVariantList, ResourcePackResolutionFailure> => {
   const specific = Object.entries(variants).find(([key]) => key.length > FIRST_INDEX && variantKeyMatches(key, properties))
   if (typeof specific !== 'undefined') {
-    return specific[INDEX_STEP]
+    return Result.succeed(specific[INDEX_STEP])
   }
   const fallback = variants['']
   if (typeof fallback === 'undefined') {
-    throw new Error('No blockstate variant matches the supplied properties')
+    return failResolution('no-matching-variant', 'No blockstate variant matches the supplied properties')
   }
-  return fallback
+  return Result.succeed(fallback)
 }
 
 const multipartPartMatches = (part: BlockStateMultipart, properties: BlockStateProperties): boolean => {
@@ -236,94 +357,117 @@ const resolvedMultipartOf = (
   parts: ReadonlyArray<BlockStateMultipart>,
   properties: BlockStateProperties,
   seed: number,
-): ReadonlyArray<ResolvedBlockStateModel> =>
-  parts.flatMap((part, index) => {
+): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> => {
+  const models: Array<ResolvedBlockStateModel> = []
+  for (const [index, part] of parts.entries()) {
     if (!multipartPartMatches(part, properties)) {
-      return []
+      continue
     }
-    return resolvedVariantsOf(part.apply, seed + index)
-  })
+    const resolved = resolvedVariantsOf(part.apply, seed + index)
+    if (Result.isFailure(resolved)) {
+      return Result.fail(resolved.failure)
+    }
+    models.push(...resolved.success)
+  }
+  return Result.succeed(models)
+}
 
 /** Resolve variants and multipart applications without reading the filesystem. */
 export const resolveBlockStateModels = (
-  name: string,
+  name: ResourceName,
   properties: BlockStateProperties,
   assets: ResourcePackAssets,
   options?: BlockStateResolveOptions,
-): ReadonlyArray<ResolvedBlockStateModel> => {
-  const definition = blockStateDefinitionOf(assets, name)
-  const seed = options?.seed ?? DEFAULT_SEED
-  if (typeof definition.variants !== 'undefined') {
-    return resolvedVariantsOf(matchingVariantOf(definition.variants, properties), seed)
-  }
-  if (typeof definition.multipart !== 'undefined') {
-    return resolvedMultipartOf(definition.multipart, properties, seed)
-  }
-  throw new Error('A blockstate asset must define variants or multipart')
-}
+): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> =>
+  Result.flatMap(blockStateDefinitionOf(assets, name), (definition) => {
+    const seed = options?.seed ?? DEFAULT_SEED
+    if (typeof definition.variants !== 'undefined') {
+      return Result.flatMap(matchingVariantOf(definition.variants, properties), (variant) =>
+        resolvedVariantsOf(variant, seed),
+      )
+    }
+    if (typeof definition.multipart !== 'undefined') {
+      return resolvedMultipartOf(definition.multipart, properties, seed)
+    }
+    return failResolution(
+      'invalid-blockstate-definition',
+      'A blockstate asset must define variants or multipart',
+    )
+  })
 
-const modelOf = (assets: ResourcePackAssets, name: string): BlockModel | undefined =>
-  findAsset(assets.models, name, 'model')
+const modelOf = (
+  assets: ResourcePackAssets,
+  name: ModelName,
+): Result.Result<Option.Option<BlockModel>, ResourcePackResolutionFailure> =>
+  findAsset(assets.models, name)
 
-const emptyBuiltinModelOf = (name: string): ResolvedBlockModel => ({
+const emptyBuiltinModelOf = (name: ModelName): ResolvedBlockModel => ({
   ambientOcclusion: DEFAULT_AMBIENT_OCCLUSION,
   elements: [],
   name,
   textures: {},
 })
 
-const missingModelOf = (name: string): ResolvedBlockModel => {
+const missingModelOf = (name: ModelName): Result.Result<ResolvedBlockModel, ResourcePackResolutionFailure> => {
   if (name.startsWith('minecraft:builtin/')) {
-    return emptyBuiltinModelOf(name)
+    return Result.succeed(emptyBuiltinModelOf(name))
   }
-  throw new Error(`Missing model asset: ${name}`)
+  return failResolution('missing-model', `Missing model asset: ${name}`)
 }
 
 const parentModelOf = (
   model: BlockModel,
   assets: ResourcePackAssets,
-  resolving: ReadonlySet<string>,
+  resolving: ReadonlySet<ModelName>,
   resolve: (
-    name: string,
+    name: ModelName,
     assets: ResourcePackAssets,
-    resolving: ReadonlySet<string>,
-  ) => ResolvedBlockModel,
-): ResolvedBlockModel | undefined => {
+    resolving: ReadonlySet<ModelName>,
+  ) => Result.Result<ResolvedBlockModel, ResourcePackResolutionFailure>,
+): Result.Result<Option.Option<ResolvedBlockModel>, ResourcePackResolutionFailure> => {
   if (typeof model.parent === 'undefined') {
-    return
+    return Result.succeed(Option.none())
   }
-  return resolve(model.parent, assets, resolving)
+  return Result.flatMap(normalizeResourceName(model.parent, 'model'), (parentName) =>
+    Result.map(resolve(parentName, assets, resolving), Option.some),
+  )
 }
 
-const texturesOf = (model: BlockModel, parent: ResolvedBlockModel | undefined): Readonly<Record<string, string>> => ({
-  ...(parent?.textures ?? {}),
+const texturesOf = (
+  model: BlockModel,
+  parent: Option.Option<ResolvedBlockModel>,
+): Readonly<Record<string, string>> => ({
+  ...(Option.isSome(parent) ? parent.value.textures : {}),
   ...(model.textures ?? {}),
 })
 
-const elementsOf = (model: BlockModel, parent: ResolvedBlockModel | undefined): ReadonlyArray<ModelElement> => {
+const elementsOf = (
+  model: BlockModel,
+  parent: Option.Option<ResolvedBlockModel>,
+): ReadonlyArray<ModelElement> => {
   if (typeof model.elements !== 'undefined') {
     return model.elements
   }
-  if (typeof parent === 'undefined') {
+  if (Option.isNone(parent)) {
     return []
   }
-  return parent.elements
+  return parent.value.elements
 }
 
-const ambientOcclusionOf = (model: BlockModel, parent: ResolvedBlockModel | undefined): boolean => {
+const ambientOcclusionOf = (model: BlockModel, parent: Option.Option<ResolvedBlockModel>): boolean => {
   if (typeof model.ambientocclusion !== 'undefined') {
     return model.ambientocclusion
   }
-  if (typeof parent === 'undefined') {
+  if (Option.isNone(parent)) {
     return true
   }
-  return parent.ambientOcclusion
+  return parent.value.ambientOcclusion
 }
 
 const resolvedModelOf = (
-  name: string,
+  name: ModelName,
   model: BlockModel,
-  parent: ResolvedBlockModel | undefined,
+  parent: Option.Option<ResolvedBlockModel>,
 ): ResolvedBlockModel => {
   const textures = texturesOf(model, parent)
   const elements = elementsOf(model, parent)
@@ -336,45 +480,61 @@ const resolvedModelOf = (
 }
 
 const resolveBlockModelInternal = (
-  name: string,
+  name: ModelName,
   assets: ResourcePackAssets,
-  resolving: ReadonlySet<string>,
-): ResolvedBlockModel => {
-  const canonicalName = normalizeResourceName(name, 'model')
-  if (resolving.has(canonicalName)) {
-    throw new Error(`Block model parent cycle: ${canonicalName}`)
+  resolving: ReadonlySet<ModelName>,
+): Result.Result<ResolvedBlockModel, ResourcePackResolutionFailure> => {
+  if (resolving.has(name)) {
+    return failResolution('block-model-cycle', `Block model parent cycle: ${name}`)
   }
-  const model = modelOf(assets, canonicalName)
-  if (typeof model === 'undefined') {
-    return missingModelOf(canonicalName)
-  }
-  const nextResolving = new Set([...resolving, canonicalName])
-  const parent = parentModelOf(model, assets, nextResolving, resolveBlockModelInternal)
-  return resolvedModelOf(canonicalName, model, parent)
+  return Result.flatMap(modelOf(assets, name), (model) => {
+    if (Option.isNone(model)) {
+      return missingModelOf(name)
+    }
+    const nextResolving = new Set([...resolving, name])
+    return Result.flatMap(
+      parentModelOf(model.value, assets, nextResolving, resolveBlockModelInternal),
+      (parent) => Result.succeed(resolvedModelOf(name, model.value, parent)),
+    )
+  })
 }
 
 /** Resolve model inheritance and merge inherited textures/elements. */
-export const resolveBlockModel = (name: string, assets: ResourcePackAssets): ResolvedBlockModel =>
-  resolveBlockModelInternal(name, assets, new Set<string>())
+export const resolveBlockModel = (
+  name: ModelName,
+  assets: ResourcePackAssets,
+): Result.Result<ResolvedBlockModel, ResourcePackResolutionFailure> =>
+  resolveBlockModelInternal(name, assets, new Set<ModelName>())
 
-const textureValueOf = (model: ResolvedBlockModel, key: string, seen: Set<string>): string => {
+const textureValueOf = (
+  model: ResolvedBlockModel,
+  key: string,
+  seen: Set<string>,
+): Result.Result<string, ResourcePackResolutionFailure> => {
   if (seen.has(key)) {
-    throw new Error(`Texture reference cycle: ${key}`)
+    return failResolution('texture-reference-cycle', `Texture reference cycle: ${key}`)
   }
   seen.add(key)
   const value = model.textures[key]
   if (typeof value === 'undefined') {
-    throw new Error(`Missing texture variable: ${key}`)
+    return failResolution('missing-texture-variable', `Missing texture variable: ${key}`)
   }
-  return value
+  return Result.succeed(value)
 }
 
 /** Resolve a texture key such as `#side` to its namespaced texture asset. */
-export const resolveModelTexture = (model: ResolvedBlockModel, reference: string): string => {
+export const resolveModelTexture = (
+  model: ResolvedBlockModel,
+  reference: string,
+): Result.Result<TextureName, ResourcePackResolutionFailure> => {
   let current = reference
   const seen = new Set<string>()
   while (current.startsWith('#')) {
-    current = textureValueOf(model, current.slice(INDEX_STEP), seen)
+    const next = textureValueOf(model, current.slice(INDEX_STEP), seen)
+    if (Result.isFailure(next)) {
+      return Result.fail(next.failure)
+    }
+    current = next.success
   }
   return normalizeTextureName(current)
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { Result } from 'effect'
 import {
-  ResourcePackParseError,
   parseResourcePackAssets,
   parseResourcePackAssetsJson,
 } from '../src/domain/resource-pack-schema.js'
@@ -95,28 +95,32 @@ const assets = {
   },
 } as const
 
-const caught = (operation: () => unknown): unknown => {
-  try {
-    operation()
-  } catch (error) {
-    return error
+const successOf = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
   }
-  return null
+  return result.success
+}
+
+const failureOf = <Value, Failure>(result: Result.Result<Value, Failure>): Failure => {
+  if (Result.isFailure(result)) {
+    return result.failure
+  }
+  throw new Error('Expected a Result failure')
 }
 
 describe('resource-pack schema', () => {
   it('decodes supported blockstate and model JSON values', () => {
-    expect(parseResourcePackAssets(assets)).toEqual(assets)
-    expect(parseResourcePackAssets({ blockstates: {}, models: {} })).toEqual({ blockstates: {}, models: {} })
+    expect(successOf(parseResourcePackAssets(assets))).toEqual(assets)
+    expect(successOf(parseResourcePackAssets({ blockstates: {}, models: {} }))).toEqual({ blockstates: {}, models: {} })
   })
 
   it('parses a JSON document through the same typed contract', () => {
-    expect(parseResourcePackAssetsJson(JSON.stringify(assets))).toEqual(assets)
+    expect(successOf(parseResourcePackAssetsJson(JSON.stringify(assets)))).toEqual(assets)
   })
 
   it('rejects internal face names at the official JSON boundary', () => {
-    expect(() =>
-      parseResourcePackAssets({
+    const result = parseResourcePackAssets({
         blockstates: {},
         models: {
           demo: {
@@ -129,35 +133,27 @@ describe('resource-pack schema', () => {
             ],
           },
         },
-      }),
-    ).toThrow(ResourcePackParseError)
+      })
+    expect(failureOf(result)).toMatchObject({ _tag: 'ResourcePackParseFailure', input: 'object' })
   })
 
   it('reports the input kind and schema path for invalid object data', () => {
-    const error = caught(() =>
-      parseResourcePackAssets({
+    const error = failureOf(parseResourcePackAssets({
         blockstates: {
           demo: { variants: { '': { model: 1 } } },
         },
         models: {},
-      }),
-    )
+      }))
 
-    expect(error).toBeInstanceOf(ResourcePackParseError)
-    if (!(error instanceof ResourcePackParseError)) {
-      throw new Error('expected a ResourcePackParseError')
-    }
+    expect(error).toHaveProperty('_tag', 'ResourcePackParseFailure')
     expect(error.input).toBe('object')
     expect(error.message).toContain('model')
   })
 
   it('reports malformed JSON as a parse error', () => {
-    const error = caught(() => parseResourcePackAssetsJson('{'))
+    const error = failureOf(parseResourcePackAssetsJson('{'))
 
-    expect(error).toBeInstanceOf(ResourcePackParseError)
-    if (!(error instanceof ResourcePackParseError)) {
-      throw new Error('expected a ResourcePackParseError')
-    }
+    expect(error).toHaveProperty('_tag', 'ResourcePackParseFailure')
     expect(error.input).toBe('json')
   })
 
@@ -237,22 +233,17 @@ describe('resource-pack schema', () => {
     ]
 
     for (const input of invalidInputs) {
-      expect(() => parseResourcePackAssets(input)).toThrow(ResourcePackParseError)
+      expect(Result.isFailure(parseResourcePackAssets(input))).toBe(true)
     }
   })
 
   it('rejects empty blockstate variant lists at the JSON boundary', () => {
-    const error = caught(() =>
-      parseResourcePackAssets({
+    const error = failureOf(parseResourcePackAssets({
         blockstates: { demo: { variants: { '': [] } } },
         models: {},
-      }),
-    )
+      }))
 
-    expect(error).toBeInstanceOf(ResourcePackParseError)
-    if (!(error instanceof ResourcePackParseError)) {
-      throw new Error('expected a ResourcePackParseError')
-    }
+    expect(error).toHaveProperty('_tag', 'ResourcePackParseFailure')
     expect(error.input).toBe('object')
   })
 
@@ -261,14 +252,12 @@ describe('resource-pack schema', () => {
       {},
       { variants: {}, multipart: [] },
     ]) {
-      const error = caught(() =>
-        parseResourcePackAssets({
+      const error = failureOf(parseResourcePackAssets({
           blockstates: { demo: definition },
           models: {},
-        }),
-      )
+        }))
 
-      expect(error).toBeInstanceOf(ResourcePackParseError)
+      expect(error).toHaveProperty('_tag', 'ResourcePackParseFailure')
     }
   })
 })

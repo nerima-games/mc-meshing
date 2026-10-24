@@ -1,4 +1,6 @@
-import { AIR, MAX_BLOCK_ID } from './block-data.js'
+import { Result } from 'effect'
+import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
+import { AIR, MAX_BLOCK_ID, type BlockId } from './block-data.js'
 import {
   CHUNK_SIZE,
   type ChunkNeighbours,
@@ -19,7 +21,6 @@ export const SOURCE_SURFACE_HEIGHT: number = SOURCE_SURFACE_HEIGHT_NUMERATOR / S
 const NO_FLUID = -1
 const INDEX_TO_COUNT_OFFSET = 1
 const FLUID_LOOKUP_UNSET = 0
-const MIN_BLOCK_ID = 0
 const MIN_FLUID_LEVEL = 0
 const MAX_FLUID_LEVEL = 0xff
 const FULL_HEIGHT = 1
@@ -47,22 +48,56 @@ const FLOW_OFFSETS = [
 const NO_FLOW_CONTRIBUTION: readonly [number, number] = [AXIS_NO_STEP, AXIS_NO_STEP]
 const NO_FLOW_DIRECTION: readonly [number, number] = [AXIS_NO_STEP, AXIS_NO_STEP]
 
-export const buildFluidLookup = (config: MeshConfig): Uint16Array => {
-  const lookup = new Uint16Array(MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET)
-  for (const [blockId, maxLevel] of config.fluidMaxLevels) {
-    if (!Number.isInteger(blockId) || blockId < MIN_BLOCK_ID || blockId > MAX_BLOCK_ID) {
-      throw new RangeError(`fluid block id must be an integer in [${MIN_BLOCK_ID}, ${MAX_BLOCK_ID}]: ${blockId}`)
-    }
-    if (!Number.isInteger(maxLevel) || maxLevel < MIN_FLUID_LEVEL || maxLevel > MAX_FLUID_LEVEL) {
-      throw new RangeError(`fluid max level must be an integer in [${MIN_FLUID_LEVEL}, ${MAX_FLUID_LEVEL}]: ${maxLevel}`)
-    }
-    lookup[blockId] = maxLevel + INDEX_TO_COUNT_OFFSET
+type BlockIdValidationFailure = ReturnType<typeof KernelBlockId.result> extends Result.Result<
+  BlockId,
+  infer Failure
+>
+  ? Failure
+  : never
+
+export type FluidLookupFailure =
+  | BlockIdValidationFailure
+  | { readonly _tag: 'InvalidFluidLookupLength'; readonly actual: number; readonly expected: number }
+  | { readonly _tag: 'InvalidFluidMaxLevel'; readonly blockId: BlockId; readonly maxLevel: number }
+  | { readonly _tag: 'MissingFluidLookupEntry'; readonly blockId: BlockId }
+
+const FLUID_LOOKUP_DATA_VIEWS = new WeakMap<Uint16Array, DataView>()
+const ENDIANNESS_MARKER = new Uint16Array([1])
+const HOST_IS_LITTLE_ENDIAN = new Uint8Array(ENDIANNESS_MARKER.buffer)[ZERO_INDEX] === 1
+
+const dataViewForLookup = (lookup: Uint16Array): DataView => {
+  const cached = FLUID_LOOKUP_DATA_VIEWS.get(lookup)
+  if (cached) {
+    return cached
   }
-  return lookup
+  const view = new DataView(lookup.buffer, lookup.byteOffset, lookup.byteLength)
+  FLUID_LOOKUP_DATA_VIEWS.set(lookup, view)
+  return view
 }
 
-export const isFluidBlock = (lookup: Uint16Array, blockId: number): boolean =>
-  (lookup[blockId] ?? FLUID_LOOKUP_UNSET) !== FLUID_LOOKUP_UNSET
+const encodedLevelForKnownFluid = (lookup: Uint16Array, blockId: BlockId): number =>
+  dataViewForLookup(lookup).getUint16(blockId * Uint16Array.BYTES_PER_ELEMENT, HOST_IS_LITTLE_ENDIAN)
+
+export const buildFluidLookup = (config: MeshConfig): Result.Result<Uint16Array, FluidLookupFailure> => {
+  const lookup = new Uint16Array(MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET)
+  for (const [blockId, maxLevel] of config.fluidMaxLevels) {
+    const validBlockId = KernelBlockId.result(blockId)
+    if (Result.isFailure(validBlockId)) {
+      return Result.fail(validBlockId.failure)
+    }
+    if (!Number.isInteger(maxLevel) || maxLevel < MIN_FLUID_LEVEL || maxLevel > MAX_FLUID_LEVEL) {
+      return Result.fail({ _tag: 'InvalidFluidMaxLevel', blockId: validBlockId.success, maxLevel })
+    }
+    lookup[validBlockId.success] = maxLevel + INDEX_TO_COUNT_OFFSET
+  }
+  dataViewForLookup(lookup)
+  return Result.succeed(lookup)
+}
+
+export const isFluidBlock = (lookup: Uint16Array, blockId: BlockId): boolean => {
+  const entry = lookup[blockId]
+  return typeof entry !== 'undefined' && entry !== FLUID_LOOKUP_UNSET
+}
 
 /**
  * Exported so the defensive branch (a `blockId` genuinely absent from
@@ -70,12 +105,20 @@ export const isFluidBlock = (lookup: Uint16Array, blockId: number): boolean =>
  * confirmed presence) has a direct test instead of an untestable one buried
  * inside callers that never violate that precondition.
  */
-export const maxLevelOf = (lookup: Uint16Array, blockId: number): number => {
-  const entry = lookup[blockId]
-  if (typeof entry === 'undefined') {
-    throw new RangeError(`unreachable: no fluid lookup entry for block id ${blockId}`)
+export const maxLevelOf = (lookup: Uint16Array, blockId: BlockId): Result.Result<number, FluidLookupFailure> => {
+  const expectedLength = MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET
+  if (lookup.length !== expectedLength) {
+    return Result.fail({ _tag: 'InvalidFluidLookupLength', actual: lookup.length, expected: expectedLength })
   }
-  return entry - INDEX_TO_COUNT_OFFSET
+  const validBlockId = KernelBlockId.result(blockId)
+  if (Result.isFailure(validBlockId)) {
+    return Result.fail(validBlockId.failure)
+  }
+  const entry = lookup[validBlockId.success]
+  if (typeof entry === 'undefined' || entry === FLUID_LOOKUP_UNSET) {
+    return Result.fail({ _tag: 'MissingFluidLookupEntry', blockId: validBlockId.success })
+  }
+  return Result.succeed(entry - INDEX_TO_COUNT_OFFSET)
 }
 
 const heightForLevel = (level: number, maxLevel: number, source: boolean): number => {
@@ -108,7 +151,7 @@ export type FluidPosition = readonly [lx: number, y: number, lz: number]
 export type FluidSample = {
   readonly space: FluidSpace
   readonly position: FluidPosition
-  readonly blockId: number
+  readonly blockId: BlockId
   readonly here: number
 }
 
@@ -133,30 +176,33 @@ const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   return (fluid.falling[index] ?? FLUID_LOOKUP_UNSET) !== FLUID_LOOKUP_UNSET
 }
 
-const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: number): number => {
+const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
   const [lx, y, lz] = position
   if (getBlock(view, lx, y, lz) !== wantId) {
+    return NO_FLUID
+  }
+  if (!isFluidBlock(context.fluids, wantId)) {
     return NO_FLUID
   }
   const index = blockIndex(lx, y, lz, view.height)
   return heightForLevel(
     levelIn(view.fluid, index),
-    maxLevelOf(context.fluids, wantId),
+    encodedLevelForKnownFluid(context.fluids, wantId) - INDEX_TO_COUNT_OFFSET,
     sourceIn(view.fluid, index),
   )
 }
 
-export const heightIn = (space: FluidSpace, position: FluidPosition, wantId: number): number =>
+export const heightIn = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number =>
   heightInView(space.chunk, space.context, position, wantId)
 
-const heightInNeighbour = (neighbour: ChunkView | undefined, context: FluidContext, position: FluidPosition, wantId: number): number => {
+const heightInNeighbour = (neighbour: ChunkView | undefined, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
   if (!neighbour) {
     return NO_FLUID
   }
   return heightInView(neighbour, context, position, wantId)
 }
 
-const heightAcrossCorner = (space: FluidSpace, position: FluidPosition, wantId: number): number => {
+const heightAcrossCorner = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
   const { context, neighbours } = space
   const [lx, y, lz] = position
   if (lx < ZERO_INDEX && lz < ZERO_INDEX) {
@@ -171,7 +217,7 @@ const heightAcrossCorner = (space: FluidSpace, position: FluidPosition, wantId: 
   return heightInNeighbour(neighbours.xPosZPos, context, [ZERO_INDEX, y, ZERO_INDEX], wantId)
 }
 
-const heightAcrossEdge = (space: FluidSpace, position: FluidPosition, wantId: number): number => {
+const heightAcrossEdge = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
   const { context, neighbours } = space
   const [lx, y, lz] = position
   if (lx < ZERO_INDEX) {
@@ -186,7 +232,7 @@ const heightAcrossEdge = (space: FluidSpace, position: FluidPosition, wantId: nu
   return heightInNeighbour(neighbours.zPos, context, [lx, y, ZERO_INDEX], wantId)
 }
 
-export const heightAcross = (space: FluidSpace, position: FluidPosition, wantId: number): number => {
+export const heightAcross = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
   const [lx, , lz] = position
   const xOut = lx < ZERO_INDEX || lx >= CHUNK_SIZE
   const zOut = lz < ZERO_INDEX || lz >= CHUNK_SIZE
@@ -270,7 +316,7 @@ export const flowAt = (sample: FluidSample): FluidFlow => {
   }
 }
 
-const surfaceHeightOfColumn = (space: FluidSpace, position: FluidPosition, wantId: number): number => {
+const surfaceHeightOfColumn = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
   const here = heightAcross(space, position, wantId)
   if (here === NO_FLUID) {
     return NO_FLUID
@@ -286,7 +332,7 @@ export const cornerHeight = (
   space: FluidSpace,
   position: FluidPosition,
   corner: readonly [cornerX: number, cornerZ: number],
-  wantId: number,
+  wantId: BlockId,
 ): number => {
   const [lx, y, lz] = position
   const [cornerX, cornerZ] = corner
@@ -302,7 +348,7 @@ export const cornerHeight = (
   return heightSum / sampleCount
 }
 
-export const hidesFluidFace = (context: FluidContext, blockId: number): boolean =>
+export const hidesFluidFace = (context: FluidContext, blockId: BlockId): boolean =>
   occludes(context.layers, blockId) &&
   !isFluidBlock(context.fluids, blockId) &&
   !isCrossPlant(context.plants, blockId)

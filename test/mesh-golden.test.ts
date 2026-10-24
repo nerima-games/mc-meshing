@@ -1,23 +1,24 @@
 import { createHash } from 'node:crypto'
-import { blockIdOf, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
+import { Option, Result } from 'effect'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
 import { describe, expect, it } from './effect-test.js'
 import {
   blockIndex,
   type ChunkView,
 } from '../src/domain/chunk-view'
-import { meshChunk } from '../src/domain/mesh'
+import { meshChunk as meshChunkResult } from '../src/domain/mesh'
 import type { MeshConfig } from '../src/domain/opacity'
 import { packMeshLayers, type PackedMeshBuffers } from '../src/domain/mesh-buffers'
 import { railShapeCodeOf } from '../src/domain/rail-types'
 
 const CHUNK_HEIGHT = 4
-const STONE = blockIdOf('stone')
-const WATER = blockIdOf('water')
-const GLASS = blockIdOf('glass')
-const DANDELION = blockIdOf('dandelion')
-const CACTUS = blockIdOf('cactus')
-const STONE_SLAB = blockIdOf('stone_slab')
-const RAIL = blockIdOf('rail')
+const STONE = Option.getOrThrow(blockIdOf('stone'))
+const WATER = Option.getOrThrow(blockIdOf('water'))
+const GLASS = Option.getOrThrow(blockIdOf('glass'))
+const DANDELION = Option.getOrThrow(blockIdOf('dandelion'))
+const CACTUS = Option.getOrThrow(blockIdOf('cactus'))
+const STONE_SLAB = Option.getOrThrow(blockIdOf('stone_slab'))
+const RAIL = Option.getOrThrow(blockIdOf('rail'))
 
 type Cell = {
   readonly lx: number
@@ -35,6 +36,14 @@ const CONFIG: MeshConfig = {
   fluidMaxLevels: new Map([[WATER, 7]]),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
+}
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>) => {
+  const result = meshChunkResult(...args)
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected mesh failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
 }
 
 const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
@@ -58,7 +67,7 @@ const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
 
   return {
     blocks,
-    coord: chunkCoord(0, 0),
+    coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
     fluid: { falling, levels, sources },
     height: CHUNK_HEIGHT,
     railShapes,

@@ -1,3 +1,6 @@
+import { Option, Result } from 'effect'
+import type { CollisionShape, RenderKind } from '@nerima-games/mc-kernel'
+import type { BlockRegistryResolutionFailure } from '@nerima-games/mc-kernel/domain/block-registry'
 import { AIR, type BlockId, MAX_BLOCK_ID, blockIdAt } from './block-data.js'
 import {
   BLOCK_IDS,
@@ -15,6 +18,7 @@ import { FACES, type Face, type FaceDirection, type FaceFor, faceOf } from './fa
 import { type RailFaceDirection, railVerticesOf } from './rail-geometry.js'
 import {
   type RailRenderKind,
+  type RailRenderKindFailure,
   type RailSpecialBlockQuad,
   type SpecialBlockQuad,
   type SpecialMeshRegion,
@@ -22,7 +26,7 @@ import {
   type SpecialVertex,
   railRenderKindOf,
 } from './special-types.js'
-import { type RailShape, railShapeAt } from './rail-types.js'
+import { type RailShape, type RailShapeFailure, railShapeAt } from './rail-types.js'
 import type { QuadLight } from './light-types.js'
 import { quadLightAt } from './light-sampling.js'
 
@@ -61,7 +65,22 @@ const SLAB_HEIGHT_DIVISOR = 2
 const SLAB_HEIGHT = UNIT_SIZE / SLAB_HEIGHT_DIVISOR
 const PRESSURE_PLATE_HEIGHT = UNIT_SIZE / BLOCK_MODEL_SUBDIVISIONS
 
-const SPECIAL_BLOCK_LOOKUP = new Uint8Array(MAX_BLOCK_ID + UNIT_SIZE)
+const UNKNOWN_OPACITY_CODE = 0
+const OPAQUE_OPACITY_CODE = 1
+const NON_OPAQUE_CODE = 2
+
+export type SpecialBlockLookup = {
+  readonly kindCodes: Readonly<Uint8Array>
+  readonly opacityCodes: Readonly<Uint8Array>
+  readonly railKinds: readonly (RailRenderKind | undefined)[]
+}
+
+export type SpecialBlockLookupFailure = BlockRegistryResolutionFailure | RailRenderKindFailure
+
+export type SpecialMeshFailure =
+  | SpecialBlockLookupFailure
+  | RailShapeFailure
+  | { readonly _tag: 'MissingSpecialBlockLookupEntry'; readonly blockId: BlockId }
 
 const lightPropertiesOf = (light?: QuadLight): { light?: QuadLight } => {
   if (light) {
@@ -70,8 +89,10 @@ const lightPropertiesOf = (light?: QuadLight): { light?: QuadLight } => {
   return {}
 }
 
-const specialKindCodeOf = (blockId: number): number => {
-  const renderKind = propertyOfBlockId(blockId, 'renderKind')
+const specialKindCodeOf = (
+  renderKind: RenderKind,
+  collisionShape: CollisionShape,
+): number => {
   switch (renderKind) {
     case 'cactus':
       return CACTUS_KIND_CODE
@@ -80,7 +101,7 @@ const specialKindCodeOf = (blockId: number): number => {
     case 'rail':
       return RAIL_KIND_CODE
     default:
-      switch (propertyOfBlockId(blockId, 'collisionShape')) {
+      switch (collisionShape) {
         case 'pressurePlate':
           return PRESSURE_PLATE_KIND_CODE
         case 'slab':
@@ -91,14 +112,46 @@ const specialKindCodeOf = (blockId: number): number => {
   }
 }
 
-for (const blockId of BLOCK_IDS) {
-  SPECIAL_BLOCK_LOOKUP[blockId] = specialKindCodeOf(blockId)
+const buildSpecialBlockLookup = (): Result.Result<SpecialBlockLookup, SpecialBlockLookupFailure> => {
+  const kindCodes = new Uint8Array(MAX_BLOCK_ID + UNIT_SIZE)
+  const opacityCodes = new Uint8Array(MAX_BLOCK_ID + UNIT_SIZE)
+  const railKinds: Array<RailRenderKind | undefined> = []
+  for (const blockId of BLOCK_IDS) {
+    const renderKind = propertyOfBlockId(blockId, 'renderKind')
+    if (Result.isFailure(renderKind)) {
+      return Result.fail(renderKind.failure)
+    }
+    const collisionShape = propertyOfBlockId(blockId, 'collisionShape')
+    if (Result.isFailure(collisionShape)) {
+      return Result.fail(collisionShape.failure)
+    }
+    const opacity = propertyOfBlockId(blockId, 'opacity')
+    if (Result.isFailure(opacity)) {
+      return Result.fail(opacity.failure)
+    }
+    kindCodes[blockId] = specialKindCodeOf(renderKind.success, collisionShape.success)
+    opacityCodes[blockId] = opacity.success === 'opaque' ? OPAQUE_OPACITY_CODE : NON_OPAQUE_CODE
+    if (renderKind.success === 'rail') {
+      const railKind = propertyOfBlockId(blockId, 'railKind')
+      if (Result.isFailure(railKind)) {
+        return Result.fail(railKind.failure)
+      }
+      const railRenderKind = railRenderKindOf(railKind.success)
+      if (Result.isFailure(railRenderKind)) {
+        return Result.fail(railRenderKind.failure)
+      }
+      railKinds[blockId] = railRenderKind.success
+    }
+  }
+  return Result.succeed({ kindCodes, opacityCodes, railKinds })
 }
+
+export const SPECIAL_BLOCK_LOOKUP: Result.Result<SpecialBlockLookup, SpecialBlockLookupFailure> = buildSpecialBlockLookup()
 
 type BoxRenderKind = Extract<SpecialRenderKind, 'cactus' | 'pressurePlate' | 'slab'>
 
-const specialKindOf = (blockId: number): SpecialRenderKind | null => {
-  switch (SPECIAL_BLOCK_LOOKUP[blockId]) {
+const specialKindOf = (lookup: SpecialBlockLookup, blockId: BlockId): SpecialRenderKind | null => {
+  switch (lookup.kindCodes[blockId]) {
     case SPECIAL_KIND_CODE.cactus:
       return 'cactus'
     case SPECIAL_KIND_CODE.lilyPad:
@@ -114,8 +167,29 @@ const specialKindOf = (blockId: number): SpecialRenderKind | null => {
   }
 }
 
-export const isSpecialBlock = (blockId: number): boolean =>
-  (SPECIAL_BLOCK_LOOKUP[blockId] ?? SPECIAL_KIND_NONE) !== SPECIAL_KIND_NONE
+export const isSpecialBlock = (lookup: SpecialBlockLookup, blockId: BlockId): boolean => {
+  const kindCode = lookup.kindCodes[blockId]
+  return typeof kindCode !== 'undefined' && kindCode !== SPECIAL_KIND_NONE
+}
+
+const missingSpecialBlockLookupEntry = (blockId: BlockId): SpecialMeshFailure => {
+  const renderKind = propertyOfBlockId(blockId, 'renderKind')
+  if (Result.isFailure(renderKind)) {
+    return renderKind.failure
+  }
+  return { _tag: 'MissingSpecialBlockLookupEntry', blockId }
+}
+
+const ensureRegisteredBlock = (
+  lookup: SpecialBlockLookup,
+  blockId: BlockId,
+): Option.Option<SpecialMeshFailure> => {
+  const opacityCode = lookup.opacityCodes[blockId]
+  if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
+    return Option.some(missingSpecialBlockLookupEntry(blockId))
+  }
+  return Option.none()
+}
 
 type BoxBounds = {
   readonly minX: number
@@ -125,6 +199,8 @@ type BoxBounds = {
   readonly minZ: number
   readonly maxZ: number
 }
+
+type BlockPosition = readonly [lx: number, y: number, lz: number]
 
 type BoxVertexFactory = (
   bounds: BoxBounds,
@@ -209,7 +285,15 @@ const BOX_BOUNDS_FACTORIES: Readonly<Record<BoxRenderKind, BoxBoundsFactory>> = 
 const boxBoundsFor = (kind: BoxRenderKind, lx: number, y: number, lz: number): BoxBounds =>
   BOX_BOUNDS_FACTORIES[kind](lx, y, lz)
 
-const railKindOf = (blockId: number): RailRenderKind => railRenderKindOf(propertyOfBlockId(blockId, 'railKind'))
+const railKindOf = (
+  lookup: SpecialBlockLookup,
+  blockId: BlockId,
+): Result.Result<RailRenderKind, RailRenderKindFailure> => {
+  const railKind = lookup.railKinds[blockId]
+  return typeof railKind === 'undefined'
+    ? Result.fail({ _tag: 'MissingRailRenderKind', railKind: 'none' })
+    : Result.succeed(railKind)
+}
 
 const makeBoxQuad = (
   blockId: BlockId,
@@ -226,6 +310,7 @@ const makeBoxQuad = (
 })
 
 const isOpenToSpecial = (
+  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   kind: SpecialRenderKind,
@@ -233,7 +318,7 @@ const isOpenToSpecial = (
   y: number,
   lz: number,
   face: Face,
-): boolean => {
+): boolean | SpecialMeshFailure => {
   const neighbourId = getBlockAcrossBoundary(
     chunk,
     neighbours,
@@ -244,10 +329,14 @@ const isOpenToSpecial = (
   if (neighbourId === AIR) {
     return true
   }
-  if (propertyOfBlockId(neighbourId, 'opacity') === 'opaque') {
+  const opacityCode = lookup.opacityCodes[neighbourId]
+  if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
+    return missingSpecialBlockLookupEntry(neighbourId)
+  }
+  if (opacityCode === OPAQUE_OPACITY_CODE) {
     return false
   }
-  return specialKindOf(neighbourId) !== kind
+  return specialKindOf(lookup, neighbourId) !== kind
 }
 
 const lilyPadQuad = (
@@ -276,61 +365,74 @@ const lilyPadQuad = (
   }
 }
 
-const railShapeProperties = (railShape: RailShape | undefined): { railShape?: RailShape } => {
-  if (!railShape) {
+const railShapeProperties = (railShape: Option.Option<RailShape>): { railShape?: RailShape } => {
+  if (Option.isNone(railShape)) {
     return {}
   }
-  return { railShape }
+  return { railShape: railShape.value }
 }
 
 const railQuad = (
+  lookup: SpecialBlockLookup,
   blockId: BlockId,
   geometryShape: RailShape,
-  stateShape: RailShape | undefined,
-  lx: number,
-  y: number,
-  lz: number,
+  stateShape: Option.Option<RailShape>,
+  position: BlockPosition,
   face: FaceFor<RailFaceDirection>,
   light: QuadLight | undefined,
-): RailSpecialBlockQuad => ({
-    blockId,
-    kind: 'rail',
-    railKind: railKindOf(blockId),
-    vertices: railVerticesOf(geometryShape, lx, y, lz, face.direction),
-    ...face,
-    ...lightPropertiesOf(light),
-    ...railShapeProperties(stateShape),
-  })
+): Result.Result<RailSpecialBlockQuad, RailRenderKindFailure> => {
+  const [lx, y, lz] = position
+  return Result.map(railKindOf(lookup, blockId), (railKind) => ({
+      blockId,
+      kind: 'rail',
+      railKind,
+      vertices: railVerticesOf(geometryShape, lx, y, lz, face.direction),
+      ...face,
+      ...lightPropertiesOf(light),
+      ...railShapeProperties(stateShape),
+    }))
+}
 
 const railQuads = (
+  lookup: SpecialBlockLookup,
   blockId: BlockId,
   lx: number,
   y: number,
   lz: number,
-  railShape: RailShape | undefined,
+  railShape: Option.Option<RailShape>,
   topLight: QuadLight | undefined,
   bottomLight: QuadLight | undefined,
-): readonly [RailSpecialBlockQuad, RailSpecialBlockQuad] => {
-  const geometryShape = railShape ?? DEFAULT_RAIL_SHAPE
-  return [
-    railQuad(blockId, geometryShape, railShape, lx, y, lz, TOP_FACE, topLight),
-    railQuad(blockId, geometryShape, railShape, lx, y, lz, faceOf('yNeg'), bottomLight),
-  ]
+): Result.Result<readonly [RailSpecialBlockQuad, RailSpecialBlockQuad], RailRenderKindFailure> => {
+  const geometryShape = Option.isSome(railShape) ? railShape.value : DEFAULT_RAIL_SHAPE
+  const position: BlockPosition = [lx, y, lz]
+  const top = railQuad(lookup, blockId, geometryShape, railShape, position, TOP_FACE, topLight)
+  if (Result.isFailure(top)) {
+    return Result.fail(top.failure)
+  }
+  const bottom = railQuad(lookup, blockId, geometryShape, railShape, position, faceOf('yNeg'), bottomLight)
+  if (Result.isFailure(bottom)) {
+    return Result.fail(bottom.failure)
+  }
+  return Result.succeed([top.success, bottom.success])
 }
 
 const meshBoxCell = (
   result: Array<SpecialBlockQuad>,
+  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   blockId: BlockId,
   kind: BoxRenderKind,
-  lx: number,
-  y: number,
-  lz: number,
-): void => {
+  position: BlockPosition,
+): Result.Result<void, SpecialMeshFailure> => {
+  const [lx, y, lz] = position
   const bounds = boxBoundsFor(kind, lx, y, lz)
   for (const face of FACES) {
-    if (isOpenToSpecial(chunk, neighbours, kind, lx, y, lz, face)) {
+    const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, face)
+    if (typeof open !== 'boolean') {
+      return Result.fail(open)
+    }
+    if (open) {
       result.push(
         makeBoxQuad(
           blockId,
@@ -342,20 +444,25 @@ const meshBoxCell = (
       )
     }
   }
+  return Result.void
 }
 
 const meshPlanarCell = (
   result: Array<SpecialBlockQuad>,
+  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   blockId: BlockId,
   kind: Extract<SpecialRenderKind, 'lilyPad' | 'rail'>,
-  lx: number,
-  y: number,
-  lz: number,
-): void => {
-  if (!isOpenToSpecial(chunk, neighbours, kind, lx, y, lz, TOP_FACE)) {
-    return
+  position: BlockPosition,
+): Result.Result<void, SpecialMeshFailure> => {
+  const [lx, y, lz] = position
+  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, TOP_FACE)
+  if (typeof open !== 'boolean') {
+    return Result.fail(open)
+  }
+  if (!open) {
+    return Result.void
   }
   if (kind === 'lilyPad') {
     result.push(
@@ -367,36 +474,46 @@ const meshPlanarCell = (
         quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
       ),
     )
-    return
+    return Result.void
   }
-  result.push(
-    ...railQuads(
-      blockId,
-      lx,
-      y,
-      lz,
-      railShapeAt(chunk.railShapes, blockIndex(lx, y, lz, chunk.height)),
-      quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
-      quadLightAt(chunk, neighbours, 'yNeg', lx, y, lz),
-    ),
+  const railShapeResult = railShapeAt(
+    Option.fromNullishOr(chunk.railShapes),
+    blockIndex(lx, y, lz, chunk.height),
   )
+  if (Result.isFailure(railShapeResult)) {
+    return Result.fail(railShapeResult.failure)
+  }
+  const railShape = railShapeResult.success
+  const quads = railQuads(
+    lookup,
+    blockId,
+    lx,
+    y,
+    lz,
+    railShape,
+    quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
+    quadLightAt(chunk, neighbours, 'yNeg', lx, y, lz),
+  )
+  if (Result.isFailure(quads)) {
+    return Result.fail(quads.failure)
+  }
+  result.push(...quads.success)
+  return Result.void
 }
 
 const meshSpecialCell = (
   result: Array<SpecialBlockQuad>,
+  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   blockId: BlockId,
   kind: SpecialRenderKind,
-  lx: number,
-  y: number,
-  lz: number,
-): void => {
+  position: BlockPosition,
+): Result.Result<void, SpecialMeshFailure> => {
   if (kind === 'cactus' || kind === 'slab' || kind === 'pressurePlate') {
-    meshBoxCell(result, chunk, neighbours, blockId, kind, lx, y, lz)
-    return
+    return meshBoxCell(result, lookup, chunk, neighbours, blockId, kind, position)
   }
-  meshPlanarCell(result, chunk, neighbours, blockId, kind, lx, y, lz)
+  return meshPlanarCell(result, lookup, chunk, neighbours, blockId, kind, position)
 }
 
 /** Meshes every special shape described by mc-kernel's registry. */
@@ -423,11 +540,12 @@ const specialMeshBoundsOf = (region: SpecialMeshRegion | undefined, yLimit: numb
 })
 
 export const meshSpecialBlocks = (
+  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   yLimit: number,
   region?: SpecialMeshRegion,
-): ReadonlyArray<SpecialBlockQuad> => {
+): Result.Result<ReadonlyArray<SpecialBlockQuad>, SpecialMeshFailure> => {
   const { minLx, minY, minLz, maxLx, maxY, maxLz } = specialMeshBoundsOf(region, yLimit)
   const result: Array<SpecialBlockQuad> = []
 
@@ -440,12 +558,19 @@ export const meshSpecialBlocks = (
     ) {
       for (let y = minY; y < maxY; y += UNIT_SIZE) {
         const blockId = blockIdAt(chunk.blocks, columnOffset + y)
-        const kind = specialKindOf(blockId)
+        const registered = ensureRegisteredBlock(lookup, blockId)
+        if (Option.isSome(registered)) {
+          return Result.fail(registered.value)
+        }
+        const kind = specialKindOf(lookup, blockId)
         if (kind !== null) {
-          meshSpecialCell(result, chunk, neighbours, blockId, kind, lx, y, lz)
+          const meshed = meshSpecialCell(result, lookup, chunk, neighbours, blockId, kind, [lx, y, lz])
+          if (Result.isFailure(meshed)) {
+            return Result.fail(meshed.failure)
+          }
         }
       }
     }
   }
-  return result
+  return Result.succeed(result)
 }
