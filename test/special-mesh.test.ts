@@ -1,5 +1,6 @@
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result } from 'effect'
+import { vi } from 'vitest'
 import {
   BLOCK_IDS,
   ChunkAxis as chunkAxis,
@@ -250,6 +251,99 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
+  it.effect('fails when the special lookup omits a block or its neighbour', () =>
+    Effect.sync(() => {
+      const missingOwnOpacityLookup = {
+        ...SPECIAL_LOOKUP,
+        opacityCodes: SPECIAL_LOOKUP.opacityCodes.slice(0, CACTUS),
+      }
+      expect(meshSpecialBlocks(
+        missingOwnOpacityLookup,
+        chunkWith([[8, 64, 8, CACTUS]]),
+        {},
+        CHUNK_HEIGHT,
+      )).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'MissingSpecialBlockLookupEntry', blockId: CACTUS },
+      })
+
+      const opacityCodes = new Uint8Array(SPECIAL_LOOKUP.opacityCodes)
+      opacityCodes[OPAQUE_CUBE] = 0
+      const missingNeighbourLookup = { ...SPECIAL_LOOKUP, opacityCodes }
+      expect(meshSpecialBlocks(
+        missingNeighbourLookup,
+        chunkWith([
+          [8, 64, 8, CACTUS],
+          [9, 64, 8, OPAQUE_CUBE],
+        ]),
+        {},
+        CHUNK_HEIGHT,
+      )).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'MissingSpecialBlockLookupEntry', blockId: OPAQUE_CUBE },
+      })
+      expect(meshSpecialBlocks(
+        missingNeighbourLookup,
+        chunkWith([
+          [8, 64, 8, LILY_PAD],
+          [8, 65, 8, OPAQUE_CUBE],
+        ]),
+        {},
+        CHUNK_HEIGHT,
+      )).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'MissingSpecialBlockLookupEntry', blockId: OPAQUE_CUBE },
+      })
+    }),
+  )
+
+  it.effect('returns failures for invalid rail shape data and missing rail render metadata', () =>
+    Effect.sync(() => {
+      const railShapes = new Uint8Array(BLOCKS_PER_CHUNK)
+      railShapes[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = 255
+      const invalidShapeChunk = { ...chunkWith([[8, 64, 8, RAIL]]), railShapes }
+      expect(meshSpecialBlocks(SPECIAL_LOOKUP, invalidShapeChunk, {}, CHUNK_HEIGHT)).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'InvalidRailShapeCode', code: 255 },
+      })
+
+      const missingRailKindLookup = { ...SPECIAL_LOOKUP, railKinds: [] }
+      expect(meshSpecialBlocks(
+        missingRailKindLookup,
+        chunkWith([[8, 64, 8, RAIL]]),
+        {},
+        CHUNK_HEIGHT,
+      )).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'MissingRailRenderKind', railKind: 'none' },
+      })
+    }),
+  )
+
+  it.effect('clamps special mesh regions to the chunk and vertical bounds', () =>
+    Effect.sync(() => {
+      const edgeBlocks = chunkWith([
+        [0, 0, 0, CACTUS],
+        [15, 15, 15, CACTUS],
+      ])
+      const specialBlocks = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        edgeBlocks,
+        {},
+        16,
+        {
+          min: [-1, -1, -1],
+          max: [17, 17, 17],
+        },
+      ))
+
+      expect(specialBlocks).toHaveLength(12)
+      expect(specialBlocks.every((quad) => quad.vertices.every(([x, y, z]) =>
+        x >= 0 && x <= 16 && y >= 0 && y <= 16 && z >= 0 && z <= 16,
+      ))).toBe(true)
+    }),
+  )
+
   it.effect('meshes a special block at the top of a short chunk', () =>
     Effect.sync(() => {
       const height = 8
@@ -267,4 +361,100 @@ describe('kernel-defined special block geometry', () => {
       expect(specialBlocks.every((quad) => quad.vertices.every(([, y]) => y <= height))).toBe(true)
     }),
   )
+
+  it('propagates kernel property failures while building the special lookup', async () => {
+    const expectPropertyFailure = async (failedProperty: Parameters<typeof propertyOfBlockId>[1]) => {
+      vi.resetModules()
+      const failure = { _tag: 'InjectedRegistryFailure', property: failedProperty }
+      vi.doMock('@nerima-games/mc-kernel', async () => {
+        const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+        return {
+          ...kernel,
+          propertyOfBlockId: (
+            blockId: Parameters<typeof propertyOfBlockId>[0],
+            property: Parameters<typeof propertyOfBlockId>[1],
+          ) =>
+            property === failedProperty ? Result.fail(failure) : kernel.propertyOfBlockId(blockId, property),
+        }
+      })
+      try {
+        const { SPECIAL_BLOCK_LOOKUP: lookupResult } = await import('../src/domain/special-mesh.js')
+        expect(lookupResult).toStrictEqual(Result.fail(failure))
+      } finally {
+        vi.doUnmock('@nerima-games/mc-kernel')
+        vi.resetModules()
+      }
+    }
+
+    await expectPropertyFailure('renderKind')
+    await expectPropertyFailure('collisionShape')
+    await expectPropertyFailure('opacity')
+    await expectPropertyFailure('railKind')
+  })
+
+  it('propagates a missing rail render kind from the kernel lookup', async () => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        propertyOfBlockId: (
+          blockId: Parameters<typeof propertyOfBlockId>[0],
+          property: Parameters<typeof propertyOfBlockId>[1],
+        ) => {
+          if (property === 'renderKind') {
+            return Result.succeed('rail')
+          }
+          if (property === 'railKind') {
+            return Result.succeed('none')
+          }
+          return kernel.propertyOfBlockId(blockId, property)
+        },
+      }
+    })
+    try {
+      const { SPECIAL_BLOCK_LOOKUP: lookupResult } = await import('../src/domain/special-mesh.js')
+      expect(lookupResult).toMatchObject({
+        _tag: 'Failure',
+        failure: { _tag: 'MissingRailRenderKind', railKind: 'none' },
+      })
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
+  it('propagates a kernel property failure for a missing lookup entry', async () => {
+    vi.resetModules()
+    let failCactusRenderKind = false
+    const failure = { _tag: 'InjectedMissingEntryFailure' }
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        propertyOfBlockId: (
+          blockId: Parameters<typeof propertyOfBlockId>[0],
+          property: Parameters<typeof propertyOfBlockId>[1],
+        ) =>
+          failCactusRenderKind && blockId === CACTUS && property === 'renderKind'
+            ? Result.fail(failure)
+            : kernel.propertyOfBlockId(blockId, property),
+      }
+    })
+    try {
+      const specialMesh = await import('../src/domain/special-mesh.js')
+      const lookup = Result.getOrThrow(specialMesh.SPECIAL_BLOCK_LOOKUP)
+      failCactusRenderKind = true
+      const incompleteLookup = { ...lookup, opacityCodes: lookup.opacityCodes.slice(0, CACTUS) }
+      expect(specialMesh.meshSpecialBlocks(
+        incompleteLookup,
+        chunkWith([[8, 64, 8, CACTUS]]),
+        {},
+        CHUNK_HEIGHT,
+      )).toStrictEqual(Result.fail(failure))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
 })

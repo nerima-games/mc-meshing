@@ -373,11 +373,8 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
   const { blocks, height } = ctx.chunk
   const xBase = lx * height * CHUNK_SIZE
   clearMasks(ctx, CHUNK_SIZE * yLimit)
-  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
-  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
-  if (lx < regionMinLx || lx >= regionMaxLx) {
-    return
-  }
+  const [, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
   for (let lz = regionMinLz; lz < regionMaxLz; lz += STEP) {
     const columnBase = xBase + lz * height
     const rowBase = lz * yLimit
@@ -401,11 +398,8 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
 const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
   const { blocks, height } = ctx.chunk
   clearMasks(ctx, CHUNK_SIZE * CHUNK_SIZE)
-  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
-  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, ctx.chunk.height, CHUNK_SIZE]
-  if (y < regionMinY || y >= regionMaxY) {
-    return
-  }
+  const [regionMinLx, , regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [regionMaxLx, , regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, ctx.chunk.height, CHUNK_SIZE]
   for (let lx = regionMinLx; lx < regionMaxLx; lx += STEP) {
     const columnBase = lx * height * CHUNK_SIZE + y
     const rowBase = lx * CHUNK_SIZE
@@ -429,11 +423,8 @@ const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
 const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): void => {
   const { blocks, height } = ctx.chunk
   clearMasks(ctx, CHUNK_SIZE * yLimit)
-  const [regionMinLx, regionMinY, regionMinLz] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
-  const [regionMaxLx, regionMaxY, regionMaxLz] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
-  if (lz < regionMinLz || lz >= regionMaxLz) {
-    return
-  }
+  const [regionMinLx, regionMinY] = ctx.region?.min ?? [FIRST_INDEX, FIRST_INDEX, FIRST_INDEX]
+  const [regionMaxLx, regionMaxY] = ctx.region?.max ?? [CHUNK_SIZE, yLimit, CHUNK_SIZE]
   for (let lx = regionMinLx; lx < regionMaxLx; lx += STEP) {
     const columnBase = lz * height + lx * height * CHUNK_SIZE
     const rowBase = lx * yLimit

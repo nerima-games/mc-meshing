@@ -18,6 +18,7 @@
  *   meshing-merge-never-crosses-a-block-boundary
  */
 import { describe, expect, it } from './effect-test.js'
+import { vi } from 'vitest'
 import { Effect, Option, Result } from 'effect'
 import * as FastCheck from 'fast-check'
 import { BlockId as KernelBlockId, BLOCK_IDS, ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
@@ -517,6 +518,29 @@ describe('bucketFor', () => {
 })
 
 describe('layer routing', () => {
+  it('fails Minecraft mesh configuration when transparent-solid registry data is absent', async () => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', () => ({
+      AIR_BLOCK_ID: 0,
+      BLOCK_ID_MAX: 0xffff,
+      BLOCK_IDS: [1],
+      BlockId: KernelBlockId,
+      blockIdsWithOpacity: () => Result.succeed(Option.none()),
+      propertyOfBlockId: (_blockId: number, property: string) =>
+        Result.succeed(property === 'renderKind' ? 'cube' : new Map<string, unknown>().get('missing')),
+    }))
+    try {
+      const opacity = await import('../src/domain/opacity.js')
+
+      expect(opacity.MINECRAFT_MESH_CONFIG).toStrictEqual(
+        Result.fail({ _tag: 'MissingTransparentSolidBlockIds' }),
+      )
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
   it.effect('routes water to the water layer and glass to the transparentSolid layer, not to opaque', () =>
     Effect.sync(() => {
       const layers = meshChunk(

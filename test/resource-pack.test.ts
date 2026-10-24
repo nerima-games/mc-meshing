@@ -256,6 +256,64 @@ describe('resource-pack resolver', () => {
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
   })
 
+  it('rejects malformed normalized names and multipart selection errors', () => {
+    expect(failureOf(normalizeResourceNameResult('bad:', 'blockstate'))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-resource-name',
+    })
+
+    const base = resolveBlockModel(modelName('block/base'), assets)
+    expect(failureOf(resolveModelTextureResult({
+      ...base,
+      textures: { invalid: ':stone' },
+    }, '#invalid'))).toMatchObject({ code: 'invalid-texture-reference' })
+
+    const unmatched = resolveBlockStateModels(
+      resourceName('multi'),
+      { powered: 'false', facing: 'north', open: 'false' },
+      assets,
+    )
+    expect(unmatched.map((state) => state.model)).toEqual(['minecraft:block/inherit'])
+
+    const invalidMultipartAssets: ResourcePackAssets = {
+      ...assets,
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:multi': {
+          multipart: [{ apply: [{ model: 'block/bare', weight: 0 }] }],
+        },
+      },
+    }
+    expect(failureOf(resolveBlockStateModelsResult(
+      resourceName('multi'),
+      {},
+      invalidMultipartAssets,
+    ))).toMatchObject({ code: 'invalid-variant-weight' })
+
+    const overflowingWeightsAssets: ResourcePackAssets = {
+      ...assets,
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:overflow': {
+          variants: {
+            '': [
+              { model: 'block/bare', weight: Number.MAX_VALUE },
+              { model: 'block/bare', weight: Number.MAX_VALUE },
+            ],
+          },
+        },
+      },
+    }
+    expect(failureOf(resolveBlockStateModelsResult(
+      resourceName('overflow'),
+      {},
+      overflowingWeightsAssets,
+    ))).toMatchObject({
+      code: 'invalid-variant-weight',
+      message: expect.stringContaining('overflowed'),
+    })
+  })
+
   it('reports malformed or missing blockstates', () => {
     expect(failureOf(resolveBlockStateModelsResult(resourceName('missing'), {}, assets))).toMatchObject({
       code: 'missing-blockstate',
@@ -302,6 +360,21 @@ describe('resource-pack resolver', () => {
               '': [
                 { model: 'block/bare', weight: Number.NaN },
                 { model: 'block/bare' },
+              ],
+            },
+          },
+        },
+      }),
+    )).toMatchObject({ code: 'invalid-variant-weight' })
+    expect(failureOf(
+      resolveBlockStateModelsResult(resourceName('demo'), {}, {
+        ...assets,
+        blockstates: {
+          'minecraft:demo': {
+            variants: {
+              '': [
+                { model: 'block/bare' },
+                { model: 'block/bare', weight: 0 },
               ],
             },
           },
@@ -466,6 +539,95 @@ describe('resource-pack mesh', () => {
     expect(failureOf(meshBlockModelResult(modelName('block/base'), assets, invalidTransform))).toMatchObject({
       _tag: 'ResourceModelMeshFailure',
       code: 'non-axis-aligned-face',
+    })
+  })
+
+  it('propagates model and state failures through the public meshing APIs', () => {
+    expect(failureOf(meshBlockModelResult(modelName('missing'), assets))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'missing-model',
+    })
+
+    const missingTextureAssets: ResourcePackAssets = {
+      ...assets,
+      models: {
+        ...assets.models,
+        'minecraft:block/missing-texture': {
+          elements: [modelElement({ up: face('#missing') })],
+        },
+      },
+    }
+    expect(failureOf(meshBlockModelResult(
+      modelName('block/missing-texture'),
+      missingTextureAssets,
+    ))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'missing-texture-variable',
+    })
+
+    const nonAxisCullfaceAssets: ResourcePackAssets = {
+      ...assets,
+      models: {
+        ...assets.models,
+        'minecraft:block/non-axis-cullface': {
+          textures: { side: 'stone/side' },
+          elements: [modelElement({ east: face('#side', { cullface: 'up' }) })],
+        },
+      },
+    }
+    expect(failureOf(meshBlockModelResult(
+      modelName('block/non-axis-cullface'),
+      nonAxisCullfaceAssets,
+      invalidFixture<ResourceModelTransform>({ x: 45 }),
+    ))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'non-axis-aligned-face',
+    })
+
+    const missingModelStateAssets: ResourcePackAssets = {
+      ...assets,
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:missing-model-state': {
+          variants: { '': { model: 'block/not-installed' } },
+        },
+      },
+    }
+    expect(failureOf(meshBlockStateResult(
+      resourceName('missing-model-state'),
+      {},
+      missingModelStateAssets,
+    ))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'missing-model',
+    })
+
+    const invalidStateMeshAssets: ResourcePackAssets = {
+      ...assets,
+      models: {
+        ...assets.models,
+        'minecraft:block/invalid-state-rotation': {
+          textures: { side: 'stone/side' },
+          elements: [modelElement(
+            { up: face('#side') },
+            { rotation: invalidFixture<ModelElementRotation>({ origin: [8, 8, 8] }) },
+          )],
+        },
+      },
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:invalid-mesh-state': {
+          variants: { '': { model: 'block/invalid-state-rotation' } },
+        },
+      },
+    }
+    expect(failureOf(meshBlockStateResult(
+      resourceName('invalid-mesh-state'),
+      {},
+      invalidStateMeshAssets,
+    ))).toMatchObject({
+      _tag: 'ResourceModelMeshFailure',
+      code: 'invalid-element-rotation',
     })
   })
 

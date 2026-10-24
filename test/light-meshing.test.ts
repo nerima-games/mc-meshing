@@ -64,6 +64,13 @@ const lightCorners = (values: readonly [number, number, number, number]): LightC
 ]
 
 describe('injected Minecraft light data', () => {
+  it('clamps out-of-range samples and maps NaN to the minimum light level', () => {
+    expect(clampMeshLight(Number.NaN)).toBe(0)
+    expect(clampMeshLight(-1)).toBe(0)
+    expect(clampMeshLight(16)).toBe(15)
+    expect(clampMeshLight(4.9)).toBe(4)
+  })
+
   it('samples an adjacent chunk for a quad corner at the horizontal seam', () => {
     const chunk = chunkWith([], lightOf(2, 3))
     const xPos = chunkWith([], lightOf(7, 11))

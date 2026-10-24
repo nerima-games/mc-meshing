@@ -278,9 +278,16 @@ const weightedVariantOf = (
   variants: BlockStateVariantList,
   seed: number,
 ): Result.Result<BlockStateVariant, ResourcePackResolutionFailure> => {
-  const weighted: Array<{ readonly variant: BlockStateVariant; readonly weight: number }> = []
-  let total = FIRST_INDEX
-  for (const variant of variants) {
+  const [first, ...rest] = variants
+  const firstWeight = variantWeightOf(first)
+  if (Result.isFailure(firstWeight)) {
+    return Result.fail(firstWeight.failure)
+  }
+  let total = firstWeight.success
+  const weighted: Array<{ readonly variant: BlockStateVariant; readonly weight: number }> = [
+    { variant: first, weight: firstWeight.success },
+  ]
+  for (const variant of rest) {
     const weight = variantWeightOf(variant)
     if (Result.isFailure(weight)) {
       return Result.fail(weight.failure)
@@ -288,15 +295,11 @@ const weightedVariantOf = (
     total += weight.success
     weighted.push({ variant, weight: weight.success })
   }
-  const first = weighted[FIRST_INDEX]
-  if (typeof first === 'undefined') {
-    return failResolution('empty-variant-list', 'A blockstate variant list must not be empty')
-  }
   if (!Number.isFinite(total)) {
     return failResolution('invalid-variant-weight', `Blockstate variant weights overflowed: ${total}`)
   }
   let cursor = randomUnitOf(seed) * total
-  let selected = first.variant
+  let selected = first
   for (const item of weighted) {
     cursor -= item.weight
     if (cursor < FIRST_INDEX) {

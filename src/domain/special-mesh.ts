@@ -373,24 +373,24 @@ const railShapeProperties = (railShape: Option.Option<RailShape>): { railShape?:
 }
 
 const railQuad = (
-  lookup: SpecialBlockLookup,
+  railKind: RailRenderKind,
   blockId: BlockId,
   geometryShape: RailShape,
   stateShape: Option.Option<RailShape>,
   position: BlockPosition,
   face: FaceFor<RailFaceDirection>,
   light: QuadLight | undefined,
-): Result.Result<RailSpecialBlockQuad, RailRenderKindFailure> => {
+): RailSpecialBlockQuad => {
   const [lx, y, lz] = position
-  return Result.map(railKindOf(lookup, blockId), (railKind) => ({
-      blockId,
-      kind: 'rail',
-      railKind,
-      vertices: railVerticesOf(geometryShape, lx, y, lz, face.direction),
-      ...face,
-      ...lightPropertiesOf(light),
-      ...railShapeProperties(stateShape),
-    }))
+  return {
+    blockId,
+    kind: 'rail',
+    railKind,
+    vertices: railVerticesOf(geometryShape, lx, y, lz, face.direction),
+    ...face,
+    ...lightPropertiesOf(light),
+    ...railShapeProperties(stateShape),
+  }
 }
 
 const railQuads = (
@@ -403,17 +403,15 @@ const railQuads = (
   topLight: QuadLight | undefined,
   bottomLight: QuadLight | undefined,
 ): Result.Result<readonly [RailSpecialBlockQuad, RailSpecialBlockQuad], RailRenderKindFailure> => {
+  const railKind = railKindOf(lookup, blockId)
+  if (Result.isFailure(railKind)) {
+    return Result.fail(railKind.failure)
+  }
   const geometryShape = Option.isSome(railShape) ? railShape.value : DEFAULT_RAIL_SHAPE
   const position: BlockPosition = [lx, y, lz]
-  const top = railQuad(lookup, blockId, geometryShape, railShape, position, TOP_FACE, topLight)
-  if (Result.isFailure(top)) {
-    return Result.fail(top.failure)
-  }
-  const bottom = railQuad(lookup, blockId, geometryShape, railShape, position, faceOf('yNeg'), bottomLight)
-  if (Result.isFailure(bottom)) {
-    return Result.fail(bottom.failure)
-  }
-  return Result.succeed([top.success, bottom.success])
+  const top = railQuad(railKind.success, blockId, geometryShape, railShape, position, TOP_FACE, topLight)
+  const bottom = railQuad(railKind.success, blockId, geometryShape, railShape, position, faceOf('yNeg'), bottomLight)
+  return Result.succeed([top, bottom])
 }
 
 const meshBoxCell = (
