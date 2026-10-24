@@ -97,7 +97,6 @@
    2 つ目（mc-worldgen の `{x, z}`）は kernel の `{cx, cz}` に統合されたばかりである。
 
 mc-kernel の `ChunkCoord` をそのまま使っており、本リポジトリ独自の座標型は宣言しない。
-`meshChunk` and `meshChunkRegion` return `Result` values so callers can handle configuration and registry validation failures. This package generates geometry buffers without owning renderer or GPU state.
 
 ### 3.1 Three.js 非依存は絶対条件
 

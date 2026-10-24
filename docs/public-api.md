@@ -1,6 +1,6 @@
 # Public API
 
-The package entry point re-exports the public domain APIs from `src/index.ts`. This guide describes the current contracts for chunk input, meshing, configuration, typed-array packing, and resource-pack resolution.
+The package entry point re-exports the public domain APIs from `src/index.ts`.
 
 ## Chunk input and results
 
