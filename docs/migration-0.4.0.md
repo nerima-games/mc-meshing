@@ -85,7 +85,7 @@ The exported object fields were compared individually, including field optionali
 | `ResourceModelQuad` | `model` | `string` | `ModelName` |
 | `ResourceModelQuad` | `texture` | `string` | `TextureName` |
 
-The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias. The new `FluidViewFailure` union has two variants: `IncompleteFluidView` contains `actual`, `coord`, `expected`, and `field` (`falling`, `levels`, or `sources`); `InvalidFluidView` contains `coord` and `field` (`falling`, `fluid`, `levels`, or `sources`) for a null sidecar or missing/invalid array.
+The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias. The new `FluidViewFailure` union has two variants: `IncompleteFluidView` contains `actual`, `coord`, `expected`, and `field` (`falling`, `levels`, or `sources`); `InvalidFluidView` contains `coord` and `field` (`falling`, `fluid`, `levels`, or `sources`) for a null sidecar or absent/non-`Uint8Array` array property.
 
 The declaration comparison found no variant additions, removals, or field changes among the 22 exported union aliases present in both versions. `ChunkViewFailure` is a new union of `ChunkHeightFailure` and `ChunkBlocksFailure`; its two variants and fields are listed in the chunk contract section below.
 
@@ -118,7 +118,7 @@ The declaration checker reports differences for these exported types and values:
 
 The additional exports are `BlockDataFailure`, `BucketFailure`, `ChunkBlocksFailure`, `ChunkHeightFailure`, `ChunkViewFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`. `validateChunkViews` is also a new export. `ResourcePackParseError` is the removed export.
 
-`ChunkBlocksFailure` carries `_tag: 'InvalidChunkBlocksLength'`, `actual`, `expected`, and `coord`. `ChunkViewFailure` combines this with `ChunkHeightFailure`; callers of `validateChunkViews` should handle either failure before reading the validated views.
+`ChunkBlocksFailure` carries `_tag: 'InvalidChunkBlocksLength'`, `actual`, `expected`, and `coord`. `ChunkHeightFailure` carries `_tag: 'InvalidChunkHeight'` and `height`. `ChunkViewFailure` combines both variants; callers of `validateChunkViews` should handle either failure before reading the validated views.
 
 ## Chunk and mesh contracts
 
