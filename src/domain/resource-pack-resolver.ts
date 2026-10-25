@@ -24,6 +24,7 @@ export type ResourceAssetKind = 'blockstate' | 'model'
 
 export type ResourcePackResolutionFailureCode =
   | 'invalid-resource-name'
+  | 'invalid-seed'
   | 'invalid-texture-reference'
   | 'missing-blockstate'
   | 'empty-variant-list'
@@ -381,9 +382,12 @@ export const resolveBlockStateModels = (
   properties: BlockStateProperties,
   assets: ResourcePackAssets,
   options?: BlockStateResolveOptions,
-): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> =>
-  Result.flatMap(blockStateDefinitionOf(assets, name), (definition) => {
-    const seed = options?.seed ?? DEFAULT_SEED
+): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> => {
+  const seed = options?.seed ?? DEFAULT_SEED
+  if (!Number.isFinite(seed)) {
+    return failResolution('invalid-seed', `Blockstate resolver seed must be finite, received ${seed}`)
+  }
+  return Result.flatMap(blockStateDefinitionOf(assets, name), (definition) => {
     if (typeof definition.variants !== 'undefined') {
       return Result.flatMap(matchingVariantOf(definition.variants, properties), (variant) =>
         resolvedVariantsOf(variant, seed),
@@ -397,6 +401,7 @@ export const resolveBlockStateModels = (
       'A blockstate asset must define variants or multipart',
     )
   })
+}
 
 const modelOf = (
   assets: ResourcePackAssets,

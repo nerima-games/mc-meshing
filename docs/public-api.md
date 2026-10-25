@@ -277,6 +277,8 @@ export const meshBlockState: (
 ) => Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure>
 ```
 
+`BlockStateResolveOptions.seed` is optional; omission uses the stable default seed. An explicit seed must be finite or resolution returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
+
 Resolved blockstate selections and model quads carry `ModelName`; resolved model quads carry `TextureName`. Texture references in raw model faces remain strings because values such as `#side` must be resolved through the model's texture map.
 
 The supported subset includes variants, multipart OR/AND conditions, weighted selection, parent models, texture variables, ambient occlusion, block and element rotation, UVs, UV lock, cull faces, and tint indices. Element rotation accepts the legacy `axis`/`angle` form and the multi-axis `x`/`y`/`z` form; multi-axis rotations are applied X, then Y, then Z. Geometry outputs are renderer-independent quads with resolved ambient occlusion and normalized normals. PNG decoding, texture atlases, materials, tint or biome colors, and generic state-dependent model wiring remain outside this package.

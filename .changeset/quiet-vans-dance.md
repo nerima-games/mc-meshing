@@ -2,7 +2,9 @@
 "@nerima-games/mc-meshing": minor
 ---
 
-Migrate to Effect 4 and mc-kernel 0.9, brand block IDs and resource names, use the kernel LightLevel type, return structured failures from fallible APIs, and remove ResourcePackParseError.
+Migrate to Effect 4 and mc-kernel 0.9, brand block IDs and resource names, use the kernel LightLevel type, return structured failures from fallible APIs, reject non-finite resolver seeds, and remove ResourcePackParseError.
+
+An omitted blockstate resolver seed uses the stable default; an explicit non-finite seed returns the `invalid-seed` resolution failure.
 
 The built declaration comparison also records these API changes:
 

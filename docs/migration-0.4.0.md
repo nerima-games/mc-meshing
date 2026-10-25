@@ -61,6 +61,8 @@ This applies to `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketF
 
 `ResourcePackParseError` was removed. `parseResourcePackAssets` and `parseResourcePackAssetsJson` now return `Result<ResourcePackAssets, ResourcePackParseFailure>`; inspect the failure's `_tag`, `input`, `issue`, and `message` fields.
 
+The optional blockstate resolver seed uses a stable default only when omitted. An explicit seed must be finite; otherwise resolution returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
+
 ## Public declaration changes
 
 The lists below come from a symbol comparison of the 0.3.x package entry declaration and this release's built `dist/index.d.ts`. Update every affected call site, including helper APIs that may not be used by the main chunk mesher.

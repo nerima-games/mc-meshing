@@ -256,6 +256,20 @@ describe('resource-pack resolver', () => {
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
   })
 
+  it('rejects non-finite blockstate resolver seeds', () => {
+    for (const seed of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(failureOf(resolveBlockStateModelsResult(
+        resourceName('demo'),
+        { facing: 'east' },
+        assets,
+        { seed },
+      ))).toMatchObject({
+        _tag: 'ResourcePackResolutionFailure',
+        code: 'invalid-seed',
+      })
+    }
+  })
+
   it('rejects malformed normalized names and multipart selection errors', () => {
     expect(failureOf(normalizeResourceNameResult('bad:', 'blockstate'))).toMatchObject({
       _tag: 'ResourcePackResolutionFailure',
