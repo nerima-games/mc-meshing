@@ -98,6 +98,16 @@ describe('maxLevelOf', () => {
     })
   })
 
+  it('skips neighbour slots without a loaded ChunkView', () => {
+    const height = 1
+    const empty = Result.getOrThrow(emptyChunkResult(height))
+    const unloadedNeighbour = invalidFixture<Parameters<typeof validateFluidViews>[1]>({
+      xPos: Reflect.get({}, 'xPos'),
+    })
+
+    expect(Result.isSuccess(validateFluidViews(empty, unloadedNeighbour))).toBe(true)
+  })
+
   it('rejects each missing, null, or non-byte FluidView array', () => {
     const height = 1
     const empty = Result.getOrThrow(emptyChunkResult(height))
