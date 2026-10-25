@@ -174,7 +174,7 @@ export const sampleLightAt = (...args: SampleLightArguments): LightSample => {
   }
 
   const { light } = target.chunk
-  if (!light) {
+  if (typeof light === 'undefined') {
     return OPEN_SKY_LIGHT
   }
   return sampleLightInChunk({ chunk: target.chunk, fallback: OPEN_SKY_LIGHT, light, lx: target.lx, lz: target.lz, y })
@@ -199,7 +199,8 @@ type QuadLightArguments = readonly [ChunkView, ChunkNeighbours, FaceDirection, n
 
 export const quadLightAt = (...args: QuadLightArguments): QuadLight | undefined => {
   const [chunk, neighbours, direction, lx, y, lz] = args
-  if (!chunk.light) {
+  const light = chunk.light
+  if (typeof light === 'undefined') {
     return
   }
 

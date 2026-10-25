@@ -41,7 +41,12 @@ export type ChunkBlocksFailure = {
   readonly expected: number
 }
 
-export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure
+export type ChunkLightFailure = {
+  readonly _tag: 'InvalidChunkLight'
+  readonly coord: ChunkView['coord']
+}
+
+export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure | ChunkLightFailure
 
 export const blockCount = (height: number): Result.Result<number, ChunkHeightFailure> => {
   if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
@@ -85,6 +90,10 @@ export const validateChunkViews = (
         coord: view.coord,
         expected: expected.success,
       })
+    }
+    const light: LightView | null | undefined = view.light
+    if (light === null) {
+      return Result.fail({ _tag: 'InvalidChunkLight', coord: view.coord })
     }
   }
   return Result.void

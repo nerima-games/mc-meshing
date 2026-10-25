@@ -42,7 +42,7 @@ const meshKernelChunk = () => {
 blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE
 ```
 
-The `blocks` array must contain exactly `CHUNK_SIZE * height * CHUNK_SIZE` entries. `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` validate the core chunk and each loaded neighbour before reading blocks; an invalid height or array length returns a structured `ChunkViewFailure`. An out-of-range chunk-local coordinate still reads as `AIR`.
+The `blocks` array must contain exactly `CHUNK_SIZE * height * CHUNK_SIZE` entries. `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` validate the core chunk and each loaded neighbour before reading blocks; an invalid height, array length, or explicit `null` light sidecar returns a structured `ChunkViewFailure`. An omitted light sidecar uses open-sky light. An out-of-range chunk-local coordinate still reads as `AIR`.
 
 ```ts
 export type ChunkHeightFailure = {
@@ -55,7 +55,11 @@ export type ChunkBlocksFailure = {
   readonly coord: ChunkCoord
   readonly expected: number
 }
-export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure
+export type ChunkLightFailure = {
+  readonly _tag: 'InvalidChunkLight'
+  readonly coord: ChunkCoord
+}
+export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure | ChunkLightFailure
 export const validateChunkViews: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
@@ -68,7 +72,7 @@ Standalone helpers that read a `ChunkView`, including `getBlock`, `meshCrossPlan
 
 `getBlock`, `getBlockAcrossBoundary`, `sampleLightAt`, and `ambientOcclusionAt` take integer voxel coordinates. These low-level samplers do not round or validate each coordinate; the meshing loops supply integer positions so the hot path does not repeat coordinate checks.
 
-Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. `FluidView` requires `levels`, `sources`, and `falling` byte arrays, but TypeScript cannot express their required per-chunk lengths. Runtime validation returns `InvalidFluidView` for malformed values such as an explicit `null` sidecar or an absent/non-`Uint8Array` array property, and `IncompleteFluidView` when a typed array is shorter than the chunk cell count. An omitted `fluid` sidecar, or one set to `undefined` at runtime, uses the full-height, non-source compatibility behavior. A missing rail sidecar or per-cell shape uses `north_south`; an invalid shape code returns `RailShapeFailure`. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's open-sky fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
+Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. `FluidView` requires `levels`, `sources`, and `falling` byte arrays, but TypeScript cannot express their required per-chunk lengths. Runtime validation returns `InvalidFluidView` for malformed values such as an explicit `null` fluid sidecar or an absent/non-`Uint8Array` array property, and `IncompleteFluidView` when a typed array is shorter than the chunk cell count. An omitted `fluid` sidecar, or one set to `undefined` at runtime, uses the full-height, non-source compatibility behavior. A missing rail sidecar or per-cell shape uses `north_south`; an invalid shape code returns `RailShapeFailure`. A `null` light sidecar returns `InvalidChunkLight`; an omitted light sidecar uses open-sky light. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's open-sky fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
 
 ```ts
 export type FluidViewFailure =

@@ -53,6 +53,8 @@ const chunkWith = (
   return chunk
 }
 
+const invalidFixture = <T,>(value: unknown): T => value as T
+
 const yPosQuads = (chunk: ChunkView) =>
   Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG)).opaque.filter((quad) => quad.direction === 'yPos')
 
@@ -115,6 +117,18 @@ describe('injected Minecraft light data', () => {
     expect(sampleLightAt(emptyLight, {}, 0, 0, 0)).toStrictEqual({ block: 0, sky: 15 })
     expect(sampleLightAt(lit, {}, 0, CHUNK_HEIGHT, 0)).toStrictEqual({ block: 0, sky: 15 })
     expect(sampleLightAt(lit, {}, 0, -1, 0)).toStrictEqual({ block: 0, sky: 0 })
+  })
+
+  it('rejects a null light sidecar at the chunk validation boundary', () => {
+    const chunk = chunkWith([])
+    const nullLight = invalidFixture<ChunkView>({ ...chunk, light: null })
+
+    expect(meshChunk(nullLight, {}, MESH_CONFIG)).toMatchObject({
+      failure: { _tag: 'InvalidChunkLight', coord: chunk.coord },
+    })
+    expect(meshChunk(chunk, { xPos: nullLight }, MESH_CONFIG)).toMatchObject({
+      failure: { _tag: 'InvalidChunkLight', coord: chunk.coord },
+    })
   })
 
   it('carries corner light through greedy, naive, and region meshes', () => {
