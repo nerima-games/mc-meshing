@@ -98,6 +98,76 @@ describe('maxLevelOf', () => {
     })
   })
 
+  it('rejects each missing, null, or non-byte FluidView array', () => {
+    const height = 1
+    const empty = Result.getOrThrow(emptyChunkResult(height))
+    const completeFluid = {
+      levels: new Uint8Array(empty.blocks.length),
+      sources: new Uint8Array(empty.blocks.length),
+      falling: new Uint8Array(empty.blocks.length),
+    }
+    const fields = ['levels', 'sources', 'falling'] as const
+
+    for (const field of fields) {
+      const missingFieldFluid = { ...completeFluid }
+      Reflect.deleteProperty(missingFieldFluid, field)
+      const missingFieldChunk = invalidFixture<Parameters<typeof validateFluidViews>[0]>({
+        ...empty,
+        fluid: missingFieldFluid,
+      })
+      expect(validateFluidViews(missingFieldChunk, {})).toMatchObject({
+        failure: { _tag: 'InvalidFluidView', field },
+      })
+
+      const nullFieldChunk = invalidFixture<Parameters<typeof validateFluidViews>[0]>({
+        ...empty,
+        fluid: { ...completeFluid, [field]: null },
+      })
+      expect(validateFluidViews(nullFieldChunk, {})).toMatchObject({
+        failure: { _tag: 'InvalidFluidView', field },
+      })
+
+      const nonByteArrayChunk = invalidFixture<Parameters<typeof validateFluidViews>[0]>({
+        ...empty,
+        fluid: { ...completeFluid, [field]: new Float32Array(empty.blocks.length) },
+      })
+      expect(validateFluidViews(nonByteArrayChunk, {})).toMatchObject({
+        failure: { _tag: 'InvalidFluidView', field },
+      })
+    }
+  })
+
+  it('samples a complete FluidView directly when no validated view map is supplied', () => {
+    const height = 1
+    const empty = Result.getOrThrow(emptyChunkResult(height))
+    const position: readonly [number, number, number] = [2, 0, 3]
+    const index = blockIndex(...position, height)
+    const blocks = new Uint16Array(empty.blocks)
+    blocks[index] = BLOCK_ID
+    const fluid = {
+      levels: new Uint8Array(empty.blocks.length),
+      sources: new Uint8Array(empty.blocks.length),
+      falling: new Uint8Array(empty.blocks.length),
+    }
+    fluid.levels[index] = 1
+    const chunk = { ...empty, blocks, fluid }
+    const config = {
+      ...EMPTY_MESH_CONFIG,
+      fluidMaxLevels: new Map<BlockId, number>([[BLOCK_ID, 8]]),
+    }
+    const space = {
+      chunk,
+      neighbours: {},
+      context: {
+        fluids: Result.getOrThrow(buildFluidLookup(config)),
+        layers: new Uint8Array(BLOCK_ID_MAX + 1),
+        plants: new Uint8Array(BLOCK_ID_MAX + 1),
+      },
+    }
+
+    expect(heightIn(space, position, BLOCK_ID)).toBe(8 / 9)
+  })
+
   it('reports an invalid fluid max level without throwing', () => {
     const config = {
       ...EMPTY_MESH_CONFIG,

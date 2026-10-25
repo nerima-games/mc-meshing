@@ -5,12 +5,14 @@ import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
   CHUNK_SIZE,
+  type ChunkNeighbours,
   type ChunkView,
   blockCount,
   blockCountOf,
   blockIndex,
   emptyChunk,
   getBlock,
+  validateChunkViews,
 } from '../src/domain/chunk-view'
 
 const STEP = 1
@@ -19,6 +21,7 @@ const CHUNK_Z = chunkAxis(-1)
 const STONE_X = 3
 const STONE_Z = 5
 const STONE_Y = 42
+const invalidFixture = <T,>(value: any): T => value
 
 describe('ChunkView', () => {
   it('keeps kernel coordinates alongside height-aware element storage', () => {
@@ -53,6 +56,23 @@ describe('blockCount', () => {
 
   it('rejects an invalid empty chunk height', () => {
     expect(emptyChunk(0)).toMatchObject({
+      failure: { _tag: 'InvalidChunkHeight', height: 0 },
+    })
+  })
+})
+
+describe('validateChunkViews', () => {
+  it('skips an undefined neighbour and rejects invalid heights on the core and loaded neighbours', () => {
+    const valid = Result.getOrThrow(emptyChunk(CHUNK_HEIGHT))
+    const undefinedNeighbour = invalidFixture<ChunkNeighbours>({ xPos: undefined })
+
+    expect(validateChunkViews(valid, undefinedNeighbour)).toStrictEqual(Result.succeed(undefined))
+
+    const invalidHeightChunk: ChunkView = { ...valid, height: 0 }
+    expect(validateChunkViews(invalidHeightChunk, {})).toMatchObject({
+      failure: { _tag: 'InvalidChunkHeight', height: 0 },
+    })
+    expect(validateChunkViews(valid, { xPos: invalidHeightChunk })).toMatchObject({
       failure: { _tag: 'InvalidChunkHeight', height: 0 },
     })
   })

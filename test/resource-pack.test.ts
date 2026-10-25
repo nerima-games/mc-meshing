@@ -279,6 +279,16 @@ describe('resource-pack resolver', () => {
       _tag: 'ResourcePackResolutionFailure',
       code: 'invalid-seed',
     })
+    const nullOptions = invalidFixture<Parameters<typeof resolveBlockStateModelsResult>[3]>(null)
+    expect(failureOf(resolveBlockStateModelsResult(
+      resourceName('demo'),
+      { facing: 'east' },
+      assets,
+      nullOptions,
+    ))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-seed',
+    })
     const undefinedSeedOptions = invalidFixture<{ readonly seed?: number }>({ seed: Reflect.get({}, 'seed') })
     expect(resolveBlockStateModelsResult(resourceName('demo'), { facing: 'east' }, assets, undefinedSeedOptions)).toStrictEqual(
       resolveBlockStateModelsResult(resourceName('demo'), { facing: 'east' }, assets),
