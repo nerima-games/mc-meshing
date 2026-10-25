@@ -57,17 +57,17 @@ if (Result.isFailure(result)) {
 consumeLayers(result.success)
 ```
 
-This applies to `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `emptyChunk`, `MeshScratch.buffersFor`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, and `resolveModelTexture`. The registry-derived `MINECRAFT_*` values, `MINECRAFT_MESH_CONFIG`, and `SPECIAL_BLOCK_LOOKUP` are also fallible. `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS` returns a `Result<Option<ReadonlySet<BlockId>>, BlockRegistryResolutionFailure>` because the registry may have no transparent solid IDs.
+This applies to `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `emptyChunk`, `MeshScratch.buffersFor`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, `resolveModelTexture`, and `validateChunkViews`. The registry-derived `MINECRAFT_*` values, `MINECRAFT_MESH_CONFIG`, and `SPECIAL_BLOCK_LOOKUP` are also fallible. `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS` returns a `Result<Option<ReadonlySet<BlockId>>, BlockRegistryResolutionFailure>` because the registry may have no transparent solid IDs.
 
 `ResourcePackParseError` was removed. `parseResourcePackAssets` and `parseResourcePackAssetsJson` now return `Result<ResourcePackAssets, ResourcePackParseFailure>`; inspect the failure's `_tag`, `input`, `issue`, and `message` fields.
 
-The optional blockstate resolver seed uses a stable default only when omitted. An explicit seed must be finite; otherwise resolution returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
+The optional blockstate resolver seed uses a stable default only when omitted or explicitly `undefined`. An explicit `null`, non-number, or non-finite seed returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
 
 ## Public declaration changes
 
 The lists below come from a symbol comparison of the 0.3.x package entry declaration and this release's built `dist/index.d.ts`. Update every affected call site, including helper APIs that may not be used by the main chunk mesher.
 
-Argument or return types changed for `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `clampMeshLight`, `emptyChunk`, `isCrossPlant`, `isFluidBlock`, `isSpecialBlock`, `layerOfBlockId`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `occludes`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, and `resolveModelTexture`. The method `MeshScratch.buffersFor` also now returns a `Result`.
+Argument or return types changed for `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `clampMeshLight`, `emptyChunk`, `isCrossPlant`, `isFluidBlock`, `isSpecialBlock`, `layerOfBlockId`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `occludes`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, and `resolveModelTexture`. The method `MeshScratch.buffersFor` also now returns a `Result`. `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` include `ChunkViewFailure` in their failure unions; `meshFluidSurfaces` reports the expanded `FluidViewFailure` union.
 
 `BlockId.either` and `LightLevel.either` were removed from the branded constructors. Use `BlockId.result(rawId)` or `LightLevel.result(rawLight)` and handle the returned failure before using the branded value. Their `.option` validators are available when an invalid value should be represented as `None`.
 
@@ -85,7 +85,7 @@ The exported object fields were compared individually, including field optionali
 | `ResourceModelQuad` | `model` | `string` | `ModelName` |
 | `ResourceModelQuad` | `texture` | `string` | `TextureName` |
 
-The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias.
+The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias. `FluidViewFailure` also adds an `InvalidFluidView` variant with `coord` and `field` (`fluid`, `levels`, `sources`, or `falling`) for a null sidecar or missing/invalid array.
 
 Create each branded value at its input boundary:
 
@@ -101,10 +101,14 @@ The resource-name brands have no public constructors. The normalization and reso
 
 The changed exported type and value declarations are `BlockId`, `LightCorners`, `LightLevel`, `LightSample`, `LodLevelSchema`, `MINECRAFT_CROSS_PLANT_BLOCK_IDS`, `MINECRAFT_FLUID_MAX_LEVELS`, `MINECRAFT_MESH_CONFIG`, `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS`, `MINECRAFT_WATER_BLOCK_IDS`, `MeshConfig`, `MeshScratch`, `ResolvedBlockModel`, `ResolvedBlockStateModel`, `ResourceModelQuad`, and `ResourcePackAssetsSchema`.
 
-The additional exports are `BlockDataFailure`, `BucketFailure`, `ChunkHeightFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`. `ResourcePackParseError` is the removed export.
+The additional exports are `BlockDataFailure`, `BucketFailure`, `ChunkBlocksFailure`, `ChunkHeightFailure`, `ChunkViewFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`. `validateChunkViews` is also a new export. `ResourcePackParseError` is the removed export.
+
+`ChunkBlocksFailure` carries `_tag: 'InvalidChunkBlocksLength'`, `actual`, `expected`, and `coord`. `ChunkViewFailure` combines this with `ChunkHeightFailure`; callers of `validateChunkViews` should handle either failure before reading the validated views.
 
 ## Chunk and mesh contracts
 
 `ChunkView` continues to store block IDs in `Uint16Array`. This element type has the same numeric range as kernel `BlockId`, so chunk reads use the validated storage domain directly and do not allocate a `Result` for every cell. Validate raw IDs before narrowing them into the typed array.
+
+The `blocks` array must contain exactly `CHUNK_SIZE * height * CHUNK_SIZE` entries. `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` validate the core chunk and every loaded neighbour before reading blocks; a mismatch returns `InvalidChunkBlocksLength` with actual and expected lengths. Out-of-range coordinates still read as `AIR`.
 
 `meshChunkRegion` now greedily merges opaque faces owned by dirty cells. Its one-cell halo remains an input for visibility and ambient-occlusion reads and never contributes output geometry. LOD still simplifies opaque cubes only; water and fluid arrays remain at level 0.

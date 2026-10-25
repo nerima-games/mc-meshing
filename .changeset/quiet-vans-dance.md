@@ -2,9 +2,9 @@
 "@nerima-games/mc-meshing": minor
 ---
 
-Migrate to Effect 4 and mc-kernel 0.9, brand block IDs and resource names, use the kernel LightLevel type, return structured failures from fallible APIs, reject non-finite resolver seeds, and remove ResourcePackParseError.
+Migrate to Effect 4 and mc-kernel 0.9, brand block IDs and resource names, use the kernel LightLevel type, return structured failures from fallible APIs, reject null and non-finite resolver seeds, and remove ResourcePackParseError.
 
-An omitted blockstate resolver seed uses the stable default; an explicit non-finite seed returns the `invalid-seed` resolution failure.
+An omitted or explicitly undefined blockstate resolver seed uses the stable default; an explicit null or non-finite seed returns the `invalid-seed` resolution failure.
 
 The built declaration comparison also records these API changes:
 
@@ -13,7 +13,9 @@ The built declaration comparison also records these API changes:
 - Exported field changes: `LightSample.block` and `.sky` and all four `LightCorners` elements changed from `number` to `LightLevel`; `QuadLight.block` and `.sky` remain `LightCorners` and are affected through that tuple. `MeshConfig.waterBlockIds`, `transparentSolidBlockIds`, and `crossPlantBlockIds` changed from `ReadonlySet<number>` to `ReadonlySet<BlockId>`; `fluidMaxLevels` changed from `ReadonlyMap<number, number>` to `ReadonlyMap<BlockId, number>`. `ResolvedBlockModel.name`, `ResolvedBlockStateModel.model`, and `ResourceModelQuad.model` changed from `string` to `ModelName`; `ResourceModelQuad.texture` changed from `string` to `TextureName`. No existing exported field was added, removed, or changed optionality.
 - Create IDs with kernel `BlockId.result(rawId)` and light values with kernel `LightLevel.result(rawLight)`. Create `ResourceName` with `normalizeResourceName(rawName, 'blockstate')`, `ModelName` with `normalizeResourceName(rawName, 'model')`, and obtain `TextureName` through `resolveModelTexture(model, reference)`; handle each `Result` failure.
 - Changed exported type and value declarations: `BlockId`, `LightCorners`, `LightLevel`, `LightSample`, `LodLevelSchema`, `MINECRAFT_CROSS_PLANT_BLOCK_IDS`, `MINECRAFT_FLUID_MAX_LEVELS`, `MINECRAFT_MESH_CONFIG`, `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS`, `MINECRAFT_WATER_BLOCK_IDS`, `MeshConfig`, `MeshScratch`, `ResolvedBlockModel`, `ResolvedBlockStateModel`, `ResourceModelQuad`, and `ResourcePackAssetsSchema`.
-- Added exports: `BlockDataFailure`, `BucketFailure`, `ChunkHeightFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`.
+- Added exports: `BlockDataFailure`, `BucketFailure`, `ChunkBlocksFailure`, `ChunkHeightFailure`, `ChunkViewFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`.
 - Removed export: `ResourcePackParseError`.
+- `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` reject a core or loaded neighbour whose block array length differs from `CHUNK_SIZE * height * CHUNK_SIZE`, returning `InvalidChunkBlocksLength`. `validateChunkViews` is also a new export.
+- `FluidViewFailure` adds the `InvalidFluidView` variant for a null sidecar or missing/invalid array. Fluid validation captures the sidecar arrays once and passes them into sampling.
 
 Use the kernel `BlockId.result` and `LightLevel.result` validators for raw numeric values, and use the listed normalizer and resolver functions to create resource-name brands. Handle all returned `Result` failures before using successful values.

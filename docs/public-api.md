@@ -42,11 +42,33 @@ const meshKernelChunk = () => {
 blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE
 ```
 
+The `blocks` array must contain exactly `CHUNK_SIZE * height * CHUNK_SIZE` entries. `meshChunk`, `meshChunkNaive`, and `meshChunkRegion` validate the core chunk and each loaded neighbour before reading blocks; an invalid height or array length returns a structured `ChunkViewFailure`. An out-of-range chunk-local coordinate still reads as `AIR`.
+
+```ts
+export type ChunkHeightFailure = {
+  readonly _tag: 'InvalidChunkHeight'
+  readonly height: number
+}
+export type ChunkBlocksFailure = {
+  readonly _tag: 'InvalidChunkBlocksLength'
+  readonly actual: number
+  readonly coord: ChunkCoord
+  readonly expected: number
+}
+export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure
+export const validateChunkViews: (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+) => Result.Result<void, ChunkViewFailure>
+```
+
 `getBlock` and `getBlockAcrossBoundary` return kernel `BlockId` values. An out-of-range chunk-local read returns `AIR`. Values read from `Uint16Array` already fit the kernel's numeric `BlockId` range; the hot read path does not allocate a `Result` or revalidate every cell. Callers must validate raw numeric IDs before narrowing them into typed-array storage.
+
+Standalone helpers that read a `ChunkView`, including `getBlock`, `meshCrossPlants`, `meshFluidSurfaces`, and `meshSpecialBlocks`, require views with the documented block-array length. Call `validateChunkViews` before using those helpers with externally constructed views. The three chunk-level mesh entry points perform this check themselves.
 
 `getBlock`, `getBlockAcrossBoundary`, `sampleLightAt`, and `ambientOcclusionAt` take integer voxel coordinates. These low-level samplers do not round or validate each coordinate; the meshing loops supply integer positions so the hot path does not repeat coordinate checks.
 
-Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return an `IncompleteFluidView` failure for a shorter array. An absent fluid sidecar retains the full-height, non-source compatibility behavior. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
+Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return `IncompleteFluidView` for a shorter array and `InvalidFluidView` for an explicit `null` sidecar or missing/invalid array. Only an omitted `fluid` sidecar uses the full-height, non-source compatibility behavior. A missing rail sidecar or per-cell shape uses `north_south`; an invalid shape code returns `RailShapeFailure`. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's open-sky fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
 
 ## Mesh configuration and block IDs
 
@@ -145,20 +167,20 @@ export const meshChunk: (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   scratch?: MeshScratch,
-) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure>
+) => Result.Result<MeshLayers, ChunkViewFailure | LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure>
 
 export const meshChunkNaive: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
-) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure>
+) => Result.Result<MeshLayers, ChunkViewFailure | LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure>
 
 export const meshChunkRegion: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   dirtyRegion: MeshRegion,
-) => Result.Result<RegionMesh, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure>
+) => Result.Result<RegionMesh, ChunkViewFailure | LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure>
 
 export class MeshScratch {
   static create(): MeshScratch
@@ -179,7 +201,7 @@ export type RegionMesh = {
 
 `LayerLookupTableFailure` and `GreedyMaskFailure` appear in these returned failure unions, but are internal variants and are not exported from the package root. Callers can narrow returned failures by `_tag` without importing those variant types.
 
-All three chunk meshing entry points return `Result`. They report incomplete fluid sidecars, invalid lookup configuration, kernel registry failures, and meshing failures to the caller. The standalone `meshFluidSurfaces` helper also returns `Result` and reports incomplete sidecars. `createMeshScratch()` creates a scratch instance that reuses mask and light work arrays across sequential calls; do not share one scratch instance between concurrent calls. Returned arrays and quads remain owned by each result and are not changed by later calls. `MeshRegion.min` is inclusive and `MeshRegion.max` is exclusive, in local X, Y, Z order.
+All three chunk meshing entry points return `Result`. They report invalid chunk views, incomplete or invalid fluid sidecars, invalid lookup configuration, kernel registry failures, and meshing failures to the caller. The standalone `meshFluidSurfaces` helper also returns `Result` and reports incomplete or invalid sidecars. `createMeshScratch()` creates a scratch instance that reuses mask and light work arrays across sequential calls; do not share one scratch instance between concurrent calls. Returned arrays and quads remain owned by each result and are not changed by later calls. `MeshRegion.min` is inclusive and `MeshRegion.max` is exclusive, in local X, Y, Z order. Each bound is a three-number tuple; non-finite numeric coordinates clamp to the lower edge of the corresponding range.
 
 `totalQuadCount` counts cube quads and `totalQuadArea` counts their area before merging. Fluid and special-shape quads are separate.
 
@@ -279,13 +301,15 @@ export const meshBlockState: (
 ) => Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure>
 ```
 
-`BlockStateResolveOptions.seed` is optional; omission uses the stable default seed. An explicit seed must be finite or resolution returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
+`BlockStateResolveOptions.seed` is optional; omission or an explicit `undefined` uses the stable default seed. An explicit `null`, non-number, or non-finite seed returns `ResourcePackResolutionFailure` with code `invalid-seed`. Finite seeds are folded to 32 bits for deterministic variant selection.
 
 Resolved blockstate selections and model quads carry `ModelName`; resolved model quads carry `TextureName`. Texture references in raw model faces remain strings because values such as `#side` must be resolved through the model's texture map.
 
 The supported subset includes variants, multipart OR/AND conditions, weighted selection, parent models, texture variables, ambient occlusion, block and element rotation, UVs, UV lock, cull faces, and tint indices. Element rotation accepts the legacy `axis`/`angle` form and the multi-axis `x`/`y`/`z` form; multi-axis rotations are applied X, then Y, then Z. Geometry outputs are renderer-independent quads with resolved ambient occlusion and normalized normals. PNG decoding, texture atlases, materials, tint or biome colors, and generic state-dependent model wiring remain outside this package.
 
 Blockstate variants must contain at least one candidate. A definition contains either `variants` or `multipart`, not both or neither. The parser rejects non-finite geometry, UV, and tint values, and non-positive or non-finite variant weights.
+
+Omitted variant weights default to `1`; omitted `uvlock` defaults to `false`; omitted X, Y, and Z rotations default to `0`. Ambient occlusion inherits from the parent model when one is present, and defaults to `true` when no model in the parent chain specifies it.
 
 ## Reference implementation mapping
 
