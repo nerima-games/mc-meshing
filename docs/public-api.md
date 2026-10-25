@@ -72,7 +72,7 @@ export const buildCrossPlantLookup: (config: MeshConfig) => Result.Result<Uint8A
 
 Configuration collections use native `Set` and `Map` with kernel `BlockId` keys. The collections are caller-owned and must not be mutated after their first use by a mesher. Create new collections and a new `MeshConfig` when changing block classification; lookup tables are cached by `MeshConfig` object identity.
 
-Use the kernel's validating `BlockId.result(value)` or `BlockId.option(value)` API at an untrusted numeric boundary. Calling the brand constructor directly is the throwing form. Fluid maximum levels must be integers from `0` through `255`; invalid IDs or levels are reported through `Result` failures.
+Use the kernel's validating `BlockId.result(value)` or `BlockId.option(value)` API at an untrusted numeric boundary. Use `LightLevel.result(value)` or `LightLevel.option(value)` to construct validated light values. Calling either brand constructor directly is the throwing form. Fluid maximum levels must be integers from `0` through `255`; invalid IDs or levels are reported through `Result` failures.
 
 `waterBlockIds` and `transparentSolidBlockIds` classify cube faces into the three mesh layers. `crossPlantBlockIds` selects a dedicated cross-plant shape, while `fluidMaxLevels` supplies the level ceiling for configured fluid blocks.
 
@@ -232,6 +232,8 @@ export const parseResourcePackAssetsJson: (
 ```
 
 Normalized asset names use separate brands. The JSON-facing fields and asset record keys remain plain strings; normalization validates and converts them at the resolver boundary.
+
+Resource-name brand constructors are not public. Create `ResourceName` with `normalizeResourceName(rawName, 'blockstate')`, `ModelName` with `normalizeResourceName(rawName, 'model')`, and `TextureName` with `resolveModelTexture(model, reference)`. Handle each returned `Result` before using its branded value.
 
 ```ts
 import { Result } from 'effect'

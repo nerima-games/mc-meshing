@@ -69,7 +69,35 @@ The lists below come from a symbol comparison of the 0.3.x package entry declara
 
 Argument or return types changed for `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `clampMeshLight`, `emptyChunk`, `isCrossPlant`, `isFluidBlock`, `isSpecialBlock`, `layerOfBlockId`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `occludes`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, and `resolveModelTexture`. The method `MeshScratch.buffersFor` also now returns a `Result`.
 
-`BlockId.either` and `LightLevel.either` were removed from the branded constructors. Use their `.result` or `.option` validators. `LightCorners` and `LightSample` now contain `LightLevel` values. `MeshConfig` block ID collections use `BlockId`; `ResolvedBlockModel`, `ResolvedBlockStateModel`, and `ResourceModelQuad` use branded resource names; and `clampMeshLight` returns `LightLevel`. `LodLevelSchema` and `ResourcePackAssetsSchema` use the Effect 4 schema types.
+`BlockId.either` and `LightLevel.either` were removed from the branded constructors. Use `BlockId.result(rawId)` or `LightLevel.result(rawLight)` and handle the returned failure before using the branded value. Their `.option` validators are available when an invalid value should be represented as `None`.
+
+The exported object fields were compared individually, including field optionality. These field types changed:
+
+| Exported type | Field | 0.3.x | 0.4.0 |
+| --- | --- | --- | --- |
+| `LightSample` | `block`, `sky` | `number` | `LightLevel` |
+| `LightCorners` | elements 0 through 3 | `number` | `LightLevel` |
+| `QuadLight` | `block`, `sky` | `LightCorners` of numbers | `LightCorners` of `LightLevel` |
+| `MeshConfig` | `waterBlockIds`, `transparentSolidBlockIds`, `crossPlantBlockIds` | `ReadonlySet<number>` | `ReadonlySet<BlockId>` |
+| `MeshConfig` | `fluidMaxLevels` | `ReadonlyMap<number, number>` | `ReadonlyMap<BlockId, number>` |
+| `ResolvedBlockModel` | `name` | `string` | `ModelName` |
+| `ResolvedBlockStateModel` | `model` | `string` | `ModelName` |
+| `ResourceModelQuad` | `model` | `string` | `ModelName` |
+| `ResourceModelQuad` | `texture` | `string` | `TextureName` |
+
+The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias.
+
+Create each branded value at its input boundary:
+
+| Brand | Construction |
+| --- | --- |
+| `BlockId` | `BlockId.result(rawId)` from `@nerima-games/mc-kernel` |
+| `LightLevel` | `LightLevel.result(rawLight)` from `@nerima-games/mc-kernel` |
+| `ResourceName` | `normalizeResourceName(rawName, 'blockstate')` |
+| `ModelName` | `normalizeResourceName(rawName, 'model')` |
+| `TextureName` | `resolveModelTexture(model, reference)` |
+
+The resource-name brands have no public constructors. The normalization and resolution functions return `Result`; handle failure before using the successful branded value. `clampMeshLight` also returns `LightLevel` for values that should be clamped to the supported light range. `LodLevelSchema` and `ResourcePackAssetsSchema` use the Effect 4 schema types.
 
 The changed exported type and value declarations are `BlockId`, `LightCorners`, `LightLevel`, `LightSample`, `LodLevelSchema`, `MINECRAFT_CROSS_PLANT_BLOCK_IDS`, `MINECRAFT_FLUID_MAX_LEVELS`, `MINECRAFT_MESH_CONFIG`, `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS`, `MINECRAFT_WATER_BLOCK_IDS`, `MeshConfig`, `MeshScratch`, `ResolvedBlockModel`, `ResolvedBlockStateModel`, `ResourceModelQuad`, and `ResourcePackAssetsSchema`.
 
