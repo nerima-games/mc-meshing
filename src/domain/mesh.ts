@@ -290,7 +290,7 @@ const chunkMeshContextOf = (
     Result.flatMap(fluidLookupForMesh(config), (fluids) => {
       return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
         const yLimit = solidCeiling(chunk.blocks, chunk.height)
-        return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, yLimit), (specialBlocks) =>
+        return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, yLimit, undefined, config), (specialBlocks) =>
           Result.map(meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, yLimit), (fluidQuads) => {
             // These companion layers are built before the sink so the returned
             // result owns each list alongside the cube-face buckets.
@@ -509,7 +509,9 @@ export const meshChunkNaive = (
             // optimisation, so that `solidCeiling` itself is something the property tests
             // can catch being wrong. The plates and the fluid surfaces are identical
             // either way, which is exactly what makes that comparison worth making.
-            Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) =>
+            Result.flatMap(
+              meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height, undefined, config),
+              (specialBlocks) =>
               Result.map(
                 meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, chunk.height),
                 (fluidQuads) => {
@@ -615,7 +617,7 @@ export const meshChunkRegion = (
               })
             }
 
-            return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) =>
+            return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty, config), (specialBlocks) =>
               Result.flatMap(
                 meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, maxY, dirty),
                 (fluidQuads) => {

@@ -27,6 +27,7 @@ import {
   railRenderKindOf,
 } from './special-types.js'
 import { type RailShape, type RailShapeFailure, railShapeAt } from './rail-types.js'
+import type { MeshConfig } from './opacity.js'
 import type { QuadLight } from './light-types.js'
 import { quadLightAt } from './light-sampling.js'
 
@@ -180,12 +181,29 @@ const missingSpecialBlockLookupEntry = (blockId: BlockId): SpecialMeshFailure =>
   return { _tag: 'MissingSpecialBlockLookupEntry', blockId }
 }
 
+const isConfiguredBlock = (config: MeshConfig | undefined, blockId: BlockId): boolean =>
+  config !== undefined &&
+  (config.crossPlantBlockIds.has(blockId) ||
+    config.transparentSolidBlockIds.has(blockId) ||
+    config.waterBlockIds.has(blockId) ||
+    config.fluidMaxLevels.has(blockId))
+
+const isConfiguredNonOpaqueBlock = (config: MeshConfig | undefined, blockId: BlockId): boolean =>
+  config !== undefined &&
+  (config.crossPlantBlockIds.has(blockId) ||
+    config.transparentSolidBlockIds.has(blockId) ||
+    config.waterBlockIds.has(blockId))
+
 const ensureRegisteredBlock = (
   lookup: SpecialBlockLookup,
   blockId: BlockId,
+  config: MeshConfig | undefined,
 ): Option.Option<SpecialMeshFailure> => {
   const opacityCode = lookup.opacityCodes[blockId]
   if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
+    if (isConfiguredBlock(config, blockId)) {
+      return Option.none()
+    }
     return Option.some(missingSpecialBlockLookupEntry(blockId))
   }
   return Option.none()
@@ -318,6 +336,7 @@ const isOpenToSpecial = (
   y: number,
   lz: number,
   face: Face,
+  config: MeshConfig | undefined,
 ): boolean | SpecialMeshFailure => {
   const neighbourId = getBlockAcrossBoundary(
     chunk,
@@ -331,6 +350,9 @@ const isOpenToSpecial = (
   }
   const opacityCode = lookup.opacityCodes[neighbourId]
   if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
+    if (isConfiguredBlock(config, neighbourId)) {
+      return isConfiguredNonOpaqueBlock(config, neighbourId)
+    }
     return missingSpecialBlockLookupEntry(neighbourId)
   }
   if (opacityCode === OPAQUE_OPACITY_CODE) {
@@ -422,11 +444,12 @@ const meshBoxCell = (
   blockId: BlockId,
   kind: BoxRenderKind,
   position: BlockPosition,
+  config: MeshConfig | undefined,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
   const bounds = boxBoundsFor(kind, lx, y, lz)
   for (const face of FACES) {
-    const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, face)
+    const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, face, config)
     if (typeof open !== 'boolean') {
       return Result.fail(open)
     }
@@ -453,9 +476,10 @@ const meshPlanarCell = (
   blockId: BlockId,
   kind: Extract<SpecialRenderKind, 'lilyPad' | 'rail'>,
   position: BlockPosition,
+  config: MeshConfig | undefined,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
-  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, TOP_FACE)
+  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, TOP_FACE, config)
   if (typeof open !== 'boolean') {
     return Result.fail(open)
   }
@@ -507,11 +531,12 @@ const meshSpecialCell = (
   blockId: BlockId,
   kind: SpecialRenderKind,
   position: BlockPosition,
+  config: MeshConfig | undefined,
 ): Result.Result<void, SpecialMeshFailure> => {
   if (kind === 'cactus' || kind === 'slab' || kind === 'pressurePlate') {
-    return meshBoxCell(result, lookup, chunk, neighbours, blockId, kind, position)
+    return meshBoxCell(result, lookup, chunk, neighbours, blockId, kind, position, config)
   }
-  return meshPlanarCell(result, lookup, chunk, neighbours, blockId, kind, position)
+  return meshPlanarCell(result, lookup, chunk, neighbours, blockId, kind, position, config)
 }
 
 /** Meshes every special shape described by mc-kernel's registry. */
@@ -543,6 +568,7 @@ export const meshSpecialBlocks = (
   neighbours: ChunkNeighbours,
   yLimit: number,
   region?: SpecialMeshRegion,
+  config?: MeshConfig,
 ): Result.Result<ReadonlyArray<SpecialBlockQuad>, SpecialMeshFailure> => {
   const { minLx, minY, minLz, maxLx, maxY, maxLz } = specialMeshBoundsOf(region, yLimit)
   const result: Array<SpecialBlockQuad> = []
@@ -556,13 +582,22 @@ export const meshSpecialBlocks = (
     ) {
       for (let y = minY; y < maxY; y += UNIT_SIZE) {
         const blockId = blockIdAt(chunk.blocks, columnOffset + y)
-        const registered = ensureRegisteredBlock(lookup, blockId)
+        const registered = ensureRegisteredBlock(lookup, blockId, config)
         if (Option.isSome(registered)) {
           return Result.fail(registered.value)
         }
         const kind = specialKindOf(lookup, blockId)
         if (kind !== null) {
-          const meshed = meshSpecialCell(result, lookup, chunk, neighbours, blockId, kind, [lx, y, lz])
+          const meshed = meshSpecialCell(
+            result,
+            lookup,
+            chunk,
+            neighbours,
+            blockId,
+            kind,
+            [lx, y, lz],
+            config,
+          )
           if (Result.isFailure(meshed)) {
             return Result.fail(meshed.failure)
           }

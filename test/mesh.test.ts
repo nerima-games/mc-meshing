@@ -197,18 +197,6 @@ const scatteredSortedBy = (first: CellAxis, second: CellAxis, third: CellAxis): 
     .map(([lx, y, lz]) => `${lx},${y},${lz}`)
 
 describe('face count', () => {
-  it.effect('REGRESSION: a registered block id above 255 remains intact in emitted quads', () =>
-    Effect.sync(() => {
-      const wideId = 300
-      expect(BLOCK_IDS).toContain(wideId)
-
-      const layers = meshChunk(chunkWith([[8, 64, 8, wideId]]), {}, EMPTY_MESH_CONFIG)
-      expect(layers.opaque).toHaveLength(6)
-      expect(layers.opaque.every((quad) => quad.blockId === wideId)).toBe(true)
-      expect(layers.opaque.some((quad) => quad.blockId === wideId % 256)).toBe(false)
-    }),
-  )
-
   it.effect('an empty chunk produces no faces at all', () =>
     Effect.sync(() => {
       const layers = meshChunk(emptyChunk(), {}, EMPTY_MESH_CONFIG)
@@ -1198,6 +1186,21 @@ describe('the greedy merge against the naive oracle', () => {
           blockId: UNREGISTERED_BLOCK_ID,
         })
       }
+    }),
+  )
+
+  it.effect('REGRESSION: a registered block id above 255 remains intact in emitted quads', () =>
+    Effect.sync(() => {
+      const wideId = expectSuccess(KernelBlockId.result(300))
+      const config: MeshConfig = {
+        ...EMPTY_MESH_CONFIG,
+        transparentSolidBlockIds: new Set([wideId]),
+      }
+      const layers = meshChunk(chunkWith([[8, 64, 8, wideId]]), {}, config)
+
+      expect(layers.transparentSolid).toHaveLength(6)
+      expect(layers.transparentSolid.every((quad) => quad.blockId === wideId)).toBe(true)
+      expect(layers.transparentSolid.some((quad) => quad.blockId === wideId % 256)).toBe(false)
     }),
   )
 

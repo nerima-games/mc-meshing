@@ -74,6 +74,8 @@ Use the kernel's validating `BlockId.result(value)` or `BlockId.option(value)` A
 
 `waterBlockIds` and `transparentSolidBlockIds` classify cube faces into the three mesh layers. `crossPlantBlockIds` selects a dedicated cross-plant shape, while `fluidMaxLevels` supplies the level ceiling for configured fluid blocks.
 
+An ID explicitly listed in one of these collections is registered for this mesher even if mc-kernel has no built-in block entry for it. Such IDs use the configured layer or shape; unlisted IDs absent from the kernel registry fail meshing with a registry lookup error.
+
 ## Faces and mesh layers
 
 ```ts
