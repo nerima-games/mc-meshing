@@ -40,6 +40,7 @@ mc-kernel が所有し、`ChunkView` は kernel の `coord` とチャンクご�
 | [`docs/architecture.md`](./docs/architecture.md) | 4 階層、依存グラフ、依存ホワイトリスト CI |
 | [`docs/responsibility.md`](./docs/responsibility.md) | 責務と、明示的にスコープ外のもの |
 | [`docs/public-api.md`](./docs/public-api.md) | 公開 API と参照実装での裏付け |
+| [`docs/migration-0.4.0.md`](./docs/migration-0.4.0.md) | 0.3.x から 0.4.0 への移行手順と破壊的変更 |
 | [`docs/design-notes.md`](./docs/design-notes.md) | 設計注意と、対応する名前付き回帰テスト |
 | [`docs/porting.md`](./docs/porting.md) | 移植元パスと実測 LOC |
 | [`docs/testing.md`](./docs/testing.md) | 検証と完成条件 |
