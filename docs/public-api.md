@@ -70,6 +70,22 @@ Standalone helpers that read a `ChunkView`, including `getBlock`, `meshCrossPlan
 
 Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return `IncompleteFluidView` for a shorter array and `InvalidFluidView` for an explicit `null` sidecar or missing/invalid array. Only an omitted `fluid` sidecar uses the full-height, non-source compatibility behavior. A missing rail sidecar or per-cell shape uses `north_south`; an invalid shape code returns `RailShapeFailure`. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's open-sky fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
 
+```ts
+export type FluidViewFailure =
+  | {
+      readonly _tag: 'IncompleteFluidView'
+      readonly actual: number
+      readonly coord: ChunkCoord
+      readonly expected: number
+      readonly field: 'falling' | 'levels' | 'sources'
+    }
+  | {
+      readonly _tag: 'InvalidFluidView'
+      readonly coord: ChunkCoord
+      readonly field: 'falling' | 'fluid' | 'levels' | 'sources'
+    }
+```
+
 ## Mesh configuration and block IDs
 
 ```ts
