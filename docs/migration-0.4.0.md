@@ -87,6 +87,21 @@ The exported object fields were compared individually, including field optionali
 
 The checker found no added or removed fields and no optionality changes among exported object types present in both declarations. `LightCorners` is a four element tuple; the `QuadLight` fields change through that tuple alias. `FluidViewFailure` also adds an `InvalidFluidView` variant with `coord` and `field` (`fluid`, `levels`, `sources`, or `falling`) for a null sidecar or missing/invalid array.
 
+The declaration comparison found no variant additions, removals, or field changes among the 22 exported union aliases present in both versions. New failure aliases are listed below; `ChunkViewFailure` combines `ChunkHeightFailure` and `ChunkBlocksFailure`, and `FluidViewFailure` adds the `InvalidFluidView` variant described above.
+
+These exported constant types also changed:
+
+| Exported constant | 0.3.x | 0.4.0 |
+| --- | --- | --- |
+| `MINECRAFT_CROSS_PLANT_BLOCK_IDS` | `ReadonlySet<BlockId>` | `Result<ReadonlySet<BlockId>, BlockRegistryResolutionFailure>` |
+| `MINECRAFT_FLUID_MAX_LEVELS` | `ReadonlyMap<BlockId, number>` | `Result<ReadonlyMap<BlockId, number>, BlockDataFailure>` |
+| `MINECRAFT_MESH_CONFIG` | `MeshConfig` | `Result<MeshConfig, MeshConfigFailure>` |
+| `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS` | `ReadonlySet<BlockId>` | `Result<Option<ReadonlySet<BlockId>>, BlockRegistryResolutionFailure>` |
+| `MINECRAFT_WATER_BLOCK_IDS` | `ReadonlySet<BlockId>` | `Result<ReadonlySet<BlockId>, BlockRegistryResolutionFailure>` |
+| `ResourcePackAssetsSchema` | `Schema.Schema<ResourcePackAssets>` | `ResourcePackSchema<ResourcePackAssets>` |
+
+No exported numeric constant changed from a number or numeric literal to a brand. `LodLevelSchema` retains the same emitted declaration type, `Schema.Schema<LodLevel>`, in both versions.
+
 Create each branded value at its input boundary:
 
 | Brand | Construction |
