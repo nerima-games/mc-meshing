@@ -106,7 +106,7 @@ const buildLookup = (ids: ReadonlySet<number>): Uint8Array => { ... }
 
 ### 参照実装の証拠
 
-`packages/rendering/infrastructure/meshing/greedy-meshing-ao.ts:6-9`（原文、`public-api.md` §4 にも引用）。
+`packages/rendering/infrastructure/meshing/greedy-meshing-ao.ts:6-9`（原文、[`public-api.md` の Chunk input and results](./public-api.md#chunk-input-and-results) にも引用）。
 
 - 境界チェックは 6 節の短絡 `if` を関数本体に**直接**書いてある。ヘルパ呼び出しも
   `Option.fromNullable` も無い。
@@ -159,7 +159,7 @@ M4 Max / Node 22.23.1、5 回通しの中央値）。
 ### 参照実装の証拠
 
 `packages/worker/infrastructure/meshing/meshing-worker-config.ts:7-13` の原文は
-`public-api.md` §2 に引用。**透過集合は 2 つあり、1 つの boolean フラグではない。**
+[`public-api.md` の Mesh configuration and block IDs](./public-api.md#mesh-configuration-and-block-ids) に引用。**透過集合は 2 つあり、1 つの boolean フラグではない。**
 
 参照実装のテストが区別を明示的に保持している:
 `packages/worker/test/meshing-worker-config.test.ts:69` —— "does not include WATER (fluid, not transparent-solid)"。
@@ -197,7 +197,7 @@ transparentSolid が water に勝つ。
 plan.md §3.3 の「ゴールデンテスト（chunk fixture → バッファのハッシュ比較）」は、
 出力順が安定していないと成立しない。順序は**偶然の呼び出し順ではなく値**でなければならない。
 
-参照実装の証拠は `public-api.md` §3 の表（`greedy-meshing.ts:122-128` の呼び出し順と、
+参照実装の証拠は [`public-api.md` の Faces and mesh layers](./public-api.md#faces-and-mesh-layers) の表（`greedy-meshing.ts:122-128` の呼び出し順と、
 `greedy-meshing-algorithms.ts` の各関数の法線・role）。
 
 ### 面数の上限について（plan.md の要求との差）

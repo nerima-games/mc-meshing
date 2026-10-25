@@ -172,7 +172,7 @@ if (Result.isFailure(meshed)) {
   ライト用の一時配列を呼び出し間で再利用できる。同じ scratch を並行メッシュ処理で共有してはならない。
   返り値のレイヤーと quad は毎回新しく所有される。出力アキュムレータのプールは、所有権とライフタイム契約を
   変えないことを優先し、この API では採用しない。
-  参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
+  参照実装での場所と LOC は [`docs/public-api.md` の Reference implementation mapping](./docs/public-api.md#reference-implementation-mapping)。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
   （参照実装自身がコメントで警告している）。出力配列のプール版は所有権とライフタイム契約を変えるため、
