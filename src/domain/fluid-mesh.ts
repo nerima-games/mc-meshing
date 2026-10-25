@@ -5,6 +5,7 @@ import {
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
+  type FluidView,
   getBlock,
   getBlockAcrossBoundary,
 } from './chunk-view.js'
@@ -332,11 +333,13 @@ const meshFluidCellsInBounds = (
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
   },
+  fluidViews: ReadonlyMap<ChunkView, FluidView>,
 ): ReadonlyArray<FluidQuad> => {
   const quads: Array<FluidQuad> = []
   const space: FluidSpace = {
     chunk,
     context: { fluids, layers, plants },
+    fluidViews,
     neighbours,
   }
   const [[minX, minY, minZ], [maxX, maxY, maxZ]] = [bounds.min, bounds.max]
@@ -367,11 +370,11 @@ export const meshFluidSurfaces = (
     readonly max: readonly [number, number, number]
   } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: [ZERO_INDEX, ZERO_INDEX, ZERO_INDEX] },
 ): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure> =>
-  Result.flatMap(validateFluidViews(chunk, neighbours), () => {
+  Result.flatMap(validateFluidViews(chunk, neighbours), (fluidViews) => {
     if (!anyFluidConfigured(fluids)) {
       return Result.succeed(NO_FLUID_QUADS)
     }
-    return Result.succeed(meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds))
+    return Result.succeed(meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds, fluidViews))
   })
 
 /*

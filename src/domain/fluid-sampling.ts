@@ -61,15 +61,22 @@ export type FluidLookupFailure =
   | { readonly _tag: 'InvalidFluidMaxLevel'; readonly blockId: BlockId; readonly maxLevel: number }
   | { readonly _tag: 'MissingFluidLookupEntry'; readonly blockId: BlockId }
 
-export type FluidViewFailure = {
-  readonly _tag: 'IncompleteFluidView'
-  readonly actual: number
-  readonly coord: ChunkView['coord']
-  readonly expected: number
-  readonly field: 'falling' | 'levels' | 'sources'
-}
+export type FluidViewFailure =
+  | {
+      readonly _tag: 'IncompleteFluidView'
+      readonly actual: number
+      readonly coord: ChunkView['coord']
+      readonly expected: number
+      readonly field: 'falling' | 'levels' | 'sources'
+    }
+  | {
+      readonly _tag: 'InvalidFluidView'
+      readonly coord: ChunkView['coord']
+      readonly field: 'falling' | 'fluid' | 'levels' | 'sources'
+    }
 
 const FLUID_LOOKUP_DATA_VIEWS = new WeakMap<Uint16Array, DataView>()
+const FLUID_ARRAY_DATA_VIEWS = new WeakMap<Readonly<Uint8Array>, DataView>()
 const ENDIANNESS_MARKER = new Uint16Array([1])
 const HOST_IS_LITTLE_ENDIAN = new Uint8Array(ENDIANNESS_MARKER.buffer)[ZERO_INDEX] === 1
 
@@ -83,22 +90,58 @@ const dataViewForLookup = (lookup: Uint16Array): DataView => {
   return view
 }
 
+const dataViewForFluidArray = (values: Readonly<Uint8Array>): DataView => {
+  const cached = FLUID_ARRAY_DATA_VIEWS.get(values)
+  if (cached) {
+    return cached
+  }
+  const view = new DataView(values.buffer, values.byteOffset, values.byteLength)
+  FLUID_ARRAY_DATA_VIEWS.set(values, view)
+  return view
+}
+
 const encodedLevelForKnownFluid = (lookup: Uint16Array, blockId: BlockId): number =>
   dataViewForLookup(lookup).getUint16(blockId * Uint16Array.BYTES_PER_ELEMENT, HOST_IS_LITTLE_ENDIAN)
 
-export const validateFluidViews = (chunk: ChunkView, neighbours: ChunkNeighbours): Result.Result<void, FluidViewFailure> => {
+export const validateFluidViews = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+): Result.Result<ReadonlyMap<ChunkView, FluidView>, FluidViewFailure> => {
+  const validated = new Map<ChunkView, FluidView>()
   const views = [chunk, ...Object.values(neighbours)]
   for (const view of views) {
-    if (!view?.fluid) {
+    if (typeof view === 'undefined') {
       continue
+    }
+    const fluid: FluidView | null | undefined = view.fluid
+    if (typeof fluid === 'undefined') {
+      continue
+    }
+    if (fluid === null) {
+      return Result.fail({ _tag: 'InvalidFluidView', coord: view.coord, field: 'fluid' })
+    }
+    const levels: Readonly<Uint8Array> | null | undefined = fluid.levels
+    const sources: Readonly<Uint8Array> | null | undefined = fluid.sources
+    const falling: Readonly<Uint8Array> | null | undefined = fluid.falling
+    if (typeof levels === 'undefined' || levels === null) {
+      return Result.fail({ _tag: 'InvalidFluidView', coord: view.coord, field: 'levels' })
+    }
+    if (typeof sources === 'undefined' || sources === null) {
+      return Result.fail({ _tag: 'InvalidFluidView', coord: view.coord, field: 'sources' })
+    }
+    if (typeof falling === 'undefined' || falling === null) {
+      return Result.fail({ _tag: 'InvalidFluidView', coord: view.coord, field: 'falling' })
     }
     const expected = CHUNK_SIZE * view.height * CHUNK_SIZE
     const arrays = [
-      ['levels', view.fluid.levels],
-      ['sources', view.fluid.sources],
-      ['falling', view.fluid.falling],
+      ['levels', levels],
+      ['sources', sources],
+      ['falling', falling],
     ] as const
     for (const [field, values] of arrays) {
+      if (!(values instanceof Uint8Array)) {
+        return Result.fail({ _tag: 'InvalidFluidView', coord: view.coord, field })
+      }
       if (values.length < expected) {
         return Result.fail({
           _tag: 'IncompleteFluidView',
@@ -109,8 +152,9 @@ export const validateFluidViews = (chunk: ChunkView, neighbours: ChunkNeighbours
         })
       }
     }
+    validated.set(view, { levels, sources, falling })
   }
-  return Result.void
+  return Result.succeed(validated)
 }
 
 export const buildFluidLookup = (config: MeshConfig): Result.Result<Uint16Array, FluidLookupFailure> => {
@@ -179,6 +223,7 @@ export type FluidSpace = {
   readonly chunk: ChunkView
   readonly neighbours: ChunkNeighbours
   readonly context: FluidContext
+  readonly fluidViews?: ReadonlyMap<ChunkView, FluidView>
 }
 
 export type FluidPosition = readonly [lx: number, y: number, lz: number]
@@ -190,12 +235,15 @@ export type FluidSample = {
   readonly here: number
 }
 
-const fluidArrayValueAt = (values: Uint8Array, index: number): number => {
-  const value = values[index]
-  if (typeof value === 'undefined') {
-    throw new RangeError('A validated FluidView is missing a cell value')
+const fluidArrayValueAt = (values: Readonly<Uint8Array>, index: number): number =>
+  dataViewForFluidArray(values).getUint8(index)
+
+const fluidViewIn = (space: FluidSpace, view: ChunkView): FluidView | undefined => {
+  const fluidViews = space.fluidViews
+  if (typeof fluidViews !== 'undefined') {
+    return fluidViews.get(view)
   }
-  return value
+  return view.fluid
 }
 
 const levelIn = (fluid: FluidView | undefined, index: number): number => {
@@ -220,60 +268,61 @@ const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   return fluidArrayValueAt(fluid.falling, index) !== FLUID_LOOKUP_UNSET
 }
 
-const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
+const heightInView = (space: FluidSpace, view: ChunkView, position: FluidPosition, wantId: BlockId): number => {
   const [lx, y, lz] = position
   if (getBlock(view, lx, y, lz) !== wantId) {
     return NO_FLUID
   }
-  if (!isFluidBlock(context.fluids, wantId)) {
+  if (!isFluidBlock(space.context.fluids, wantId)) {
     return NO_FLUID
   }
   const index = blockIndex(lx, y, lz, view.height)
+  const fluid = fluidViewIn(space, view)
   return heightForLevel(
-    levelIn(view.fluid, index),
-    encodedLevelForKnownFluid(context.fluids, wantId) - INDEX_TO_COUNT_OFFSET,
-    sourceIn(view.fluid, index),
+    levelIn(fluid, index),
+    encodedLevelForKnownFluid(space.context.fluids, wantId) - INDEX_TO_COUNT_OFFSET,
+    sourceIn(fluid, index),
   )
 }
 
 export const heightIn = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number =>
-  heightInView(space.chunk, space.context, position, wantId)
+  heightInView(space, space.chunk, position, wantId)
 
-const heightInNeighbour = (neighbour: ChunkView | undefined, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
+const heightInNeighbour = (neighbour: ChunkView | undefined, space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
   if (!neighbour) {
     return NO_FLUID
   }
-  return heightInView(neighbour, context, position, wantId)
+  return heightInView(space, neighbour, position, wantId)
 }
 
 const heightAcrossCorner = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
-  const { context, neighbours } = space
+  const { neighbours } = space
   const [lx, y, lz] = position
   if (lx < ZERO_INDEX && lz < ZERO_INDEX) {
-    return heightInNeighbour(neighbours.xNegZNeg, context, [CHUNK_MAX_INDEX, y, CHUNK_MAX_INDEX], wantId)
+    return heightInNeighbour(neighbours.xNegZNeg, space, [CHUNK_MAX_INDEX, y, CHUNK_MAX_INDEX], wantId)
   }
   if (lx < ZERO_INDEX) {
-    return heightInNeighbour(neighbours.xNegZPos, context, [CHUNK_MAX_INDEX, y, ZERO_INDEX], wantId)
+    return heightInNeighbour(neighbours.xNegZPos, space, [CHUNK_MAX_INDEX, y, ZERO_INDEX], wantId)
   }
   if (lz < ZERO_INDEX) {
-    return heightInNeighbour(neighbours.xPosZNeg, context, [ZERO_INDEX, y, CHUNK_MAX_INDEX], wantId)
+    return heightInNeighbour(neighbours.xPosZNeg, space, [ZERO_INDEX, y, CHUNK_MAX_INDEX], wantId)
   }
-  return heightInNeighbour(neighbours.xPosZPos, context, [ZERO_INDEX, y, ZERO_INDEX], wantId)
+  return heightInNeighbour(neighbours.xPosZPos, space, [ZERO_INDEX, y, ZERO_INDEX], wantId)
 }
 
 const heightAcrossEdge = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
-  const { context, neighbours } = space
+  const { neighbours } = space
   const [lx, y, lz] = position
   if (lx < ZERO_INDEX) {
-    return heightInNeighbour(neighbours.xNeg, context, [CHUNK_MAX_INDEX, y, lz], wantId)
+    return heightInNeighbour(neighbours.xNeg, space, [CHUNK_MAX_INDEX, y, lz], wantId)
   }
   if (lx >= CHUNK_SIZE) {
-    return heightInNeighbour(neighbours.xPos, context, [ZERO_INDEX, y, lz], wantId)
+    return heightInNeighbour(neighbours.xPos, space, [ZERO_INDEX, y, lz], wantId)
   }
   if (lz < ZERO_INDEX) {
-    return heightInNeighbour(neighbours.zNeg, context, [lx, y, CHUNK_MAX_INDEX], wantId)
+    return heightInNeighbour(neighbours.zNeg, space, [lx, y, CHUNK_MAX_INDEX], wantId)
   }
-  return heightInNeighbour(neighbours.zPos, context, [lx, y, ZERO_INDEX], wantId)
+  return heightInNeighbour(neighbours.zPos, space, [lx, y, ZERO_INDEX], wantId)
 }
 
 export const heightAcross = (space: FluidSpace, position: FluidPosition, wantId: BlockId): number => {
@@ -356,7 +405,7 @@ export const flowAt = (sample: FluidSample): FluidFlow => {
   const [lx, y, lz] = sample.position
   return {
     direction: flowDirectionOf(flowX, flowZ, length),
-    falling: fallingIn(sample.space.chunk.fluid, blockIndex(lx, y, lz, sample.space.chunk.height)),
+    falling: fallingIn(fluidViewIn(sample.space, sample.space.chunk), blockIndex(lx, y, lz, sample.space.chunk.height)),
   }
 }
 

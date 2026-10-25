@@ -300,6 +300,24 @@ describe('the height of one cell', () => {
     }),
   )
 
+  it.effect('validates a FluidView once and samples the captured sidecar', () =>
+    Effect.sync(() => {
+      const valid = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]])
+      const fluid = expectDefined(valid.fluid, 'expected a complete FluidView')
+      let reads = 0
+      const chunk: ChunkView = {
+        ...valid,
+        get fluid() {
+          reads += 1
+          return fluid
+        },
+      }
+
+      expect(Result.isSuccess(meshChunkResult(chunk, {}, CONFIG))).toBe(true)
+      expect(reads).toBe(1)
+    }),
+  )
+
   it.effect('a missing FluidView reads as full, non-source cells rather than as no fluid', () =>
     Effect.sync(() => {
       // A caller holding block ids but no simulation state yet gets flat
