@@ -108,6 +108,16 @@ describe('maxLevelOf', () => {
     expect(Result.isSuccess(validateFluidViews(empty, unloadedNeighbour))).toBe(true)
   })
 
+  it('ignores enumerable properties outside the declared neighbour directions', () => {
+    const height = 1
+    const empty = Result.getOrThrow(emptyChunkResult(height))
+    const neighbours = invalidFixture<Parameters<typeof validateFluidViews>[1]>({
+      unexpected: { ...empty, fluid: null },
+    })
+
+    expect(Result.isSuccess(validateFluidViews(empty, neighbours))).toBe(true)
+  })
+
   it('rejects each missing, null, or non-byte FluidView array', () => {
     const height = 1
     const empty = Result.getOrThrow(emptyChunkResult(height))

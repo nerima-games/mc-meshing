@@ -76,4 +76,12 @@ describe('validateChunkViews', () => {
       failure: { _tag: 'InvalidChunkHeight', height: 0 },
     })
   })
+
+  it('ignores enumerable properties outside the declared neighbour directions', () => {
+    const valid = Result.getOrThrow(emptyChunk(CHUNK_HEIGHT))
+    const invalidExtra = { ...valid, height: 0 }
+    const neighbours = invalidFixture<ChunkNeighbours>({ unexpected: invalidExtra })
+
+    expect(Result.isSuccess(validateChunkViews(valid, neighbours))).toBe(true)
+  })
 })

@@ -108,7 +108,17 @@ export const validateFluidViews = (
   neighbours: ChunkNeighbours,
 ): Result.Result<ReadonlyMap<ChunkView, FluidView>, FluidViewFailure> => {
   const validated = new Map<ChunkView, FluidView>()
-  const views = [chunk, ...Object.values(neighbours)]
+  const views = [
+    chunk,
+    neighbours.xPos,
+    neighbours.xNeg,
+    neighbours.zPos,
+    neighbours.zNeg,
+    neighbours.xPosZPos,
+    neighbours.xPosZNeg,
+    neighbours.xNegZPos,
+    neighbours.xNegZNeg,
+  ]
   for (const view of views) {
     if (typeof view === 'undefined') {
       continue
