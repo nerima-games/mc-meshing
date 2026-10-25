@@ -34,6 +34,15 @@ export type ChunkHeightFailure = {
   readonly height: number
 }
 
+export type ChunkBlocksFailure = {
+  readonly _tag: 'InvalidChunkBlocksLength'
+  readonly actual: number
+  readonly coord: ChunkView['coord']
+  readonly expected: number
+}
+
+export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure
+
 export const blockCount = (height: number): Result.Result<number, ChunkHeightFailure> => {
   if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
     return Result.fail({ _tag: 'InvalidChunkHeight', height })
@@ -42,6 +51,33 @@ export const blockCount = (height: number): Result.Result<number, ChunkHeightFai
 }
 
 export const blockCountOf: (height: number) => Result.Result<number, ChunkHeightFailure> = blockCount
+
+
+/** Validate the core chunk and every loaded neighbour before direct block reads. */
+export const validateChunkViews = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+): Result.Result<void, ChunkViewFailure> => {
+  for (const view of [chunk, ...Object.values(neighbours)]) {
+    if (typeof view === 'undefined') {
+      continue
+    }
+    const expected = blockCount(view.height)
+    if (Result.isFailure(expected)) {
+      return Result.fail(expected.failure)
+    }
+    const blocks = view.blocks
+    if (blocks.length !== expected.success) {
+      return Result.fail({
+        _tag: 'InvalidChunkBlocksLength',
+        actual: blocks.length,
+        coord: view.coord,
+        expected: expected.success,
+      })
+    }
+  }
+  return Result.void
+}
 
 /**
  * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.

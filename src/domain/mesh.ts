@@ -118,8 +118,10 @@ import {
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
+  type ChunkViewFailure,
   getBlock,
   getBlockAcrossBoundary,
+  validateChunkViews,
 } from './chunk-view.js'
 import {
   EMPTY_CHUNK_CEILING,
@@ -365,9 +367,9 @@ export const meshChunk = (
   scratch?: MeshScratch,
 ): Result.Result<
   MeshLayers,
-  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
 > =>
-  Result.flatMap(validateFluidViews(chunk, neighbours), () =>
+  Result.flatMap(validateChunkViews(chunk, neighbours), () =>
     Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
       Result.flatMap(chunkMeshContextOf(chunk, neighbours, config, specialLookup), (context) => {
         const { fluids, layers, lookup, plants, push, yLimit } = context
@@ -506,17 +508,13 @@ export const meshChunkNaive = (
   config: MeshConfig,
 ): Result.Result<
   MeshLayers,
-  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
 > =>
-  Result.flatMap(validateFluidViews(chunk, neighbours), () =>
+  Result.flatMap(validateChunkViews(chunk, neighbours), () =>
     Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
       Result.flatMap(layerLookupForMesh(config), (lookup) =>
         Result.flatMap(fluidLookupForMesh(config), (fluids) => {
           return Result.flatMap(crossPlantLookupForMesh(config), (plants) =>
-            // The full chunk height, not `solidCeiling`: the oracle deliberately does no such
-            // optimisation, so that `solidCeiling` itself is something the property tests
-            // can catch being wrong. The plates and the fluid surfaces are identical
-            // either way, which is exactly what makes that comparison worth making.
             Result.flatMap(
               meshSpecialBlocks(
                 specialLookup,
@@ -607,9 +605,9 @@ export const meshChunkRegion = (
   dirtyRegion: MeshRegion,
 ): Result.Result<
   RegionMesh,
-  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
 > =>
-  Result.flatMap(validateFluidViews(chunk, neighbours), () => {
+  Result.flatMap(validateChunkViews(chunk, neighbours), () => {
     const dirty = normalizeRegion(dirtyRegion, chunk.height)
     const [, maxY] = dirty.max
 
@@ -618,7 +616,7 @@ export const meshChunkRegion = (
         Result.flatMap(fluidLookupForMesh(config), (fluids) => {
           return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
             if (isEmptyRegion(dirty)) {
-              return Result.succeed({
+              return Result.map(validateFluidViews(chunk, neighbours), () => ({
                 dirtyRegion: dirty,
                 layers: {
                   crossPlants: [],
@@ -629,7 +627,7 @@ export const meshChunkRegion = (
                   water: [],
                 },
                 ownedRegion: dirty,
-              })
+              }))
             }
 
             return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty, config), (specialBlocks) =>
@@ -646,22 +644,22 @@ export const meshChunkRegion = (
                   const light = lightMasksOf(chunk, required)
                   const mask = new Uint32Array(required)
                   return Result.map(meshAllFaces({
-                      chunk,
-                      fluids,
-                      light,
-                      lookup,
-                      mask,
-                      neighbours,
-                      plants,
-                      region: dirty,
-                      specialLookup,
-                      push,
-                      yLimit: maxY,
-                    }), () => ({
-                      dirtyRegion: dirty,
-                      layers,
-                      ownedRegion: dirty,
-                    }))
+                    chunk,
+                    fluids,
+                    light,
+                    lookup,
+                    mask,
+                    neighbours,
+                    plants,
+                    region: dirty,
+                    specialLookup,
+                    push,
+                    yLimit: maxY,
+                  }), () => ({
+                    dirtyRegion: dirty,
+                    layers,
+                    ownedRegion: dirty,
+                  }))
                 },
               ),
             )

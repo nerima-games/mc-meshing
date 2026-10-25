@@ -49,6 +49,7 @@ import {
   bucketFor,
   meshChunk as meshChunkResult,
   meshChunkNaive as meshChunkNaiveResult,
+  meshChunkRegion as meshChunkRegionResult,
   totalQuadArea,
   totalQuadCount,
 } from '../src/domain/mesh'
@@ -1307,15 +1308,34 @@ describe('the Y scan ceiling', () => {
     }),
   )
 
-  it.effect('REGRESSION: short block storage treats missing in-bounds cells as AIR in canonical order', () =>
+  it.effect('rejects block storage whose length differs from the chunk height', () =>
     Effect.sync(() => {
-      // ChunkView is structural, so a producer can temporarily expose a short
-      // Typed array. The hot passes may read directly only if they retain
-      // GetBlock's missing-cell-as-AIR behavior and the emitted sequence.
-      const blocks = new Uint16Array(1)
-      blocks[0] = STONE
-      const chunk: ChunkView = { blocks, coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT }
-      expect(meshChunk(chunk, {}, EMPTY_MESH_CONFIG)).toStrictEqual(meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG))
+      const valid = emptyChunk()
+      const shortCore = { ...valid, blocks: new Uint16Array(BLOCKS_PER_CHUNK - 1) }
+      const coreResult = meshChunkResult(shortCore, {}, EMPTY_MESH_CONFIG)
+      expect(coreResult).toMatchObject({
+        failure: {
+          _tag: 'InvalidChunkBlocksLength',
+          actual: BLOCKS_PER_CHUNK - 1,
+          coord: valid.coord,
+          expected: BLOCKS_PER_CHUNK,
+        },
+      })
+
+      const longCore = { ...valid, blocks: new Uint16Array(BLOCKS_PER_CHUNK + 1) }
+      expect(meshChunkResult(longCore, {}, EMPTY_MESH_CONFIG)).toMatchObject({
+        failure: { _tag: 'InvalidChunkBlocksLength', actual: BLOCKS_PER_CHUNK + 1, expected: BLOCKS_PER_CHUNK },
+      })
+
+      const shortNeighbour = { ...valid, blocks: new Uint16Array(BLOCKS_PER_CHUNK - 1) }
+      expect(meshChunkResult(valid, { xPos: shortNeighbour }, EMPTY_MESH_CONFIG)).toMatchObject({
+        failure: { _tag: 'InvalidChunkBlocksLength', actual: BLOCKS_PER_CHUNK - 1, expected: BLOCKS_PER_CHUNK },
+      })
+      expect(Result.isFailure(meshChunkNaiveResult(valid, { xPos: shortNeighbour }, EMPTY_MESH_CONFIG))).toBe(true)
+      expect(Result.isFailure(meshChunkRegionResult(valid, { xPos: shortNeighbour }, EMPTY_MESH_CONFIG, {
+        max: [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE],
+        min: [0, 0, 0],
+      }))).toBe(true)
     }),
   )
 })
