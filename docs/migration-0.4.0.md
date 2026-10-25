@@ -1,6 +1,6 @@
 # Migrating to 0.4.0
 
-This guide covers upgrades from 0.3.x to 0.4.0. Version 0.4.0 follows `@nerima-games/mc-kernel` 0.9.0 and Effect 4, with breaking type and return-value changes that require updating callers alongside the dependency pin.
+This guide covers upgrades from 0.3.x to 0.4.0. Update `@nerima-games/mc-kernel` to 0.9.0 and update callers for this package's Effect 4 `Result` and branded-value APIs.
 
 ## Branded block IDs
 
@@ -10,15 +10,17 @@ This guide covers upgrades from 0.3.x to 0.4.0. Version 0.4.0 follows `@nerima-g
 import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
 import { Result } from 'effect'
 
-const waterId = KernelBlockId.result(rawWaterId)
-if (Result.isFailure(waterId)) {
-  return waterId
-}
+function makeWaterBlockIds(rawWaterId: number) {
+  const waterId = KernelBlockId.result(rawWaterId)
+  if (Result.isFailure(waterId)) {
+    return waterId
+  }
 
-const waterBlockIds = new Set([waterId.success])
+  return Result.succeed(new Set([waterId.success]))
+}
 ```
 
-Do not call the brand constructor directly for untrusted values; its direct form can throw. `BlockId.result` and `BlockId.option` provide non-throwing validation.
+Do not call `KernelBlockId(rawWaterId)` for untrusted values because the direct constructor can throw. `KernelBlockId.result` and `KernelBlockId.option` provide non-throwing validation.
 
 ## Branded resource names
 
@@ -26,18 +28,16 @@ Resource-pack resolver APIs now distinguish normalized blockstate, model, and te
 
 ```ts
 import { Result } from 'effect'
-import { meshBlockModel, normalizeResourceName } from '@nerima-games/mc-meshing'
+import { meshBlockModel, normalizeResourceName, type ResourcePackAssets } from '@nerima-games/mc-meshing'
 
-const modelName = normalizeResourceName(rawModelName, 'model')
-if (Result.isFailure(modelName)) {
-  return modelName
-}
+function meshNamedModel(rawModelName: string, assets: ResourcePackAssets) {
+  const modelName = normalizeResourceName(rawModelName, 'model')
+  if (Result.isFailure(modelName)) {
+    return modelName
+  }
 
-const quads = meshBlockModel(modelName.success, assets)
-if (Result.isFailure(quads)) {
-  return quads
+  return meshBlockModel(modelName.success, assets)
 }
-consumeQuads(quads.success)
 ```
 
 Use `normalizeResourceName(rawName, 'blockstate')` to convert raw strings into `ResourceName` values before calling `resolveBlockStateModels` or `meshBlockState`. Raw JSON variant model names, parent names, face texture references, and asset record keys remain strings; normalization occurs at the resolver boundary. Resolved model and texture fields use `ModelName` and `TextureName`.
@@ -49,12 +49,17 @@ Use `normalizeResourceName(rawName, 'blockstate')` to convert raw strings into `
 Operations that can fail now return `Result` values from Effect 4. Callers must handle the failure before reading `success`:
 
 ```ts
-const result = meshChunk(chunk, neighbours, config)
-if (Result.isFailure(result)) {
-  return result
-}
+import { Result } from 'effect'
+import { meshChunk, type ChunkNeighbours, type ChunkView, type MeshConfig } from '@nerima-games/mc-meshing'
 
-consumeLayers(result.success)
+function meshAndReturnLayers(chunk: ChunkView, neighbours: ChunkNeighbours, config: MeshConfig) {
+  const result = meshChunk(chunk, neighbours, config)
+  if (Result.isFailure(result)) {
+    return result
+  }
+
+  return Result.succeed(result.success)
+}
 ```
 
 This applies to `blockCount`, `blockCountOf`, `blockIdsWithRenderKind`, `bucketFor`, `buildCrossPlantLookup`, `buildFluidLookup`, `buildLayerLookup`, `emptyChunk`, `MeshScratch.buffersFor`, `meshBlockModel`, `meshBlockState`, `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, `meshFluidSurfaces`, `meshSpecialBlocks`, `normalizeResourceName`, `parseResourcePackAssets`, `parseResourcePackAssetsJson`, `railShapeAt`, `railShapeOf`, `resolveBlockModel`, `resolveBlockStateModels`, `resolveModelTexture`, and `validateChunkViews`. The registry-derived `MINECRAFT_*` values, `MINECRAFT_MESH_CONFIG`, and `SPECIAL_BLOCK_LOOKUP` are also fallible. `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS` returns a `Result<Option<ReadonlySet<BlockId>>, BlockRegistryResolutionFailure>` because the registry may have no transparent solid IDs.
@@ -114,9 +119,42 @@ Create each branded value at its input boundary:
 
 The resource-name brands have no public constructors. The normalization and resolution functions return `Result`; handle failure before using the successful branded value. `clampMeshLight` also returns `LightLevel` for values that should be clamped to the supported light range. `LodLevelSchema` and `ResourcePackAssetsSchema` use the Effect 4 schema types.
 
-The declaration checker reports differences for these exported types and values: `BlockId`, `LightCorners`, `LightLevel`, `LightSample`, `LodLevelSchema`, `MINECRAFT_CROSS_PLANT_BLOCK_IDS`, `MINECRAFT_FLUID_MAX_LEVELS`, `MINECRAFT_MESH_CONFIG`, `MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS`, `MINECRAFT_WATER_BLOCK_IDS`, `MeshConfig`, `MeshScratch`, `ResolvedBlockModel`, `ResolvedBlockStateModel`, `ResourceModelQuad`, and `ResourcePackAssetsSchema`. `LodLevelSchema` has the same emitted declaration, `Schema.Schema<LodLevel>`, in both versions; its resolved type differs in the Effect 4 checker.
-
 The additional exports are `BlockDataFailure`, `BucketFailure`, `ChunkBlocksFailure`, `ChunkHeightFailure`, `ChunkLightFailure`, `ChunkViewFailure`, `CrossPlantLookupFailure`, `FluidLookupFailure`, `FluidViewFailure`, `LayerLookupFailure`, `MeshConfigFailure`, `MeshScratchFailure`, `MissingFluidKindFailure`, `ModelName`, `RailShapeFailure`, `ResourceModelMeshFailure`, `ResourceModelMeshFailureCode`, `ResourceName`, `ResourcePackParseFailure`, `ResourcePackResolutionFailure`, `ResourcePackResolutionFailureCode`, `SPECIAL_BLOCK_LOOKUP`, `SpecialBlockLookup`, `SpecialBlockLookupFailure`, `SpecialMeshFailure`, and `TextureName`. `validateChunkViews` is also a new export. `ResourcePackParseError` is the removed export.
+
+`FluidLookupFailure` has these three package variants:
+
+| `_tag` | Required payload | Returned when |
+| --- | --- | --- |
+| `InvalidFluidLookupLength` | `actual`, `expected` | A supplied lookup table does not cover the full `BlockId` domain. |
+| `InvalidFluidMaxLevel` | `blockId`, `maxLevel` | A configured fluid maximum is not an integer from `0` through `255`. |
+| `MissingFluidLookupEntry` | `blockId` | A valid block ID has no entry in a supplied lookup table. |
+
+The union also propagates the kernel `BrandError` from `BlockId.result` when a configured or sampled block ID is invalid. Its payload is `_tag: 'BrandError'`, `issue`, `message`, `name`, and `toString()`.
+
+Every `ResourcePackResolutionFailure` has `_tag: 'ResourcePackResolutionFailure'`, `code`, and `message`. The `code` is one of these 12 literals:
+
+| `code` | Returned when |
+| --- | --- |
+| `invalid-resource-name` | A resource or model name is empty or cannot be normalized. |
+| `invalid-seed` | Resolver options are null, or the seed is not a finite number. |
+| `invalid-texture-reference` | A texture reference is empty or cannot be normalized. |
+| `missing-blockstate` | The requested blockstate asset is absent. |
+| `empty-variant-list` | A blockstate variant list has no candidates. |
+| `invalid-variant-weight` | A variant weight is non-positive or non-finite, or the total weight overflows. |
+| `no-matching-variant` | No variant matches the supplied properties and no fallback variant exists. |
+| `missing-model` | The requested model asset is absent. |
+| `invalid-blockstate-definition` | A blockstate defines neither `variants` nor `multipart`. |
+| `block-model-cycle` | Resolving parent models encounters a cycle. |
+| `texture-reference-cycle` | Resolving texture variables encounters a cycle. |
+| `missing-texture-variable` | A model references a texture variable that is not defined. |
+
+Every `ResourceModelMeshFailure` has `_tag: 'ResourceModelMeshFailure'`, `code`, and `message`. The `code` is one of these three literals:
+
+| `code` | Returned when |
+| --- | --- |
+| `invalid-element-rotation` | An element rotation omits a required axis/angle pair or defines neither supported rotation form. |
+| `non-axis-aligned-face` | A transformed face normal does not align with a block axis. |
+| `degenerate-face` | A model face has no area. |
 
 `ChunkBlocksFailure` carries `_tag: 'InvalidChunkBlocksLength'`, `actual`, `expected`, and `coord`. `ChunkHeightFailure` carries `_tag: 'InvalidChunkHeight'` and `height`. `ChunkLightFailure` carries `_tag: 'InvalidChunkLight'` and `coord` when a core or loaded neighbour has an explicit `null` light sidecar. `ChunkViewFailure` combines all three variants; callers of `validateChunkViews` should handle each failure before reading the validated views.
 
