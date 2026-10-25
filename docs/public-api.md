@@ -44,7 +44,9 @@ blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE
 
 `getBlock` and `getBlockAcrossBoundary` return kernel `BlockId` values. An out-of-range chunk-local read returns `AIR`. Values read from `Uint16Array` already fit the kernel's numeric `BlockId` range; the hot read path does not allocate a `Result` or revalidate every cell. Callers must validate raw numeric IDs before narrowing them into typed-array storage.
 
-Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return an `IncompleteFluidView` failure for a shorter array. An absent fluid sidecar retains the full-height, non-source compatibility behavior. Light fields use kernel `LightLevel`; propagation and grid construction remain the caller's responsibility.
+`getBlock`, `getBlockAcrossBoundary`, `sampleLightAt`, and `ambientOcclusionAt` take integer voxel coordinates. These low-level samplers do not round or validate each coordinate; the meshing loops supply integer positions so the hot path does not repeat coordinate checks.
+
+Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return an `IncompleteFluidView` failure for a shorter array. An absent fluid sidecar retains the full-height, non-source compatibility behavior. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; missing light entries use the sampler's fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
 
 ## Mesh configuration and block IDs
 
@@ -75,6 +77,8 @@ Use the kernel's validating `BlockId.result(value)` or `BlockId.option(value)` A
 `waterBlockIds` and `transparentSolidBlockIds` classify cube faces into the three mesh layers. `crossPlantBlockIds` selects a dedicated cross-plant shape, while `fluidMaxLevels` supplies the level ceiling for configured fluid blocks.
 
 An ID explicitly listed in one of these collections is registered for this mesher even if mc-kernel has no built-in block entry for it. Such IDs use the configured layer or shape; unlisted IDs absent from the kernel registry fail meshing with a registry lookup error.
+
+The three lookup builders return complete tables covering every `BlockId` from 0 through 65535. Pass their successful results to `occludes`, `isFluidBlock`, and `isCrossPlant`; these per-cell predicates rely on a complete table and do not check its length on each read. `SPECIAL_BLOCK_LOOKUP` is also a `Result`; check it before passing its success value to `meshSpecialBlocks`.
 
 ## Faces and mesh layers
 
@@ -141,23 +145,24 @@ export const meshChunk: (
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   scratch?: MeshScratch,
-) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure>
+) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure>
 
 export const meshChunkNaive: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
-) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure>
+) => Result.Result<MeshLayers, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure>
 
 export const meshChunkRegion: (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   config: MeshConfig,
   dirtyRegion: MeshRegion,
-) => Result.Result<RegionMesh, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure>
+) => Result.Result<RegionMesh, LayerLookupFailure | LayerLookupTableFailure | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure>
 
 export class MeshScratch {
   static create(): MeshScratch
+  buffersFor(required: number, withLight: boolean): Result.Result<MeshScratchBuffers, MeshScratchFailure>
 }
 export const createMeshScratch: () => MeshScratch
 
@@ -171,6 +176,8 @@ export type RegionMesh = {
   readonly layers: MeshLayers
 }
 ```
+
+`LayerLookupTableFailure` and `GreedyMaskFailure` appear in these inferred failure unions, but are internal variants and are not exported from the package root. Callers can narrow returned failures by `_tag` without importing those variant types.
 
 All three chunk meshing entry points return `Result`. They report incomplete fluid sidecars, invalid lookup configuration, kernel registry failures, and meshing failures to the caller. The standalone `meshFluidSurfaces` helper also returns `Result` and reports incomplete sidecars. `createMeshScratch()` creates a scratch instance that reuses mask and light work arrays across sequential calls; do not share one scratch instance between concurrent calls. Returned arrays and quads remain owned by each result and are not changed by later calls. `MeshRegion.min` is inclusive and `MeshRegion.max` is exclusive, in local X, Y, Z order.
 
