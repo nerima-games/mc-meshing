@@ -190,26 +190,34 @@ export type FluidSample = {
   readonly here: number
 }
 
+const fluidArrayValueAt = (values: Uint8Array, index: number): number => {
+  const value = values[index]
+  if (typeof value === 'undefined') {
+    throw new RangeError('A validated FluidView is missing a cell value')
+  }
+  return value
+}
+
 const levelIn = (fluid: FluidView | undefined, index: number): number => {
   if (!fluid) {
     return FLUID_LOOKUP_UNSET
   }
   // Mesh entry points validate complete present views before sampling.
-  return fluid.levels[index]!
+  return fluidArrayValueAt(fluid.levels, index)
 }
 
 const sourceIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return fluid.sources[index]! !== FLUID_LOOKUP_UNSET
+  return fluidArrayValueAt(fluid.sources, index) !== FLUID_LOOKUP_UNSET
 }
 
 const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return fluid.falling[index]! !== FLUID_LOOKUP_UNSET
+  return fluidArrayValueAt(fluid.falling, index) !== FLUID_LOOKUP_UNSET
 }
 
 const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
