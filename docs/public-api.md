@@ -46,7 +46,7 @@ blockIndex(lx, y, lz, height) = y + lz * height + lx * height * CHUNK_SIZE
 
 `getBlock`, `getBlockAcrossBoundary`, `sampleLightAt`, and `ambientOcclusionAt` take integer voxel coordinates. These low-level samplers do not round or validate each coordinate; the meshing loops supply integer positions so the hot path does not repeat coordinate checks.
 
-Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return an `IncompleteFluidView` failure for a shorter array. An absent fluid sidecar retains the full-height, non-source compatibility behavior. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; missing light entries use the sampler's fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
+Optional `fluid`, `railShapes`, and `light` sidecars provide decoded per-cell state. A present `FluidView` must have `levels`, `sources`, and `falling` arrays that cover every cell in its chunk; `meshChunk`, `meshChunkNaive`, `meshChunkRegion`, and `meshFluidSurfaces` return an `IncompleteFluidView` failure for a shorter array. An absent fluid sidecar retains the full-height, non-source compatibility behavior. `LightSample` and the four entries in `LightCorners` use kernel `LightLevel`; the exported `QuadLight` uses `LightCorners` for its `block` and `sky` fields. Missing light entries use the sampler's fallback, while present values are clamped to the kernel range. Propagation and grid construction remain the caller's responsibility.
 
 ## Mesh configuration and block IDs
 
@@ -177,7 +177,7 @@ export type RegionMesh = {
 }
 ```
 
-`LayerLookupTableFailure` and `GreedyMaskFailure` appear in these inferred failure unions, but are internal variants and are not exported from the package root. Callers can narrow returned failures by `_tag` without importing those variant types.
+`LayerLookupTableFailure` and `GreedyMaskFailure` appear in these returned failure unions, but are internal variants and are not exported from the package root. Callers can narrow returned failures by `_tag` without importing those variant types.
 
 All three chunk meshing entry points return `Result`. They report incomplete fluid sidecars, invalid lookup configuration, kernel registry failures, and meshing failures to the caller. The standalone `meshFluidSurfaces` helper also returns `Result` and reports incomplete sidecars. `createMeshScratch()` creates a scratch instance that reuses mask and light work arrays across sequential calls; do not share one scratch instance between concurrent calls. Returned arrays and quads remain owned by each result and are not changed by later calls. `MeshRegion.min` is inclusive and `MeshRegion.max` is exclusive, in local X, Y, Z order.
 
