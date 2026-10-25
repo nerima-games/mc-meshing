@@ -268,6 +268,21 @@ describe('resource-pack resolver', () => {
         code: 'invalid-seed',
       })
     }
+
+    const nullSeedOptions = invalidFixture<{ readonly seed?: number }>({ seed: null })
+    expect(failureOf(resolveBlockStateModelsResult(
+      resourceName('demo'),
+      { facing: 'east' },
+      assets,
+      nullSeedOptions,
+    ))).toMatchObject({
+      _tag: 'ResourcePackResolutionFailure',
+      code: 'invalid-seed',
+    })
+    const undefinedSeedOptions = invalidFixture<{ readonly seed?: number }>({ seed: Reflect.get({}, 'seed') })
+    expect(resolveBlockStateModelsResult(resourceName('demo'), { facing: 'east' }, assets, undefinedSeedOptions)).toStrictEqual(
+      resolveBlockStateModelsResult(resourceName('demo'), { facing: 'east' }, assets),
+    )
   })
 
   it('rejects malformed normalized names and multipart selection errors', () => {

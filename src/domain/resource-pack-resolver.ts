@@ -383,9 +383,16 @@ export const resolveBlockStateModels = (
   assets: ResourcePackAssets,
   options?: BlockStateResolveOptions,
 ): Result.Result<ReadonlyArray<ResolvedBlockStateModel>, ResourcePackResolutionFailure> => {
-  const seed = options?.seed ?? DEFAULT_SEED
-  if (!Number.isFinite(seed)) {
-    return failResolution('invalid-seed', `Blockstate resolver seed must be finite, received ${seed}`)
+  const resolverOptions: BlockStateResolveOptions | null | undefined = options
+  if (resolverOptions === null) {
+    return failResolution('invalid-seed', 'Blockstate resolver options must be omitted or an object')
+  }
+  const seed: unknown =
+    typeof resolverOptions === 'undefined' || typeof resolverOptions.seed === 'undefined'
+      ? DEFAULT_SEED
+      : resolverOptions.seed
+  if (typeof seed !== 'number' || !Number.isFinite(seed)) {
+    return failResolution('invalid-seed', `Blockstate resolver seed must be finite, received ${String(seed)}`)
   }
   return Result.flatMap(blockStateDefinitionOf(assets, name), (definition) => {
     if (typeof definition.variants !== 'undefined') {
