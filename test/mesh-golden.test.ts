@@ -6,7 +6,8 @@ import {
   blockIndex,
   type ChunkView,
 } from '../src/domain/chunk-view'
-import { meshChunk as meshChunkResult } from '../src/domain/mesh'
+import { simplifyMesh } from '../src/domain/lod'
+import { type MeshLayers, meshChunk as meshChunkResult } from '../src/domain/mesh'
 import type { MeshConfig } from '../src/domain/opacity'
 import { packMeshLayers, type PackedMeshBuffers } from '../src/domain/mesh-buffers'
 import { railShapeCodeOf } from '../src/domain/rail-types'
@@ -103,6 +104,20 @@ const kernelShapeFixture = (): ChunkView =>
     },
   ])
 
+const migrationParityFixture = (): ChunkView =>
+  chunkOf([
+    { blockId: STONE, lx: 1, lz: 1, y: 1 },
+    { blockId: STONE, lx: 2, lz: 1, y: 1 },
+    { blockId: STONE, lx: 1, lz: 2, y: 1 },
+    { blockId: STONE, lx: 2, lz: 2, y: 1 },
+    { blockId: GLASS, lx: 5, lz: 1, y: 1 },
+    { blockId: STONE, lx: 6, lz: 1, y: 1 },
+    { blockId: STONE, lx: 8, lz: 8, y: 1 },
+    { blockId: STONE, lx: 9, lz: 9, y: 1 },
+    { blockId: WATER, lx: 10, lz: 2, source: true, y: 1 },
+    { blockId: WATER, falling: true, level: 1, lx: 10, lz: 2, y: 2 },
+  ])
+
 const digestOf = (buffers: PackedMeshBuffers): string => {
   const canonical = JSON.stringify({
     ambientOcclusion: Array.from(buffers.ambientOcclusion),
@@ -116,6 +131,9 @@ const digestOf = (buffers: PackedMeshBuffers): string => {
   })
   return createHash('sha256').update(canonical).digest('hex')
 }
+
+const quadSequenceDigestOf = (layers: MeshLayers): string =>
+  createHash('sha256').update(JSON.stringify(layers)).digest('hex')
 
 const GOLDEN_HASHES = {
   'merged-cubes': '4c1b29af0058f1c8e541b9b664440860e3b0c38a9057374ed8daaf547f3a3375',
@@ -139,4 +157,16 @@ describe('packed mesh golden fixtures', () => {
       expect(digestOf(buffers)).toBe(GOLDEN_HASHES[name])
     })
   }
+
+  it('keeps meshChunk and simplifyMesh quad sequences stable across the Effect 4 migration', () => {
+    const layers = meshChunk(migrationParityFixture(), {}, CONFIG)
+
+    expect(layers.opaque.length).toBeGreaterThan(0)
+    expect(layers.transparentSolid.length).toBeGreaterThan(0)
+    expect(layers.fluids.length).toBeGreaterThan(0)
+    expect(layers.opaque.some((quad) => quad.ao > 0)).toBe(true)
+    expect(quadSequenceDigestOf(layers)).toBe('a05597e98b9185f89928a80fbabecd9aefa4a4066708c3b337b18a331d3b81af')
+    expect(quadSequenceDigestOf(simplifyMesh(layers, 1))).toBe('d0e074f1b850d2565808da03cd6c2ac4b658c56ee444133997db1fb2b9a3e058')
+    expect(quadSequenceDigestOf(simplifyMesh(layers, 2))).toBe('a514616b4981b301c7da4e965b95b137d5a5ea6546392640c53d8d37e00da354')
+  })
 })
