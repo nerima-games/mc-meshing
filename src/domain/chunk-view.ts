@@ -92,9 +92,10 @@ export const blockIndex = (lx: number, y: number, lz: number, height: number = C
  *
  * The state is optional at the `ChunkView` boundary because mc-kernel 0.4.0
  * publishes no fluid sidecar. When present, `FluidView` is complete decoded
- * renderer state: all three arrays are required. A missing `FluidView` is
- * interpreted by fluid sampling as a full, non-source cell so block ids still
- * produce visible fluid geometry before simulation state is available.
+ * renderer state: all three arrays must cover every cell in this chunk. A
+ * missing `FluidView` is interpreted by fluid sampling as a full, non-source
+ * cell so block ids still produce visible fluid geometry before simulation state
+ * is available.
  *
  * The type intentionally stops at decoded state. The owner of simulation
  * storage decodes its packed bytes before passing this view; meshing does not

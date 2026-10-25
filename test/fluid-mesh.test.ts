@@ -34,7 +34,7 @@ import {
   isFluidBlock,
 } from '../src/domain/fluid-mesh'
 import { maxLevelOf } from '../src/domain/fluid-sampling'
-import { type MeshLayers, type Quad, meshChunk as meshChunkResult, meshChunkNaive as meshChunkNaiveResult, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
+import { type MeshLayers, type Quad, meshChunk as meshChunkResult, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
@@ -313,28 +313,69 @@ describe('the height of one cell', () => {
   )
 
   it.effect(
-    'a FluidView present but shorter than the chunk reads its missing cells the same way a missing FluidView does',
+    'rejects every FluidView array that does not cover the chunk',
     () =>
       Effect.sync(() => {
-        // `levels`/`sources` arrive from outside meshing — `domain/chunk-view.ts`'s
-        // `FluidView` doc spells out why meshing does not own their encoding — so
-        // Nothing here can prove their length matches the chunk the way the
-        // Internally-built lookup tables do. An index past a too-short array reads
-        // Back `undefined`, and `levelIn`/`sourceIn` default that the same way the
-        // Wholly-missing-`FluidView` case above does: the lookup's zero sentinel, i.e. full
-        // And not a source. This is that default, witnessed with the `FluidView`
-        // Present but truncated to one entry instead of absent entirely.
         const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
         blocks[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = WATER
-        const chunk: ChunkView = {
-          coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
-          height: CHUNK_HEIGHT,
-          blocks,
-          fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        const completeFluid = {
+          falling: new Uint8Array(BLOCKS_PER_CHUNK),
+          levels: new Uint8Array(BLOCKS_PER_CHUNK),
+          sources: new Uint8Array(BLOCKS_PER_CHUNK),
         }
 
-        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-        expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
+        for (const field of ['levels', 'sources', 'falling'] as const) {
+          const incompleteChunk: ChunkView = {
+            coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
+            height: CHUNK_HEIGHT,
+            blocks,
+            fluid: { ...completeFluid, [field]: new Uint8Array(1) },
+          }
+          const result = meshChunkResult(
+            incompleteChunk,
+            {},
+            CONFIG,
+          )
+
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) {
+            expect(result.failure).toMatchObject({
+              _tag: 'IncompleteFluidView',
+              actual: 1,
+              expected: BLOCKS_PER_CHUNK,
+              field,
+            })
+          }
+          expect(Result.isFailure(meshChunkNaiveResult(incompleteChunk, {}, CONFIG))).toBe(true)
+          expect(
+            Result.isFailure(
+              meshChunkRegionResult(incompleteChunk, {}, CONFIG, {
+                max: [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE],
+                min: [0, 0, 0],
+              }),
+            ),
+          ).toBe(true)
+        }
+
+        const validChunk: ChunkView = {
+          coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
+          height: CHUNK_HEIGHT,
+          blocks: new Uint16Array(BLOCKS_PER_CHUNK),
+        }
+        const incompleteNeighbour: ChunkView = {
+          ...validChunk,
+          fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        }
+        const neighbourResult = meshChunkResult(validChunk, { xPos: incompleteNeighbour }, CONFIG)
+        expect(Result.isFailure(neighbourResult)).toBe(true)
+        if (Result.isFailure(neighbourResult)) {
+          expect(neighbourResult.failure).toMatchObject({
+            _tag: 'IncompleteFluidView',
+            actual: 1,
+            expected: BLOCKS_PER_CHUNK,
+            field: 'levels',
+          })
+        }
       }),
   )
 })

@@ -61,6 +61,14 @@ export type FluidLookupFailure =
   | { readonly _tag: 'InvalidFluidMaxLevel'; readonly blockId: BlockId; readonly maxLevel: number }
   | { readonly _tag: 'MissingFluidLookupEntry'; readonly blockId: BlockId }
 
+export type FluidViewFailure = {
+  readonly _tag: 'IncompleteFluidView'
+  readonly actual: number
+  readonly coord: ChunkView['coord']
+  readonly expected: number
+  readonly field: 'falling' | 'levels' | 'sources'
+}
+
 const FLUID_LOOKUP_DATA_VIEWS = new WeakMap<Uint16Array, DataView>()
 const ENDIANNESS_MARKER = new Uint16Array([1])
 const HOST_IS_LITTLE_ENDIAN = new Uint8Array(ENDIANNESS_MARKER.buffer)[ZERO_INDEX] === 1
@@ -77,6 +85,33 @@ const dataViewForLookup = (lookup: Uint16Array): DataView => {
 
 const encodedLevelForKnownFluid = (lookup: Uint16Array, blockId: BlockId): number =>
   dataViewForLookup(lookup).getUint16(blockId * Uint16Array.BYTES_PER_ELEMENT, HOST_IS_LITTLE_ENDIAN)
+
+export const validateFluidViews = (chunk: ChunkView, neighbours: ChunkNeighbours): Result.Result<void, FluidViewFailure> => {
+  const views = [chunk, ...Object.values(neighbours)]
+  for (const view of views) {
+    if (!view?.fluid) {
+      continue
+    }
+    const expected = CHUNK_SIZE * view.height * CHUNK_SIZE
+    const arrays = [
+      ['levels', view.fluid.levels],
+      ['sources', view.fluid.sources],
+      ['falling', view.fluid.falling],
+    ] as const
+    for (const [field, values] of arrays) {
+      if (values.length < expected) {
+        return Result.fail({
+          _tag: 'IncompleteFluidView',
+          actual: values.length,
+          coord: view.coord,
+          expected,
+          field,
+        })
+      }
+    }
+  }
+  return Result.succeed(undefined)
+}
 
 export const buildFluidLookup = (config: MeshConfig): Result.Result<Uint16Array, FluidLookupFailure> => {
   const lookup = new Uint16Array(MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET)
@@ -159,21 +194,21 @@ const levelIn = (fluid: FluidView | undefined, index: number): number => {
   if (!fluid) {
     return FLUID_LOOKUP_UNSET
   }
-  return fluid.levels[index] ?? FLUID_LOOKUP_UNSET
+  return fluid.levels[index]
 }
 
 const sourceIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return (fluid.sources[index] ?? FLUID_LOOKUP_UNSET) !== FLUID_LOOKUP_UNSET
+  return fluid.sources[index] !== FLUID_LOOKUP_UNSET
 }
 
 const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return (fluid.falling[index] ?? FLUID_LOOKUP_UNSET) !== FLUID_LOOKUP_UNSET
+  return fluid.falling[index] !== FLUID_LOOKUP_UNSET
 }
 
 const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {

@@ -163,6 +163,7 @@ import {
   type SpecialBlockLookup,
   type SpecialMeshFailure,
 } from './special-mesh.js'
+import { validateFluidViews, type FluidViewFailure } from './fluid-sampling.js'
 import { AIR } from './block-data.js'
 import type { CrossPlantQuad } from './plant-types.js'
 import type { FluidQuad } from './fluid-types.js'
@@ -354,31 +355,33 @@ export const meshChunk = (
   scratch?: MeshScratch,
 ): Result.Result<
   MeshLayers,
-  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
+  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
 > =>
-  Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
-    Result.flatMap(chunkMeshContextOf(chunk, neighbours, config, specialLookup), (context) => {
-      const { fluids, layers, lookup, plants, push, yLimit } = context
-      if (yLimit === EMPTY_CHUNK_CEILING) {
-        return Result.succeed(layers)
-      }
+  Result.flatMap(validateFluidViews(chunk, neighbours), () =>
+    Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+      Result.flatMap(chunkMeshContextOf(chunk, neighbours, config, specialLookup), (context) => {
+        const { fluids, layers, lookup, plants, push, yLimit } = context
+        if (yLimit === EMPTY_CHUNK_CEILING) {
+          return Result.succeed(layers)
+        }
 
-      const required = CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE)
-      return Result.flatMap(meshBuffersOf(chunk, required, scratch), ({ light, mask }) =>
-        Result.map(meshAllFaces({
-          chunk,
-          fluids,
-          light,
-          lookup,
-          mask,
-          neighbours,
-          plants,
-          specialLookup,
-          push,
-          yLimit,
-        }), () => layers),
-      )
-    }),
+        const required = CHUNK_SIZE * Math.max(yLimit, CHUNK_SIZE)
+        return Result.flatMap(meshBuffersOf(chunk, required, scratch), ({ light, mask }) =>
+          Result.map(meshAllFaces({
+            chunk,
+            fluids,
+            light,
+            lookup,
+            mask,
+            neighbours,
+            plants,
+            specialLookup,
+            push,
+            yLimit,
+          }), () => layers),
+        )
+      }),
+    ),
   )
 
 /**
@@ -493,42 +496,44 @@ export const meshChunkNaive = (
   config: MeshConfig,
 ): Result.Result<
   MeshLayers,
-  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure
+  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
 > =>
-  Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
-    Result.flatMap(layerLookupForMesh(config), (lookup) =>
-      Result.flatMap(fluidLookupForMesh(config), (fluids) => {
-        return Result.flatMap(crossPlantLookupForMesh(config), (plants) =>
-          // The full chunk height, not `solidCeiling`: the oracle deliberately does no such
-          // optimisation, so that `solidCeiling` itself is something the property tests
-          // can catch being wrong. The plates and the fluid surfaces are identical
-          // either way, which is exactly what makes that comparison worth making.
-          Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) => {
-            const { layers, push } = makeSink(
-              lookup,
-              meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
-              meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, chunk.height),
-              specialBlocks,
-            )
-
-            for (const face of FACES) {
-              scanChunkFace({
-                chunk,
-                face,
-                fluids,
+  Result.flatMap(validateFluidViews(chunk, neighbours), () =>
+    Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+      Result.flatMap(layerLookupForMesh(config), (lookup) =>
+        Result.flatMap(fluidLookupForMesh(config), (fluids) => {
+          return Result.flatMap(crossPlantLookupForMesh(config), (plants) =>
+            // The full chunk height, not `solidCeiling`: the oracle deliberately does no such
+            // optimisation, so that `solidCeiling` itself is something the property tests
+            // can catch being wrong. The plates and the fluid surfaces are identical
+            // either way, which is exactly what makes that comparison worth making.
+            Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) => {
+              const { layers, push } = makeSink(
                 lookup,
-                neighbours,
-                placement: facePlacementOf(face.direction),
-                plants,
-                specialLookup,
-                push,
-              })
-            }
+                meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
+                meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, chunk.height),
+                specialBlocks,
+              )
 
-            return layers
-          }),
-        )
-      }),
+              for (const face of FACES) {
+                scanChunkFace({
+                  chunk,
+                  face,
+                  fluids,
+                  lookup,
+                  neighbours,
+                  placement: facePlacementOf(face.direction),
+                  plants,
+                  specialLookup,
+                  push,
+                })
+              }
+
+              return layers
+            }),
+          )
+        }),
+      ),
     ),
   )
 
@@ -578,60 +583,61 @@ export const meshChunkRegion = (
   dirtyRegion: MeshRegion,
 ): Result.Result<
   RegionMesh,
-  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
-> => {
-  const dirty = normalizeRegion(dirtyRegion, chunk.height)
-  const [, maxY] = dirty.max
+  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
+> =>
+  Result.flatMap(validateFluidViews(chunk, neighbours), () => {
+    const dirty = normalizeRegion(dirtyRegion, chunk.height)
+    const [, maxY] = dirty.max
 
-  return Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
-    Result.flatMap(layerLookupForMesh(config), (lookup) =>
-      Result.flatMap(fluidLookupForMesh(config), (fluids) => {
-        return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
-          if (isEmptyRegion(dirty)) {
-            return Result.succeed({
-              dirtyRegion: dirty,
-              layers: {
-                crossPlants: [],
-                fluids: [],
-                opaque: [],
-                specialBlocks: [],
-                transparentSolid: [],
-                water: [],
-              },
-              ownedRegion: dirty,
-            })
-          }
-
-          return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) => {
-            const { layers, push } = makeSink(
-              lookup,
-              meshCrossPlants({ bounds: dirty, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
-              meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, maxY, dirty),
-              specialBlocks,
-            )
-            const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
-            const light = lightMasksOf(chunk, required)
-            const mask = new Uint32Array(required)
-            return Result.map(meshAllFaces({
-                chunk,
-                fluids,
-                light,
-                lookup,
-                mask,
-                neighbours,
-                plants,
-                region: dirty,
-                specialLookup,
-                push,
-                yLimit: maxY,
-              }), () => ({
+    return Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
+      Result.flatMap(layerLookupForMesh(config), (lookup) =>
+        Result.flatMap(fluidLookupForMesh(config), (fluids) => {
+          return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
+            if (isEmptyRegion(dirty)) {
+              return Result.succeed({
                 dirtyRegion: dirty,
-                layers,
+                layers: {
+                  crossPlants: [],
+                  fluids: [],
+                  opaque: [],
+                  specialBlocks: [],
+                  transparentSolid: [],
+                  water: [],
+                },
                 ownedRegion: dirty,
-              }))
+              })
+            }
+
+            return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) => {
+              const { layers, push } = makeSink(
+                lookup,
+                meshCrossPlants({ bounds: dirty, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
+                meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, maxY, dirty),
+                specialBlocks,
+              )
+              const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
+              const light = lightMasksOf(chunk, required)
+              const mask = new Uint32Array(required)
+              return Result.map(meshAllFaces({
+                  chunk,
+                  fluids,
+                  light,
+                  lookup,
+                  mask,
+                  neighbours,
+                  plants,
+                  region: dirty,
+                  specialLookup,
+                  push,
+                  yLimit: maxY,
+                }), () => ({
+                  dirtyRegion: dirty,
+                  layers,
+                  ownedRegion: dirty,
+                }))
+            })
           })
-        })
-      }),
-    ),
-  )
-}
+        }),
+      ),
+    )
+  })
