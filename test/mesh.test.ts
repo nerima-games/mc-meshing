@@ -70,6 +70,7 @@ const STONE = Option.getOrThrow(blockIdOf('stone'))
 const WATER = Option.getOrThrow(blockIdOf('water'))
 const GLASS = Option.getOrThrow(blockIdOf('glass'))
 const DIRT = Option.getOrThrow(blockIdOf('dirt'))
+const CACTUS = Option.getOrThrow(blockIdOf('cactus'))
 
 const integerArbitrary = (minimum: number, maximum: number) => FastCheck.integer({ min: minimum, max: maximum })
 
@@ -1201,6 +1202,39 @@ describe('the greedy merge against the naive oracle', () => {
       expect(layers.transparentSolid).toHaveLength(6)
       expect(layers.transparentSolid.every((quad) => quad.blockId === wideId)).toBe(true)
       expect(layers.transparentSolid.some((quad) => quad.blockId === wideId % 256)).toBe(false)
+    }),
+  )
+
+  it.effect('accepts custom block IDs configured for each mesh shape and layer', () =>
+    Effect.sync(() => {
+      const wideId = expectSuccess(KernelBlockId.result(300))
+      const variants: ReadonlyArray<{ readonly config: MeshConfig; readonly nonOpaque: boolean }> = [
+        { config: { ...EMPTY_MESH_CONFIG, crossPlantBlockIds: new Set([wideId]) }, nonOpaque: true },
+        { config: { ...EMPTY_MESH_CONFIG, transparentSolidBlockIds: new Set([wideId]) }, nonOpaque: true },
+        { config: { ...EMPTY_MESH_CONFIG, waterBlockIds: new Set([wideId]) }, nonOpaque: true },
+        { config: { ...EMPTY_MESH_CONFIG, fluidMaxLevels: new Map([[wideId, 7]]) }, nonOpaque: false },
+      ]
+
+      for (const { config, nonOpaque } of variants) {
+        const layers = meshChunk(
+          chunkWith([
+            [8, 64, 8, CACTUS],
+            [9, 64, 8, wideId],
+          ]),
+          {},
+          config,
+        )
+        const configuredQuads = [
+          ...layers.opaque,
+          ...layers.water,
+          ...layers.transparentSolid,
+          ...layers.crossPlants,
+          ...layers.fluids,
+        ]
+
+        expect(configuredQuads.some((quad) => quad.blockId === wideId)).toBe(true)
+        expect(layers.specialBlocks.some((quad) => quad.blockId === CACTUS && quad.direction === 'xPos')).toBe(nonOpaque)
+      }
     }),
   )
 

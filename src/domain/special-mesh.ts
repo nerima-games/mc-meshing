@@ -27,7 +27,7 @@ import {
   railRenderKindOf,
 } from './special-types.js'
 import { type RailShape, type RailShapeFailure, railShapeAt } from './rail-types.js'
-import type { MeshConfig } from './opacity.js'
+import { EMPTY_MESH_CONFIG, type MeshConfig } from './opacity.js'
 import type { QuadLight } from './light-types.js'
 import { quadLightAt } from './light-sampling.js'
 
@@ -181,23 +181,21 @@ const missingSpecialBlockLookupEntry = (blockId: BlockId): SpecialMeshFailure =>
   return { _tag: 'MissingSpecialBlockLookupEntry', blockId }
 }
 
-const isConfiguredBlock = (config: MeshConfig | undefined, blockId: BlockId): boolean =>
-  config !== undefined &&
-  (config.crossPlantBlockIds.has(blockId) ||
-    config.transparentSolidBlockIds.has(blockId) ||
-    config.waterBlockIds.has(blockId) ||
-    config.fluidMaxLevels.has(blockId))
+const isConfiguredBlock = (config: MeshConfig, blockId: BlockId): boolean =>
+  config.crossPlantBlockIds.has(blockId) ||
+  config.transparentSolidBlockIds.has(blockId) ||
+  config.waterBlockIds.has(blockId) ||
+  config.fluidMaxLevels.has(blockId)
 
-const isConfiguredNonOpaqueBlock = (config: MeshConfig | undefined, blockId: BlockId): boolean =>
-  config !== undefined &&
-  (config.crossPlantBlockIds.has(blockId) ||
-    config.transparentSolidBlockIds.has(blockId) ||
-    config.waterBlockIds.has(blockId))
+const isConfiguredNonOpaqueBlock = (config: MeshConfig, blockId: BlockId): boolean =>
+  config.crossPlantBlockIds.has(blockId) ||
+  config.transparentSolidBlockIds.has(blockId) ||
+  config.waterBlockIds.has(blockId)
 
 const ensureRegisteredBlock = (
   lookup: SpecialBlockLookup,
   blockId: BlockId,
-  config: MeshConfig | undefined,
+  config: MeshConfig,
 ): Option.Option<SpecialMeshFailure> => {
   const opacityCode = lookup.opacityCodes[blockId]
   if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
@@ -332,12 +330,11 @@ const isOpenToSpecial = (
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   kind: SpecialRenderKind,
-  lx: number,
-  y: number,
-  lz: number,
+  position: BlockPosition,
   face: Face,
-  config: MeshConfig | undefined,
+  config: MeshConfig,
 ): boolean | SpecialMeshFailure => {
+  const [lx, y, lz] = position
   const neighbourId = getBlockAcrossBoundary(
     chunk,
     neighbours,
@@ -444,12 +441,12 @@ const meshBoxCell = (
   blockId: BlockId,
   kind: BoxRenderKind,
   position: BlockPosition,
-  config: MeshConfig | undefined,
+  config: MeshConfig,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
   const bounds = boxBoundsFor(kind, lx, y, lz)
   for (const face of FACES) {
-    const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, face, config)
+    const open = isOpenToSpecial(lookup, chunk, neighbours, kind, position, face, config)
     if (typeof open !== 'boolean') {
       return Result.fail(open)
     }
@@ -476,10 +473,10 @@ const meshPlanarCell = (
   blockId: BlockId,
   kind: Extract<SpecialRenderKind, 'lilyPad' | 'rail'>,
   position: BlockPosition,
-  config: MeshConfig | undefined,
+  config: MeshConfig,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
-  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, lx, y, lz, TOP_FACE, config)
+  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, position, TOP_FACE, config)
   if (typeof open !== 'boolean') {
     return Result.fail(open)
   }
@@ -531,7 +528,7 @@ const meshSpecialCell = (
   blockId: BlockId,
   kind: SpecialRenderKind,
   position: BlockPosition,
-  config: MeshConfig | undefined,
+  config: MeshConfig,
 ): Result.Result<void, SpecialMeshFailure> => {
   if (kind === 'cactus' || kind === 'slab' || kind === 'pressurePlate') {
     return meshBoxCell(result, lookup, chunk, neighbours, blockId, kind, position, config)
@@ -568,7 +565,7 @@ export const meshSpecialBlocks = (
   neighbours: ChunkNeighbours,
   yLimit: number,
   region?: SpecialMeshRegion,
-  config?: MeshConfig,
+  config: MeshConfig = EMPTY_MESH_CONFIG,
 ): Result.Result<ReadonlyArray<SpecialBlockQuad>, SpecialMeshFailure> => {
   const { minLx, minY, minLz, maxLx, maxY, maxLz } = specialMeshBoundsOf(region, yLimit)
   const result: Array<SpecialBlockQuad> = []
