@@ -53,8 +53,6 @@ const chunkWith = (
   return chunk
 }
 
-const invalidFixture = <T,>(value: unknown): T => value as T
-
 const yPosQuads = (chunk: ChunkView) =>
   Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG)).opaque.filter((quad) => quad.direction === 'yPos')
 
@@ -121,7 +119,8 @@ describe('injected Minecraft light data', () => {
 
   it('rejects a null light sidecar at the chunk validation boundary', () => {
     const chunk = chunkWith([])
-    const nullLight = invalidFixture<ChunkView>({ ...chunk, light: null })
+    const nullLight = chunkWith([])
+    expect(Reflect.set(nullLight, 'light', null)).toBe(true)
 
     expect(meshChunk(nullLight, {}, MESH_CONFIG)).toMatchObject({
       failure: { _tag: 'InvalidChunkLight', coord: chunk.coord },
