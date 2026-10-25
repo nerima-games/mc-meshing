@@ -284,23 +284,25 @@ const chunkMeshContextOf = (
   specialLookup: SpecialBlockLookup,
 ): Result.Result<
   ChunkMeshContext,
-  LayerLookupFailureWithTable | FluidLookupFailure | CrossPlantLookupFailure | SpecialMeshFailure
+  LayerLookupFailureWithTable | FluidLookupFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
 > =>
   Result.flatMap(layerLookupForMesh(config), (lookup) =>
     Result.flatMap(fluidLookupForMesh(config), (fluids) => {
       return Result.flatMap(crossPlantLookupForMesh(config), (plants) => {
         const yLimit = solidCeiling(chunk.blocks, chunk.height)
-        return Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, yLimit), (specialBlocks) => {
-          // These companion layers are built before the sink so the returned
-          // result owns each list alongside the cube-face buckets.
-          const { layers, push } = makeSink(
-            lookup,
-            meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit }),
-            meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, yLimit),
-            specialBlocks,
-          )
-          return { fluids, layers, lookup, plants, specialLookup, push, yLimit }
-        })
+        return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, yLimit), (specialBlocks) =>
+          Result.map(meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, yLimit), (fluidQuads) => {
+            // These companion layers are built before the sink so the returned
+            // result owns each list alongside the cube-face buckets.
+            const { layers, push } = makeSink(
+              lookup,
+              meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit }),
+              fluidQuads,
+              specialBlocks,
+            )
+            return { fluids, layers, lookup, plants, specialLookup, push, yLimit }
+          }),
+        )
       })
     }),
   )
@@ -507,30 +509,35 @@ export const meshChunkNaive = (
             // optimisation, so that `solidCeiling` itself is something the property tests
             // can catch being wrong. The plates and the fluid surfaces are identical
             // either way, which is exactly what makes that comparison worth making.
-            Result.map(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) => {
-              const { layers, push } = makeSink(
-                lookup,
-                meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
+            Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, chunk.height), (specialBlocks) =>
+              Result.map(
                 meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, chunk.height),
-                specialBlocks,
-              )
+                (fluidQuads) => {
+                  const { layers, push } = makeSink(
+                    lookup,
+                    meshCrossPlants({ chunk, neighbours, plantLookup: plants, yLimit: chunk.height }),
+                    fluidQuads,
+                    specialBlocks,
+                  )
 
-              for (const face of FACES) {
-                scanChunkFace({
-                  chunk,
-                  face,
-                  fluids,
-                  lookup,
-                  neighbours,
-                  placement: facePlacementOf(face.direction),
-                  plants,
-                  specialLookup,
-                  push,
-                })
-              }
+                  for (const face of FACES) {
+                    scanChunkFace({
+                      chunk,
+                      face,
+                      fluids,
+                      lookup,
+                      neighbours,
+                      placement: facePlacementOf(face.direction),
+                      plants,
+                      specialLookup,
+                      push,
+                    })
+                  }
 
-              return layers
-            }),
+                  return layers
+                },
+              ),
+            ),
           )
         }),
       ),
@@ -608,34 +615,39 @@ export const meshChunkRegion = (
               })
             }
 
-            return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) => {
-              const { layers, push } = makeSink(
-                lookup,
-                meshCrossPlants({ bounds: dirty, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
+            return Result.flatMap(meshSpecialBlocks(specialLookup, chunk, neighbours, maxY, dirty), (specialBlocks) =>
+              Result.flatMap(
                 meshFluidSurfaces(chunk, neighbours, fluids, lookup.table, plants, maxY, dirty),
-                specialBlocks,
-              )
-              const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
-              const light = lightMasksOf(chunk, required)
-              const mask = new Uint32Array(required)
-              return Result.map(meshAllFaces({
-                  chunk,
-                  fluids,
-                  light,
-                  lookup,
-                  mask,
-                  neighbours,
-                  plants,
-                  region: dirty,
-                  specialLookup,
-                  push,
-                  yLimit: maxY,
-                }), () => ({
-                  dirtyRegion: dirty,
-                  layers,
-                  ownedRegion: dirty,
-                }))
-            })
+                (fluidQuads) => {
+                  const { layers, push } = makeSink(
+                    lookup,
+                    meshCrossPlants({ bounds: dirty, chunk, neighbours, plantLookup: plants, yLimit: maxY }),
+                    fluidQuads,
+                    specialBlocks,
+                  )
+                  const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
+                  const light = lightMasksOf(chunk, required)
+                  const mask = new Uint32Array(required)
+                  return Result.map(meshAllFaces({
+                      chunk,
+                      fluids,
+                      light,
+                      lookup,
+                      mask,
+                      neighbours,
+                      plants,
+                      region: dirty,
+                      specialLookup,
+                      push,
+                      yLimit: maxY,
+                    }), () => ({
+                      dirtyRegion: dirty,
+                      layers,
+                      ownedRegion: dirty,
+                    }))
+                },
+              ),
+            )
           })
         }),
       ),

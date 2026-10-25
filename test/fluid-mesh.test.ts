@@ -32,6 +32,7 @@ import {
   SOURCE_SURFACE_HEIGHT,
   buildFluidLookup as buildFluidLookupResult,
   isFluidBlock,
+  meshFluidSurfaces as meshFluidSurfacesResult,
 } from '../src/domain/fluid-mesh'
 import { maxLevelOf } from '../src/domain/fluid-sampling'
 import { type MeshLayers, type Quad, meshChunk as meshChunkResult, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
@@ -347,6 +348,18 @@ describe('the height of one cell', () => {
             })
           }
           expect(Result.isFailure(meshChunkNaiveResult(incompleteChunk, {}, CONFIG))).toBe(true)
+          const directResult = meshFluidSurfacesResult(
+            incompleteChunk,
+            {},
+            new Uint16Array(MAX_BLOCK_ID + 1),
+            new Uint8Array(MAX_BLOCK_ID + 1),
+            new Uint8Array(MAX_BLOCK_ID + 1),
+            CHUNK_HEIGHT,
+          )
+          expect(Result.isFailure(directResult)).toBe(true)
+          if (Result.isFailure(directResult)) {
+            expect(directResult.failure).toMatchObject({ _tag: 'IncompleteFluidView', field })
+          }
           expect(
             Result.isFailure(
               meshChunkRegionResult(incompleteChunk, {}, CONFIG, {

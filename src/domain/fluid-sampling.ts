@@ -194,21 +194,22 @@ const levelIn = (fluid: FluidView | undefined, index: number): number => {
   if (!fluid) {
     return FLUID_LOOKUP_UNSET
   }
-  return fluid.levels[index]
+  // Mesh entry points validate complete present views before sampling.
+  return fluid.levels[index]!
 }
 
 const sourceIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return fluid.sources[index] !== FLUID_LOOKUP_UNSET
+  return fluid.sources[index]! !== FLUID_LOOKUP_UNSET
 }
 
 const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   if (!fluid) {
     return false
   }
-  return fluid.falling[index] !== FLUID_LOOKUP_UNSET
+  return fluid.falling[index]! !== FLUID_LOOKUP_UNSET
 }
 
 const heightInView = (view: ChunkView, context: FluidContext, position: FluidPosition, wantId: BlockId): number => {
