@@ -71,6 +71,36 @@ describe('maxLevelOf', () => {
     expect(heightIn(space, [2, 0, 3], MISSING_BLOCK_ID)).toBe(-1)
   })
 
+  it('fails fast if the sampler receives a present fluid view with a missing cell', () => {
+    const height = 1
+    const emptyChunk = Result.getOrThrow(emptyChunkResult(height))
+    const blocks = new Uint16Array(emptyChunk.blocks)
+    blocks[blockIndex(2, 0, 3, height)] = BLOCK_ID
+    const config = {
+      ...EMPTY_MESH_CONFIG,
+      fluidMaxLevels: new Map([[BLOCK_ID, 7]]),
+    }
+    const space = {
+      chunk: {
+        ...emptyChunk,
+        blocks,
+        fluid: {
+          levels: new Uint8Array(0),
+          sources: new Uint8Array(blocks.length),
+          falling: new Uint8Array(blocks.length),
+        },
+      },
+      neighbours: {},
+      context: {
+        fluids: Result.getOrThrow(buildFluidLookup(config)),
+        layers: new Uint8Array(BLOCK_ID_MAX + 1),
+        plants: new Uint8Array(BLOCK_ID_MAX + 1),
+      },
+    }
+
+    expect(() => heightIn(space, [2, 0, 3], BLOCK_ID)).toThrow(RangeError)
+  })
+
   it('reports an invalid fluid max level without throwing', () => {
     const config = {
       ...EMPTY_MESH_CONFIG,
