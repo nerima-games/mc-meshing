@@ -110,7 +110,7 @@ export const validateFluidViews = (chunk: ChunkView, neighbours: ChunkNeighbours
       }
     }
   }
-  return Result.succeed(undefined)
+  return Result.void
 }
 
 export const buildFluidLookup = (config: MeshConfig): Result.Result<Uint16Array, FluidLookupFailure> => {
