@@ -70,7 +70,7 @@ export const solidCeiling = (blocks: Readonly<Uint16Array>, height: number): num
     for (let lz = FIRST_INDEX; lz < CHUNK_SIZE; lz += STEP) {
       const columnBase = lz * height + lx * height * CHUNK_SIZE
       for (let y = height - STEP; y > highest; y -= STEP) {
-        if ((blocks[columnBase + y] ?? AIR) !== AIR) {
+        if (blocks[columnBase + y] !== AIR) {
           highest = y
           break
         }
