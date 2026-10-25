@@ -77,6 +77,8 @@
  *    Recorded as a deviation in docs/design-notes.md M-11 and pinned by
  *    `test/plant-mesh.test.ts`.
  */
+import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
+import { Result } from 'effect'
 import { type BlockId, MAX_BLOCK_ID } from './block-data.js'
 import { CHUNK_SIZE, type ChunkNeighbours, type ChunkView, getBlock } from './chunk-view.js'
 import type { CrossPlantQuad } from './plant-types.js'
@@ -133,30 +135,36 @@ const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
 /** Marker written into the table for "this id is a cross plant". */
 const CROSS_PLANT_MARKER = 1
 
-export const buildCrossPlantLookup = (config: MeshConfig): Uint8Array => {
+export type CrossPlantLookupFailure = ReturnType<typeof KernelBlockId.result> extends Result.Result<
+  BlockId,
+  infer Failure
+>
+  ? Failure
+  : never
+
+export const buildCrossPlantLookup = (config: MeshConfig): Result.Result<Uint8Array, CrossPlantLookupFailure> => {
+  for (const blockId of config.crossPlantBlockIds) {
+    const validated = KernelBlockId.result(blockId)
+    if (Result.isFailure(validated)) {
+      return Result.fail(validated.failure)
+    }
+  }
   const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
   // Iterating the SET rather than every representable id, unlike `buildLayerLookup`. That
   // One has to visit every id because it must give every id an answer; this one
   // Defaults to "not a plant" and only the named ids differ.
   //
-  // THERE IS NO BOUNDS CHECK, and that is deliberate. An id outside the table is a
-  // Config mistake, and the obvious `if (blockId >= 0 && blockId <= MAX_BLOCK_ID)`
-  // Guard is UNREACHABLE: a write past the end of a `Uint8Array` is dropped by
-  // The array itself, silently and by specification, so the guarded and
-  // Unguarded versions are indistinguishable to every caller. It was written,
-  // And it was removed when a mutation test could not make it fail. `domain/lod.ts`
-  // Refused the reference's degenerate-span guard on the same grounds — an
-  // Unreachable branch is a permanently uncoverable line and a claim no test can
-  // Support. `test/plant-mesh.test.ts` keeps the out-of-range case as a
-  // Statement of the resulting behaviour.
+  // The input IDs are checked once before table construction because typed-array
+  // writes outside the table are silently ignored. The meshing loop then reads
+  // this validated table without repeating the check per cell.
   for (const blockId of config.crossPlantBlockIds) {
     lookup[blockId] = CROSS_PLANT_MARKER
   }
-  return lookup
+  return Result.succeed(lookup)
 }
 
 /** Is this id a cross plant, per the flattened table? */
-export const isCrossPlant = (lookup: Uint8Array, blockId: number): boolean =>
+export const isCrossPlant = (lookup: Uint8Array, blockId: BlockId): boolean =>
   lookup[blockId] === CROSS_PLANT_MARKER
 
 /**

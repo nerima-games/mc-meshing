@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { Option, Result } from 'effect'
 import {
   AIR_BLOCK_ID,
   BLOCK_IDS,
+  ChunkAxis,
   chunkCoord,
   propertyOfBlockId,
   type BlockId,
@@ -14,23 +16,20 @@ import {
   type ChunkView,
 } from '../src/domain/chunk-view'
 import { quadLightAt, sampleLightAt } from '../src/domain/light-sampling'
-import type { LightView } from '../src/domain/light-types'
+import { clampMeshLight, type LightCorners, type LightView } from '../src/domain/light-types'
 import { meshChunk, meshChunkNaive, meshChunkRegion } from '../src/domain/mesh'
 import { packMeshLayers } from '../src/domain/mesh-buffers'
 import { MINECRAFT_MESH_CONFIG } from '../src/domain/opacity'
 import { facePlacementOf } from '../src/domain/faces'
 
-const MISSING_BLOCK_ID = -1
+const MESH_CONFIG = Result.getOrThrow(MINECRAFT_MESH_CONFIG)
+const ORIGIN_AXIS = Result.getOrThrow(ChunkAxis.result(0))
 
-const firstBlockId = (renderKind: 'cube' | 'cross' | 'fluid' | 'rail'): BlockId => {
-  const blockId = BLOCK_IDS.find(
-    (candidate) => candidate !== AIR_BLOCK_ID && propertyOfBlockId(candidate, 'renderKind') === renderKind,
-  ) ?? MISSING_BLOCK_ID
-  if (blockId === MISSING_BLOCK_ID) {
-    throw new Error(`mc-kernel has no ${renderKind} block`)
-  }
-  return blockId
-}
+const firstBlockId = (renderKind: 'cube' | 'cross' | 'fluid' | 'rail'): BlockId =>
+  Option.getOrThrow(Option.fromNullishOr(
+    BLOCK_IDS.find((candidate) => candidate !== AIR_BLOCK_ID &&
+      Result.getOrThrow(propertyOfBlockId(candidate, 'renderKind')) === renderKind),
+  ))
 
 const OPAQUE_CUBE = firstBlockId('cube')
 
@@ -47,7 +46,7 @@ const chunkWith = (
   for (const [x, y, z, blockId] of cells) {
     blocks[blockIndex(x, y, z, CHUNK_HEIGHT)] = blockId
   }
-  const chunk = { blocks, coord: chunkCoord(0, 0), height: CHUNK_HEIGHT }
+  const chunk = { blocks, coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT }
   if (light) {
     return { ...chunk, light }
   }
@@ -55,9 +54,23 @@ const chunkWith = (
 }
 
 const yPosQuads = (chunk: ChunkView) =>
-  meshChunk(chunk, {}, MINECRAFT_MESH_CONFIG).opaque.filter((quad) => quad.direction === 'yPos')
+  Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG)).opaque.filter((quad) => quad.direction === 'yPos')
+
+const lightCorners = (values: readonly [number, number, number, number]): LightCorners => [
+  clampMeshLight(values[0]),
+  clampMeshLight(values[1]),
+  clampMeshLight(values[2]),
+  clampMeshLight(values[3]),
+]
 
 describe('injected Minecraft light data', () => {
+  it('clamps out-of-range samples and maps NaN to the minimum light level', () => {
+    expect(clampMeshLight(Number.NaN)).toBe(0)
+    expect(clampMeshLight(-1)).toBe(0)
+    expect(clampMeshLight(16)).toBe(15)
+    expect(clampMeshLight(4.9)).toBe(4)
+  })
+
   it('samples an adjacent chunk for a quad corner at the horizontal seam', () => {
     const chunk = chunkWith([], lightOf(2, 3))
     const xPos = chunkWith([], lightOf(7, 11))
@@ -104,14 +117,27 @@ describe('injected Minecraft light data', () => {
     expect(sampleLightAt(lit, {}, 0, -1, 0)).toStrictEqual({ block: 0, sky: 0 })
   })
 
+  it('rejects a null light sidecar at the chunk validation boundary', () => {
+    const chunk = chunkWith([])
+    const nullLight = chunkWith([])
+    expect(Reflect.set(nullLight, 'light', null)).toBe(true)
+
+    expect(meshChunk(nullLight, {}, MESH_CONFIG)).toMatchObject({
+      failure: { _tag: 'InvalidChunkLight', coord: chunk.coord },
+    })
+    expect(meshChunk(chunk, { xPos: nullLight }, MESH_CONFIG)).toMatchObject({
+      failure: { _tag: 'InvalidChunkLight', coord: chunk.coord },
+    })
+  })
+
   it('carries corner light through greedy, naive, and region meshes', () => {
     const chunk = chunkWith([[4, 20, 5, OPAQUE_CUBE]], lightOf(7, 13))
-    const greedy = meshChunk(chunk, {}, MINECRAFT_MESH_CONFIG)
-    const naive = meshChunkNaive(chunk, {}, MINECRAFT_MESH_CONFIG)
-    const regional = meshChunkRegion(chunk, {}, MINECRAFT_MESH_CONFIG, {
+    const greedy = Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG))
+    const naive = Result.getOrThrow(meshChunkNaive(chunk, {}, MESH_CONFIG))
+    const regional = Result.getOrThrow(meshChunkRegion(chunk, {}, MESH_CONFIG, {
       min: [4, 20, 5],
       max: [5, 21, 6],
-    })
+    }))
 
     expect(greedy.opaque).toHaveLength(6)
     expect(greedy.opaque.every((quad) => quad.light?.block.every((value) => value === 7))).toBe(true)
@@ -164,10 +190,10 @@ describe('injected Minecraft light data', () => {
 
   it('keeps light on transparent-solid greedy faces', () => {
     const config = {
-      ...MINECRAFT_MESH_CONFIG,
+      ...MESH_CONFIG,
       transparentSolidBlockIds: new Set([OPAQUE_CUBE]),
     }
-    const layers = meshChunk(chunkWith([[4, 20, 4, OPAQUE_CUBE]], lightOf(6, 10)), {}, config)
+    const layers = Result.getOrThrow(meshChunk(chunkWith([[4, 20, 4, OPAQUE_CUBE]], lightOf(6, 10)), {}, config))
 
     expect(layers.transparentSolid).toHaveLength(6)
     expect(layers.transparentSolid.every((quad) => quad.light?.block.every((value) => value === 6))).toBe(true)
@@ -183,7 +209,7 @@ describe('injected Minecraft light data', () => {
         ao: 0,
         blockId: OPAQUE_CUBE,
         height: 1,
-        light: { block: [1, 2, 3, 4] as const, sky: [11, 12, 13, 14] as const },
+        light: { block: lightCorners([1, 2, 3, 4]), sky: lightCorners([11, 12, 13, 14]) },
         lx: 0,
         lz: 0,
         width: 1,
@@ -205,7 +231,7 @@ describe('injected Minecraft light data', () => {
       [6, 20, 6, firstBlockId('fluid')],
       [10, 20, 10, firstBlockId('rail')],
     ], lightOf(5, 12))
-    const layers = meshChunk(chunk, {}, MINECRAFT_MESH_CONFIG)
+    const layers = Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG))
     const explicitQuads = [
       ...layers.crossPlants,
       ...layers.fluids,

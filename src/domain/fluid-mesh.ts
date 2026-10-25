@@ -1,26 +1,31 @@
 /** Fluid surface geometry. State sampling and boundary traversal live in `fluid-sampling.ts`. */
+import { Result } from 'effect'
 import type { BlockId } from './block-data.js'
 import {
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
+  type FluidView,
   getBlock,
   getBlockAcrossBoundary,
 } from './chunk-view.js'
 import {
   type FluidPosition,
   type FluidSpace,
+  type FluidViewFailure,
   cornerHeight,
   flowAt,
   heightAcross,
   heightIn,
   hidesFluidFace,
   isFluidBlock,
+  validateFluidViews,
 } from './fluid-sampling.js'
 import { type FluidQuad, NO_FLUID_QUADS } from './fluid-types.js'
 import { quadLightAt } from './light-sampling.js'
 
 export type { FluidFlow, FluidQuad, FluidVertex } from './fluid-types.js'
+export type { FluidLookupFailure, FluidViewFailure } from './fluid-sampling.js'
 export { buildFluidLookup, isFluidBlock, SOURCE_SURFACE_HEIGHT } from './fluid-sampling.js'
 
 const NO_FLUID = -1
@@ -328,11 +333,13 @@ const meshFluidCellsInBounds = (
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
   },
+  fluidViews: ReadonlyMap<ChunkView, FluidView>,
 ): ReadonlyArray<FluidQuad> => {
   const quads: Array<FluidQuad> = []
   const space: FluidSpace = {
     chunk,
     context: { fluids, layers, plants },
+    fluidViews,
     neighbours,
   }
   const [[minX, minY, minZ], [maxX, maxY, maxZ]] = [bounds.min, bounds.max]
@@ -362,12 +369,13 @@ export const meshFluidSurfaces = (
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
   } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: [ZERO_INDEX, ZERO_INDEX, ZERO_INDEX] },
-): ReadonlyArray<FluidQuad> => {
-  if (!anyFluidConfigured(fluids)) {
-    return NO_FLUID_QUADS
-  }
-  return meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds)
-}
+): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure> =>
+  Result.flatMap(validateFluidViews(chunk, neighbours), (fluidViews) => {
+    if (!anyFluidConfigured(fluids)) {
+      return Result.succeed(NO_FLUID_QUADS)
+    }
+    return Result.succeed(meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds, fluidViews))
+  })
 
 /*
  * What of the two reference files is NOT here. Kept as a comment rather than as

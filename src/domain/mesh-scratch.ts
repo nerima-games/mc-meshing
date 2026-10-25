@@ -1,3 +1,5 @@
+import { Result } from 'effect'
+
 export type MeshScratchBuffers = {
   readonly mask: Uint32Array
   readonly light?: {
@@ -8,10 +10,16 @@ export type MeshScratchBuffers = {
 
 const MIN_BUFFER_LENGTH = 0
 
-const assertRequiredLength = (required: number): void => {
+export type MeshScratchFailure = {
+  readonly _tag: 'InvalidMeshScratchLength'
+  readonly required: number
+}
+
+const validateRequiredLength = (required: number): Result.Result<void, MeshScratchFailure> => {
   if (!Number.isSafeInteger(required) || required < MIN_BUFFER_LENGTH) {
-    throw new RangeError('MeshScratch buffer length must be a non-negative safe integer')
+    return Result.fail({ _tag: 'InvalidMeshScratchLength', required })
   }
+  return Result.void
 }
 
 const maskBufferAtLeast = (
@@ -53,20 +61,23 @@ export class MeshScratch {
     return new MeshScratch()
   }
 
-  buffersFor(required: number, withLight: boolean): MeshScratchBuffers {
-    assertRequiredLength(required)
+  buffersFor(required: number, withLight: boolean): Result.Result<MeshScratchBuffers, MeshScratchFailure> {
+    const validLength = validateRequiredLength(required)
+    if (Result.isFailure(validLength)) {
+      return Result.fail(validLength.failure)
+    }
     this.#mask = maskBufferAtLeast(this.#mask, required)
 
     if (!withLight) {
-      return { mask: this.#mask }
+      return Result.succeed({ mask: this.#mask })
     }
 
     this.#blockLight = lightBufferAtLeast(this.#blockLight, required)
     this.#skyLight = lightBufferAtLeast(this.#skyLight, required)
-    return {
+    return Result.succeed({
       light: { block: this.#blockLight, sky: this.#skyLight },
       mask: this.#mask,
-    }
+    })
   }
 }
 

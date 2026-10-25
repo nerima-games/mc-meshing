@@ -1,3 +1,4 @@
+import { Option, Result } from 'effect'
 import { describe, expect, it } from 'vitest'
 import { railVerticesOf } from '../src/domain/rail-geometry'
 import {
@@ -11,19 +12,20 @@ describe('rail blockstate geometry', () => {
   it('round-trips every vanilla rail shape through its compact code', () => {
     expect(RAIL_SHAPES).toHaveLength(10)
     for (const shape of RAIL_SHAPES) {
-      expect(railShapeOf(railShapeCodeOf(shape))).toBe(shape)
+      expect(railShapeOf(railShapeCodeOf(shape))).toStrictEqual(Result.succeed(shape))
     }
   })
 
   it('reads optional sidecar states and rejects invalid compact codes', () => {
-    const absentView = Array<Uint8Array>(0).pop()
-    expect(railShapeAt(absentView, 0)).toBeUndefined()
+    expect(railShapeAt(Option.none(), 0)).toStrictEqual(Result.succeed(Option.none()))
     const view = new Uint8Array([railShapeCodeOf('north_east')])
-    expect(railShapeAt(view, 0)).toBe('north_east')
-    expect(railShapeAt(view, 1)).toBeUndefined()
-    expect(() => railShapeOf(-1)).toThrow('Invalid rail shape code')
-    expect(() => railShapeOf(1.5)).toThrow('Invalid rail shape code')
-    expect(() => railShapeOf(RAIL_SHAPES.length)).toThrow('Invalid rail shape code')
+    expect(railShapeAt(Option.some(view), 0)).toStrictEqual(Result.succeed(Option.some('north_east')))
+    expect(railShapeAt(Option.some(view), 1)).toStrictEqual(Result.succeed(Option.none()))
+    expect(railShapeOf(-1)).toMatchObject({ failure: { _tag: 'InvalidRailShapeCode', code: -1 } })
+    expect(railShapeOf(1.5)).toMatchObject({ failure: { _tag: 'InvalidRailShapeCode', code: 1.5 } })
+    expect(railShapeOf(RAIL_SHAPES.length)).toMatchObject({
+      failure: { _tag: 'InvalidRailShapeCode', code: RAIL_SHAPES.length },
+    })
   })
 
   it('emits flat top and bottom model faces for flat and curved states', () => {

@@ -78,7 +78,7 @@
 | `rendering/.../greedy-meshing.ts:41-57`（`buildLookup` + `WeakMap`） | `domain/opacity.ts` の `buildLayerLookup` と `domain/mesh.ts` | `meshChunk*` は2つの Set identity でメモ化。公開 `buildLayerLookup` は単独利用向けに毎回新規生成し、config の集合は呼び出し側が保持・不変扱いする |
 | `rendering/.../greedy-meshing-passes.ts:148-152`（振り分け優先度） | `domain/opacity.ts` の `layerOfBlockId` | 入れ子三項 → 値としての `MESH_LAYER_PRIORITY` |
 | `rendering/.../greedy-meshing.ts:122-128`（面パスの呼び出し順） | `domain/faces.ts` の `FACES` | 順序を値として固定 |
-| `rendering/.../greedy-meshing-algorithms.ts` の各法線・role | `domain/faces.ts` の `FACES` | 表は `public-api.md` §3 |
+| `rendering/.../greedy-meshing-algorithms.ts` の各法線・role | `domain/faces.ts` の `FACES` | 表は [`public-api.md` の Faces and mesh layers](./public-api.md#faces-and-mesh-layers) |
 | `rendering/.../greedy-meshing-ao.ts:6-9`（`getBlock`） | `domain/chunk-view.ts` の `getBlock` | 3 つの性能例外そのまま（`design-notes.md` M-2） |
 | `rendering/.../greedy-meshing-ao.ts:8`（ストレージレイアウト） | `domain/chunk-view.ts` の `blockIndex` | **同一**。参照実装の fixture 互換のため |
 | `rendering/.../greedy-meshing-types.ts:40`（`AIR = 0`） | `domain/chunk-view.ts` の `AIR` | 同一 |

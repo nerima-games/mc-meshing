@@ -31,13 +31,19 @@ import {
   type MeshConfig,
   blockIndex,
 } from '../src/index'
-import { chunkCoord } from '@nerima-games/mc-kernel'
+import { Result } from 'effect'
+import { BlockId, ChunkAxis, chunkCoord } from '@nerima-games/mc-kernel'
 
 /** Synthetic ids used only by the benchmark fixtures. */
-export const STONE = 1
-export const GRASS = 2
-export const WATER = 3
-export const GLASS = 4
+export const STONE: BlockId = Result.getOrThrow(BlockId.result(1))
+export const GRASS: BlockId = Result.getOrThrow(BlockId.result(2))
+export const WATER: BlockId = Result.getOrThrow(BlockId.result(3))
+export const GLASS: BlockId = Result.getOrThrow(BlockId.result(4))
+
+const ORIGIN_COORD = chunkCoord(
+  Result.getOrThrow(ChunkAxis.result(0)),
+  Result.getOrThrow(ChunkAxis.result(0)),
+)
 
 export const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set(),
@@ -51,7 +57,7 @@ const newBlocks = (): Uint16Array => new Uint16Array(BLOCKS_PER_CHUNK)
 /** One byte per cell — fluid state (`falling`/`levels`/`sources`), never block ids. */
 const newFluidGrid = (): Uint8Array => new Uint8Array(BLOCKS_PER_CHUNK)
 
-const set = (blocks: Uint16Array, lx: number, y: number, lz: number, value: number): void => {
+const set = (blocks: Uint16Array, lx: number, y: number, lz: number, value: BlockId): void => {
   blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = value
 }
 
@@ -66,7 +72,7 @@ const flatChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GRASS)
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: ORIGIN_COORD, height: CHUNK_HEIGHT, blocks }
 }
 
 /** Per-column height varying 56..72. A realistic surface — moderate faces. */
@@ -81,7 +87,7 @@ const rollingChunk = (): ChunkView => {
       set(blocks, lx, height, lz, GRASS)
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: ORIGIN_COORD, height: CHUNK_HEIGHT, blocks }
 }
 
 /** Every cell in a 16^3 volume alternates solid/air. Worst case — maximum faces. */
@@ -96,7 +102,7 @@ const checkerChunk = (): ChunkView => {
       }
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: ORIGIN_COORD, height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -119,7 +125,7 @@ const layeredChunk = (): ChunkView => {
       set(blocks, lx, 63, lz, GLASS)
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: ORIGIN_COORD, height: CHUNK_HEIGHT, blocks }
 }
 
 /**
@@ -174,7 +180,7 @@ const lakeChunk = (): ChunkView => {
       }
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: ORIGIN_COORD, height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 export const LAKE: ChunkView = lakeChunk()

@@ -1,10 +1,10 @@
 import { CHUNK_SIZE, type ChunkNeighbours, type ChunkView, blockIndex } from './chunk-view.js'
-import { LIGHT_LEVEL_MAX, type LightView, type QuadLight, clampMeshLight } from './light-types.js'
+import { LIGHT_LEVEL_MAX, type LightLevel, type LightView, type QuadLight, clampMeshLight } from './light-types.js'
 import type { FaceDirection } from './faces.js'
 
 export type LightSample = {
-  readonly block: number
-  readonly sky: number
+  readonly block: LightLevel
+  readonly sky: LightLevel
 }
 
 type HorizontalLightTarget = {
@@ -47,8 +47,14 @@ type ChunkLightQuery = {
 const LIGHT_LEVEL_MIN = 0
 const CELL_ORIGIN = 0
 const CELL_STEP = 1
-const ZERO_LIGHT: LightSample = Object.freeze({ block: LIGHT_LEVEL_MIN, sky: LIGHT_LEVEL_MIN })
-const OPEN_SKY_LIGHT: LightSample = Object.freeze({ block: LIGHT_LEVEL_MIN, sky: LIGHT_LEVEL_MAX })
+const ZERO_LIGHT: LightSample = Object.freeze({
+  block: clampMeshLight(LIGHT_LEVEL_MIN),
+  sky: clampMeshLight(LIGHT_LEVEL_MIN),
+})
+const OPEN_SKY_LIGHT: LightSample = Object.freeze({
+  block: clampMeshLight(LIGHT_LEVEL_MIN),
+  sky: clampMeshLight(LIGHT_LEVEL_MAX),
+})
 
 const diagonalNeighbourAt = ({ neighbours, xPositive, zPositive }: Pick<HorizontalNeighbourQuery, 'neighbours' | 'xPositive' | 'zPositive'>): ChunkView | undefined => {
   if (xPositive) {
@@ -129,8 +135,8 @@ const lightTargetAt = ({ chunk, neighbours, lx, lz }: LightTargetQuery): Horizon
 const readLight = (
   values: Readonly<Uint8Array>,
   index: number,
-  fallback: number,
-): number => {
+  fallback: LightLevel,
+): LightLevel => {
   // A `Uint8Array` read at a negative index or past its length both yield
   // `undefined` in JS (verified: no throw, no wraparound), so the one
   // `index < CELL_ORIGIN || index >= values.length` check this used to be is
@@ -168,7 +174,7 @@ export const sampleLightAt = (...args: SampleLightArguments): LightSample => {
   }
 
   const { light } = target.chunk
-  if (!light) {
+  if (typeof light === 'undefined') {
     return OPEN_SKY_LIGHT
   }
   return sampleLightInChunk({ chunk: target.chunk, fallback: OPEN_SKY_LIGHT, light, lx: target.lx, lz: target.lz, y })
@@ -193,7 +199,8 @@ type QuadLightArguments = readonly [ChunkView, ChunkNeighbours, FaceDirection, n
 
 export const quadLightAt = (...args: QuadLightArguments): QuadLight | undefined => {
   const [chunk, neighbours, direction, lx, y, lz] = args
-  if (!chunk.light) {
+  const light = chunk.light
+  if (typeof light === 'undefined') {
     return
   }
 

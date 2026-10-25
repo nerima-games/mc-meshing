@@ -41,7 +41,7 @@
  * the same terrain this file times; see that file's header. The x81 chunk
  * framing (renderDistance=4) stays here, where the timings are.
  */
-import { HashSet, Option } from 'effect'
+import { HashSet, Option, Result } from 'effect'
 import {
   AIR,
   BLOCKS_PER_CHUNK,
@@ -55,13 +55,13 @@ import {
   type MeshLayers,
   buildLayerLookup,
   getBlock,
-  meshChunk,
-  meshChunkNaive,
+  meshChunk as meshChunkResult,
+  meshChunkNaive as meshChunkNaiveResult,
   simplifyMesh,
   totalQuadArea,
   totalQuadCount,
 } from '../src/index'
-import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, GLASS, LAKE, ROLLING, WATER } from './bench-fixtures'
+import { BENCH_FIXTURES, CONFIG, FLUID_CONFIG, LAKE, ROLLING } from './bench-fixtures'
 import {
   type Baseline,
   type Guard,
@@ -80,6 +80,10 @@ import {
   wantsBaselineUpdate,
   writeBaseline,
 } from './bench-harness'
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>): MeshLayers => Result.getOrThrow(meshChunkResult(...args))
+const meshChunkNaive = (...args: Parameters<typeof meshChunkNaiveResult>): MeshLayers =>
+  Result.getOrThrow(meshChunkNaiveResult(...args))
 
 const BASELINE_PATH = new URL('./bench-baseline.json', import.meta.url).pathname
 
@@ -143,25 +147,27 @@ const yardstickOver = (blocks: Readonly<Uint16Array>) => (): void => {
  * realistic mix: mostly misses (air and stone dominate a real chunk) with water
  * and glass hitting often enough to exercise the found path.
  */
+const PROBE_ID_VARIANTS = 8
+
 const probeIds = (): Uint8Array => {
   const ids = new Uint8Array(MASK_CELLS)
   let state = 0x12345678
   for (let index = 0; index < MASK_CELLS; index += 1) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0
-    ids[index] = (state >>> 24) % 8
+    ids[index] = (state >>> 24) % PROBE_ID_VARIANTS
   }
   return ids
 }
 
 const PROBE_IDS = probeIds()
 
-const NATIVE_WATER = CONFIG.waterBlockIds
-const NATIVE_GLASS = CONFIG.transparentSolidBlockIds
+const NATIVE_WATER: ReadonlySet<number> = new Set(CONFIG.waterBlockIds)
+const NATIVE_GLASS: ReadonlySet<number> = new Set(CONFIG.transparentSolidBlockIds)
 
 const nativeSetArm = (): void => {
   let hits = 0
   for (let index = 0; index < MASK_CELLS; index += 1) {
-    const id = PROBE_IDS[index] ?? 0
+    const id = PROBE_IDS[index] ?? AIR
     if (NATIVE_GLASS.has(id) || NATIVE_WATER.has(id)) {
       hits += 1
     }
@@ -169,13 +175,13 @@ const nativeSetArm = (): void => {
   sink += hits
 }
 
-const HASH_WATER = HashSet.fromIterable([WATER])
-const HASH_GLASS = HashSet.fromIterable([GLASS])
+const HASH_WATER = HashSet.fromIterable<number>(CONFIG.waterBlockIds)
+const HASH_GLASS = HashSet.fromIterable<number>(CONFIG.transparentSolidBlockIds)
 
 const hashSetArm = (): void => {
   let hits = 0
   for (let index = 0; index < MASK_CELLS; index += 1) {
-    const id = PROBE_IDS[index] ?? 0
+    const id = PROBE_IDS[index] ?? AIR
     if (HashSet.has(HASH_GLASS, id) || HashSet.has(HASH_WATER, id)) {
       hits += 1
     }
@@ -183,12 +189,13 @@ const hashSetArm = (): void => {
   sink += hits
 }
 
-const LOOKUP = buildLayerLookup(CONFIG)
+const LOOKUP = Result.getOrThrow(buildLayerLookup(CONFIG))
 
 const lookupTableArm = (): void => {
   let hits = 0
   for (let index = 0; index < MASK_CELLS; index += 1) {
-    if (LOOKUP[PROBE_IDS[index] ?? 0] !== OPAQUE_LAYER) {
+    const id = PROBE_IDS[index] ?? AIR
+    if (LOOKUP[id] !== OPAQUE_LAYER) {
       hits += 1
     }
   }
@@ -216,7 +223,7 @@ const getBlockOption = (
   if (lx < 0 || lx >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || lz < 0 || lz >= CHUNK_SIZE) {
     return Option.none()
   }
-  return Option.fromNullable(blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE])
+  return Option.fromNullishOr(blocks[y + lz * CHUNK_HEIGHT + lx * CHUNK_HEIGHT * CHUNK_SIZE])
 }
 
 /**

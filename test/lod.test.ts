@@ -16,10 +16,11 @@
  *   lod-reduction-is-anisotropic
  */
 import { describe, expect, it } from './effect-test.js'
-import { Effect, FastCheck, Schema } from 'effect'
-import { chunkCoord } from '@nerima-games/mc-kernel'
+import { Effect, Option, Result, Schema } from 'effect'
+import * as FastCheck from 'fast-check'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
 import { AO_NONE } from '../src/domain/ambient-occlusion'
-import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk } from '../src/domain/chunk-view'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk as emptyChunkResult } from '../src/domain/chunk-view'
 import {
   FACES,
   FACE_DIRECTIONS,
@@ -33,17 +34,28 @@ import { LOD_LEVELS, type LodLevel, LodLevelSchema, STEP_FOR_LOD, packQuadKey, s
 import {
   type MeshLayers,
   type Quad,
-  meshChunk,
-  meshChunkNaive,
+  meshChunk as meshChunkResult,
+  meshChunkNaive as meshChunkNaiveResult,
   totalQuadArea,
   totalQuadCount,
 } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 
-const STONE = 1
-const GRASS = 2
-const WATER = 3
-const GLASS = 4
+const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
+}
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>) => expectSuccess(meshChunkResult(...args))
+const meshChunkNaive = (...args: Parameters<typeof meshChunkNaiveResult>) => expectSuccess(meshChunkNaiveResult(...args))
+const emptyChunk = (height?: number): ChunkView => expectSuccess(emptyChunkResult(height))
+
+const STONE = Option.getOrThrow(blockIdOf('stone'))
+const DIRT = Option.getOrThrow(blockIdOf('dirt'))
+const WATER = Option.getOrThrow(blockIdOf('water'))
+const GLASS = Option.getOrThrow(blockIdOf('glass'))
 
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set(),
@@ -57,7 +69,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   for (const [lx, y, lz, blockId] of cells) {
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
 }
 
 /** A solid `side` x `side` x 1 slab of stone at y=64, anchored at the origin. */
@@ -97,7 +109,7 @@ const arbitraryChunk = FastCheck.array(
     FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
     FastCheck.integer({ max: 24, min: 0 }),
     FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-    FastCheck.constantFrom(STONE, GRASS, WATER, GLASS),
+    FastCheck.constantFrom(STONE, DIRT, WATER, GLASS),
   ),
   { maxLength: 24, minLength: 1 },
 ).map((cells) => chunkWith(cells))
@@ -378,7 +390,7 @@ describe('what snapping does to one quad', () => {
         meshChunk(
           chunkWith([
             [0, 64, 0, STONE],
-            [1, 64, 0, GRASS],
+            [1, 64, 0, DIRT],
           ]),
           {},
           CONFIG,

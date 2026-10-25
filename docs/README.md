@@ -21,18 +21,19 @@ plan.md の数値のうち再検証で食い違ったものは `porting.md` に�
 | 1 | [`architecture.md`](./architecture.md) | 4 階層アーキテクチャ、16 リポジトリの依存グラフ（Mermaid）、このリポジトリの位置、名詞/動詞ルール、kit が devDependency 専用である理由、stage 順序表の所有者、依存ホワイトリスト CI | 最初に。全体像を掴む |
 | 2 | [`responsibility.md`](./responsibility.md) | plan.md §3.3 の責務（原文）、その言い換え、**明示的にスコープ外のもの**、親と子 | 「これはここに書くべきか」で迷ったとき |
 | 3 | [`public-api.md`](./public-api.md) | 公開すべき API と、**参照実装の実コードによる検証**。実シグネチャの引用付き。plan.md との差分は理由付き | 実装を書く前に |
-| 4 | [`design-notes.md`](./design-notes.md) | plan.md の「設計注意」を証拠（file:line）付きで展開し、**名前付き回帰テスト**として書き下したもの | 実装中つねに。ソースのコメントからも参照している |
-| 5 | [`porting.md`](./porting.md) | 移植元のパスと**実測 LOC**（`wc -l` で確認）、移植しないものとその理由、移植すべきテスト資産 | 参照実装のどこを見ればいいか探すとき |
-| 6 | [`testing.md`](./testing.md) | 検証コマンド、テスト方針、カバレッジ閾値の扱い、**完成条件** | テストを書くとき／完成判定のとき |
-| 7 | [`versioning.md`](./versioning.md) | 0.x → 1.0.0 の方針、GitHub Packages への publish、**何が破壊的変更か** | バージョンを上げるとき |
+| 4 | [`migration-0.4.0.md`](./migration-0.4.0.md) | Effect 4 と mc-kernel 0.9 を使う 0.4.0 への破壊的変更と移行手順 | 0.3.x から更新するとき |
+| 5 | [`design-notes.md`](./design-notes.md) | plan.md の「設計注意」を証拠（file:line）付きで展開し、**名前付き回帰テスト**として書き下したもの | 実装中つねに。ソースのコメントからも参照している |
+| 6 | [`porting.md`](./porting.md) | 移植元のパスと**実測 LOC**（`wc -l` で確認）、移植しないものとその理由、移植すべきテスト資産 | 参照実装のどこを見ればいいか探すとき |
+| 7 | [`testing.md`](./testing.md) | 検証コマンド、テスト方針、カバレッジ閾値の扱い、**完成条件** | テストを書くとき／完成判定のとき |
+| 8 | [`versioning.md`](./versioning.md) | 0.x → 1.0.0 の方針、GitHub Packages への publish、**何が破壊的変更か** | バージョンを上げるとき |
 
 ## 特に重要な項目への近道
 
-- **boolean の `transparent` フラグでは足りない理由（2 つの透過集合）** → `design-notes.md` M-3、`public-api.md` §2
+- **boolean の `transparent` フラグでは足りない理由（2 つの透過集合）** → `design-notes.md` M-3、[`public-api.md` の Mesh configuration and block IDs](./public-api.md#mesh-configuration-and-block-ids)
 - **透過集合がネイティブ `Set` でなければならない理由（~40万call/chunk）** → `design-notes.md` M-1
 - **`getBlock` が `Option` を返さない理由** → `design-notes.md` M-2
-- **正準面順序 +X -X +Y -Y +Z -Z** → `public-api.md` §3
-- **グリーディマージの公開契約と被覆面積による検証** → `public-api.md` §5、`testing.md` §4
+- **正準面順序 +X -X +Y -Y +Z -Z** → [`public-api.md` の Faces and mesh layers](./public-api.md#faces-and-mesh-layers)
+- **グリーディマージの公開契約と被覆面積による検証** → [`public-api.md` の Faces and mesh layers](./public-api.md#faces-and-mesh-layers)、`testing.md` §4
 
 ## 上位資料
 

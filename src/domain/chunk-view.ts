@@ -6,8 +6,9 @@
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
+import { Result } from 'effect'
 import { AIR, type BlockId, blockIdAt } from './block-data.js'
-import { CHUNK_SIZE_XZ, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
+import { CHUNK_SIZE_XZ, ChunkAxis as chunkAxis, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
 import type { LightView } from './light-types.js'
 import type { RailShapeView } from './rail-types.js'
 
@@ -19,7 +20,7 @@ export const CHUNK_SIZE: number = CHUNK_SIZE_XZ
 /** Canonical vertical extent used by the fixtures and the default chunk. */
 export const CHUNK_HEIGHT = 256
 const MIN_CHUNK_HEIGHT = 1
-const ORIGIN_CHUNK_AXIS = 0
+const ORIGIN_CHUNK_AXIS = chunkAxis(0)
 
 /**
  * Number of block cells in a chunk with the supplied vertical extent.
@@ -28,14 +29,75 @@ const ORIGIN_CHUNK_AXIS = 0
  * Keeping this check at the meshing boundary prevents a malformed view from
  * producing an incorrectly sized typed array or an out-of-range index.
  */
-export const blockCount = (height: number): number => {
-  if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
-    throw new RangeError(`Chunk height must be an integer from 1 to ${MAX_CHUNK_HEIGHT}, received ${height}`)
-  }
-  return CHUNK_SIZE * height * CHUNK_SIZE
+export type ChunkHeightFailure = {
+  readonly _tag: 'InvalidChunkHeight'
+  readonly height: number
 }
 
-export const blockCountOf: (height: number) => number = blockCount
+export type ChunkBlocksFailure = {
+  readonly _tag: 'InvalidChunkBlocksLength'
+  readonly actual: number
+  readonly coord: ChunkView['coord']
+  readonly expected: number
+}
+
+export type ChunkLightFailure = {
+  readonly _tag: 'InvalidChunkLight'
+  readonly coord: ChunkView['coord']
+}
+
+export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure | ChunkLightFailure
+
+export const blockCount = (height: number): Result.Result<number, ChunkHeightFailure> => {
+  if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
+    return Result.fail({ _tag: 'InvalidChunkHeight', height })
+  }
+  return Result.succeed(CHUNK_SIZE * height * CHUNK_SIZE)
+}
+
+export const blockCountOf: (height: number) => Result.Result<number, ChunkHeightFailure> = blockCount
+
+
+/** Validate the core chunk and every loaded neighbour before direct block reads. */
+export const validateChunkViews = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+): Result.Result<void, ChunkViewFailure> => {
+  const views = [
+    chunk,
+    neighbours.xPos,
+    neighbours.xNeg,
+    neighbours.zPos,
+    neighbours.zNeg,
+    neighbours.xPosZPos,
+    neighbours.xPosZNeg,
+    neighbours.xNegZPos,
+    neighbours.xNegZNeg,
+  ]
+  for (const view of views) {
+    if (typeof view === 'undefined') {
+      continue
+    }
+    const expected = blockCount(view.height)
+    if (Result.isFailure(expected)) {
+      return Result.fail(expected.failure)
+    }
+    const blocks = view.blocks
+    if (blocks.length !== expected.success) {
+      return Result.fail({
+        _tag: 'InvalidChunkBlocksLength',
+        actual: blocks.length,
+        coord: view.coord,
+        expected: expected.success,
+      })
+    }
+    const light: LightView | null | undefined = view.light
+    if (light === null) {
+      return Result.fail({ _tag: 'InvalidChunkLight', coord: view.coord })
+    }
+  }
+  return Result.void
+}
 
 /**
  * Block storage layout: `y + lz * height + lx * height * CHUNK_SIZE`.
@@ -86,9 +148,10 @@ export const blockIndex = (lx: number, y: number, lz: number, height: number = C
  *
  * The state is optional at the `ChunkView` boundary because mc-kernel 0.4.0
  * publishes no fluid sidecar. When present, `FluidView` is complete decoded
- * renderer state: all three arrays are required. A missing `FluidView` is
- * interpreted by fluid sampling as a full, non-source cell so block ids still
- * produce visible fluid geometry before simulation state is available.
+ * renderer state: all three arrays must cover every cell in this chunk. A
+ * missing `FluidView` is interpreted by fluid sampling as a full, non-source
+ * cell so block ids still produce visible fluid geometry before simulation state
+ * is available.
  *
  * The type intentionally stops at decoded state. The owner of simulation
  * storage decodes its packed bytes before passing this view; meshing does not
@@ -130,14 +193,15 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   readonly light?: LightView
 }
 
-export const BLOCKS_PER_CHUNK: number = blockCountOf(CHUNK_HEIGHT)
+export const BLOCKS_PER_CHUNK: number = CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE
 
 /** An all-air chunk. Useful as a neighbour for an edge chunk, and in tests. */
-export const emptyChunk = (height: number = CHUNK_HEIGHT): ChunkView => ({
-  blocks: new Uint16Array(blockCountOf(height)),
-  coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
-  height,
-})
+export const emptyChunk = (height: number = CHUNK_HEIGHT): Result.Result<ChunkView, ChunkHeightFailure> =>
+  Result.map(blockCountOf(height), (count) => ({
+    blocks: new Uint16Array(count),
+    coord: chunkCoord(ORIGIN_CHUNK_AXIS, ORIGIN_CHUNK_AXIS),
+    height,
+  }))
 
 /** First valid index along any chunk-local axis (`lx`, `y`, or `lz`). */
 const FIRST_LOCAL_INDEX = 0

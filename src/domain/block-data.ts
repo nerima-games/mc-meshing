@@ -1,4 +1,5 @@
-import { Brand } from 'effect'
+import type { BlockRegistryResolutionFailure } from '@nerima-games/mc-kernel/domain/block-registry'
+import { Brand, Option, Result } from 'effect'
 import {
   AIR_BLOCK_ID,
   BLOCK_ID_MAX,
@@ -27,19 +28,8 @@ export const AIR: BlockId = AIR_BLOCK_ID
  */
 export const MAX_BLOCK_ID: number = BLOCK_ID_MAX
 
-/**
- * A `Uint16Array` element, or a value masked with `& MAX_BLOCK_ID`, is always
- * an integer in `[0, MAX_BLOCK_ID]` — exactly the range this package's own
- * storage can hold — so this is a structurally-guaranteed upcast, not an
- * unchecked claim about an arbitrary number. `Brand.nominal` applies the same
- * nominal tag mc-kernel's `BlockId` (a `Brand.refined`, validating
- * constructor) uses, but without a redundant runtime check on a value that is
- * already known-safe, and without the `as`/`!` syntax the org's
- * `no-type-assertion` ast-grep rule bans — unlike a manual guard, it adds no
- * branch a caller can never actually take, which a real `Uint16Array` element
- * or an `& MAX_BLOCK_ID` mask never needs.
- */
-const uncheckedBlockId = Brand.nominal<BlockId>()
+/** A value read from Uint16Array is already in the kernel BlockId range 0..65535. */
+const blockIdFromUint16 = Brand.nominal<BlockId>()
 
 /** Read one block id out of a chunk's element storage, defaulting to `AIR` for an out-of-range index. */
 export const blockIdAt = (blocks: Readonly<Uint16Array>, index: number): BlockId => {
@@ -47,24 +37,50 @@ export const blockIdAt = (blocks: Readonly<Uint16Array>, index: number): BlockId
   if (typeof raw === 'undefined') {
     return AIR
   }
-  return uncheckedBlockId(raw)
+  return blockIdFromUint16(raw)
 }
 
-export const blockIdsWithRenderKind = (kind: RenderKind): ReadonlySet<BlockId> =>
-  new Set(BLOCK_IDS.filter((blockId) => propertyOfBlockId(blockId, 'renderKind') === kind))
+const collectBlockIds = (
+  matches: (blockId: BlockId) => Result.Result<boolean, BlockRegistryResolutionFailure>,
+): Result.Result<ReadonlySet<BlockId>, BlockRegistryResolutionFailure> => {
+  const blockIds = new Set<BlockId>()
+  for (const blockId of BLOCK_IDS) {
+    const match = matches(blockId)
+    if (Result.isFailure(match)) {
+      return Result.fail(match.failure)
+    }
+    if (match.success) {
+      blockIds.add(blockId)
+    }
+  }
+  return Result.succeed(blockIds)
+}
 
-export const MINECRAFT_WATER_BLOCK_IDS: ReadonlySet<BlockId> = new Set(
-  BLOCK_IDS.filter((blockId) => propertyOfBlockId(blockId, 'fluid') === 'water'),
+export const blockIdsWithRenderKind = (
+  kind: RenderKind,
+): Result.Result<ReadonlySet<BlockId>, BlockRegistryResolutionFailure> =>
+  collectBlockIds((blockId) =>
+    Result.map(propertyOfBlockId(blockId, 'renderKind'), (renderKind) => renderKind === kind),
+  )
+
+export const MINECRAFT_WATER_BLOCK_IDS: Result.Result<
+  ReadonlySet<BlockId>,
+  BlockRegistryResolutionFailure
+> = collectBlockIds((blockId) =>
+  Result.map(propertyOfBlockId(blockId, 'fluid'), (fluidKind) => fluidKind === 'water'),
 )
 
-const registeredBlockIdsIn = (blockIds: ReadonlySet<number>): ReadonlySet<BlockId> =>
-  new Set(BLOCK_IDS.filter((blockId) => blockIds.has(blockId)))
-
-export const MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS: ReadonlySet<BlockId> = registeredBlockIdsIn(
-  kernelBlockIdsWithOpacity('transparentSolid'),
+export const MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS: Result.Result<
+  Option.Option<ReadonlySet<BlockId>>,
+  BlockRegistryResolutionFailure
+> = Result.map(kernelBlockIdsWithOpacity('transparentSolid'), (blockIds) =>
+  Option.map(blockIds, (ids) => new Set(ids)),
 )
 
-export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: ReadonlySet<BlockId> = blockIdsWithRenderKind('cross')
+export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: Result.Result<
+  ReadonlySet<BlockId>,
+  BlockRegistryResolutionFailure
+> = blockIdsWithRenderKind('cross')
 
 /**
  * The kernel exposes fluid kind but not the state-propagation level ceiling.
@@ -74,17 +90,42 @@ export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: ReadonlySet<BlockId> = blockIdsWit
 const WATER_MAX_LEVEL = 7
 const LAVA_MAX_LEVEL = 3
 
-const fluidMaxLevelOf = function fluidMaxLevelOf(blockId: BlockId): number {
-  const fluidKind = propertyOfBlockId(blockId, 'fluid')
-  if (fluidKind === 'lava') {
-    return LAVA_MAX_LEVEL
-  }
-  return WATER_MAX_LEVEL
+export type MissingFluidKindFailure = {
+  readonly _tag: 'MissingFluidKind'
+  readonly blockId: BlockId
 }
 
-export const MINECRAFT_FLUID_MAX_LEVELS: ReadonlyMap<BlockId, number> = new Map(
-  BLOCK_IDS.filter((blockId) => propertyOfBlockId(blockId, 'renderKind') === 'fluid').map((blockId) => [
-    blockId,
-    fluidMaxLevelOf(blockId),
-  ] as const),
-)
+export type BlockDataFailure = BlockRegistryResolutionFailure | MissingFluidKindFailure
+
+const fluidMaxLevelOf = (blockId: BlockId): Result.Result<number, BlockDataFailure> =>
+  Result.flatMap(propertyOfBlockId(blockId, 'fluid'), (fluidKind) => {
+    if (fluidKind === 'lava') {
+      return Result.succeed(LAVA_MAX_LEVEL)
+    }
+    if (fluidKind === 'water') {
+      return Result.succeed(WATER_MAX_LEVEL)
+    }
+    return Result.fail({ _tag: 'MissingFluidKind', blockId })
+  })
+
+export const MINECRAFT_FLUID_MAX_LEVELS: Result.Result<
+  ReadonlyMap<BlockId, number>,
+  BlockDataFailure
+> = (() => {
+  const levels = new Map<BlockId, number>()
+  for (const blockId of BLOCK_IDS) {
+    const renderKind = propertyOfBlockId(blockId, 'renderKind')
+    if (Result.isFailure(renderKind)) {
+      return Result.fail(renderKind.failure)
+    }
+    if (renderKind.success !== 'fluid') {
+      continue
+    }
+    const maxLevel = fluidMaxLevelOf(blockId)
+    if (Result.isFailure(maxLevel)) {
+      return Result.fail(maxLevel.failure)
+    }
+    levels.set(blockId, maxLevel.success)
+  }
+  return Result.succeed(levels)
+})()

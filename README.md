@@ -40,6 +40,7 @@ mc-kernel が所有し、`ChunkView` は kernel の `coord` とチャンクご�
 | [`docs/architecture.md`](./docs/architecture.md) | 4 階層、依存グラフ、依存ホワイトリスト CI |
 | [`docs/responsibility.md`](./docs/responsibility.md) | 責務と、明示的にスコープ外のもの |
 | [`docs/public-api.md`](./docs/public-api.md) | 公開 API と参照実装での裏付け |
+| [`docs/migration-0.4.0.md`](./docs/migration-0.4.0.md) | 0.3.x から 0.4.0 への移行手順と破壊的変更 |
 | [`docs/design-notes.md`](./docs/design-notes.md) | 設計注意と、対応する名前付き回帰テスト |
 | [`docs/porting.md`](./docs/porting.md) | 移植元パスと実測 LOC |
 | [`docs/testing.md`](./docs/testing.md) | 検証と完成条件 |
@@ -54,8 +55,7 @@ $ direnv allow          # flake.nix の devShell で nodejs_24 + corepack が入
 $ pnpm install
 ```
 
-Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
-（`package.json` の `packageManager` が版を pin しているので `corepack pnpm ...` でよい）。
+The Nix development shell uses Node.js 24; CI runs Node.js 26. The package supports Node.js 24 or later and pnpm 12.14 or later. The `packageManager` field pins pnpm, so use `corepack pnpm ...`.
 
 > **注意**: ツールチェーンは `devenv.nix` から `flake.nix` + `flake.lock` に移行済みである。
 > `flake.lock` はコミットされているので、`nix develop`（`.envrc` は `use flake`）は
@@ -71,28 +71,38 @@ Nix を使わない場合は Node.js 24 以上と pnpm 11 を用意する
 | `pnpm test` | vitest（`test/effect-test.ts` の `it.effect` が主 API） |
 | `pnpm test:watch` | vitest watch |
 | `pnpm test:coverage` | カバレッジ計測（statements / branches / functions / lines をすべて 100% でゲート） |
-| `pnpm bench` | `scripts/bench-harness.ts` による自作ベンチマーク（`pnpm verify` / CI には含まれない。PERFORMANCE_STANDARD.md） |
-| `pnpm verify` | `typecheck && lint && test:coverage && build && verify:package`。CI と同じリリース検証 |
+| `pnpm bench` | Custom meshing benchmark in `scripts/bench-meshing.ts`; excluded from `pnpm verify` and CI (`PERFORMANCE_STANDARD.md`). |
+| `pnpm verify` | Runs `typecheck`, `lint`, and `test` in sequence. Coverage, build, and package verification use separate commands. |
 
 ## 使い方
 
 ```typescript
-import { meshChunk, emptyChunk, type MeshConfig } from '@nerima-games/mc-meshing'
+import { Result } from 'effect'
+import type { BlockId } from '@nerima-games/mc-kernel'
+import { meshChunk, type MeshConfig } from '@nerima-games/mc-meshing'
 
 const config: MeshConfig = {
-  waterBlockIds: new Set([WATER_ID]),                    // 専用シェーダで描く
-  transparentSolidBlockIds: new Set([GLASS_ID, LEAVES_ID]),  // アトラス + アルファブレンド
+  waterBlockIds: new Set<BlockId>([WATER_ID]),                 // registry-derived BlockId
+  transparentSolidBlockIds: new Set<BlockId>([GLASS_ID, LEAVES_ID]),
+  crossPlantBlockIds: new Set<BlockId>([TALL_GRASS_ID]),
   fluidMaxLevels: new Map([[WATER_ID, 7], [LAVA_ID, 3]]),
 }
 
-const { opaque, water, transparentSolid, fluids } = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+const meshed = meshChunk(chunk, { xNeg: leftNeighbour }, config)
+if (Result.isFailure(meshed)) {
+  handleMeshFailure(meshed.failure)
+} else {
+  const { opaque, water, transparentSolid, fluids } = meshed.success
 
-for (const quad of fluids) {
-  if (quad.direction !== 'yPos' || quad.flow === undefined) continue
-  const [flowX, flowZ] = quad.flow.direction
-  animateFluidTexture(quad, flowX, flowZ, quad.flow.falling)
+  for (const quad of fluids) {
+    if (quad.direction !== 'yPos' || quad.flow === undefined) continue
+    const [flowX, flowZ] = quad.flow.direction
+    animateFluidTexture(quad, flowX, flowZ, quad.flow.falling)
+  }
 }
 ```
+
+`WATER_ID`, `GLASS_ID`, `LEAVES_ID`, `TALL_GRASS_ID`, and `LAVA_ID` above are assumed to be registry-derived `BlockId` values. Convert untrusted numeric inputs at the boundary with the kernel's `BlockId.result` API before building the sets and map.
 
 流体上面の `flow.direction` は正規化された chunk-local X/Z ベクトルで、静水は `[0, 0]`。
 `flow.falling` は `ChunkView.fluid.falling` の非ゼロ値を渡す。`falling` 配列と
@@ -163,7 +173,7 @@ for (const quad of fluids) {
   ライト用の一時配列を呼び出し間で再利用できる。同じ scratch を並行メッシュ処理で共有してはならない。
   返り値のレイヤーと quad は毎回新しく所有される。出力アキュムレータのプールは、所有権とライフタイム契約を
   変えないことを優先し、この API では採用しない。
-  参照実装での場所と LOC は [`docs/public-api.md`](./docs/public-api.md) §6。
+  参照実装での場所と LOC は [`docs/public-api.md` の Reference implementation mapping](./docs/public-api.md#reference-implementation-mapping)。
 - **返り値は所有されたデータ。** 参照実装はゼロコピーの subarray view を返し、
   「次の呼び出しまでしか有効でない」という実在の危険を持ち込んでいる
   （参照実装自身がコメントで警告している）。出力配列のプール版は所有権とライフタイム契約を変えるため、
@@ -173,12 +183,8 @@ for (const quad of fluids) {
   cube は安全な単位 face、plant / fluid もセル単位の独立所有バッファであり、呼び出し側は同じ
   `ownedRegion` の以前のバッファを丸ごと交換する。greedy な full-chunk mesh の quad を途中で splice
   してはならない。空領域は空の所有バッファを返し、従来の `meshChunk` API と出力は不変である。
-- **ビルド成果物を公開検証する。** `exports` は `dist` の ESM と宣言ファイルを指し、
-  `pnpm verify:package` は tarball に開発用ソースが混入していないことと公開 API の import を検査する。
-  自動 publish はまだ有効化せず、mc-render が実際に消費して契約を確認するまで `version` は `0.x` に留める。
-- **カバレッジは 4 指標 100% をリリースゲートにする。** `pnpm verify` が
-  statements / branches / functions / lines をすべて計測し、未到達分岐は閾値の緩和ではなくテスト追加または
-  到達不能な分岐の削除で対処する。
+- **Verify the published package artifact.** `exports` points to the ESM and declarations in `dist`. `pnpm package:verify` checks that the tarball excludes development sources and that the public API imports correctly. Keep automatic publishing disabled until mc-render consumes the package and confirms the contract; keep the package at `0.x` until then.
+- **Keep all four coverage metrics at 100% as a release gate.** `pnpm test:coverage` measures statements, branches, functions, and lines. Add tests for uncovered branches or remove unreachable branches instead of lowering thresholds.
 
 ### Minecraft Java の機能境界
 

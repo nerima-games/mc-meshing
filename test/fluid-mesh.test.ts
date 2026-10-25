@@ -14,9 +14,10 @@
  *   meshing-fluid-surfaces-never-merge
  */
 import { describe, expect, it } from './effect-test.js'
-import { Effect, FastCheck } from 'effect'
-import { chunkCoord } from '@nerima-games/mc-kernel'
-import { MAX_BLOCK_ID } from '../src/domain/block-data'
+import { Effect, Option, Result } from 'effect'
+import * as FastCheck from 'fast-check'
+import { BlockId as KernelBlockId, ChunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { MAX_BLOCK_ID, type BlockId } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -29,19 +30,34 @@ import { type QuadAxis, tangentAxes } from '../src/domain/faces'
 import {
   type FluidQuad,
   SOURCE_SURFACE_HEIGHT,
-  buildFluidLookup,
+  buildFluidLookup as buildFluidLookupResult,
   isFluidBlock,
+  meshFluidSurfaces as meshFluidSurfacesResult,
 } from '../src/domain/fluid-mesh'
-import { simplifyMesh } from '../src/domain/lod'
-import { type MeshLayers, type Quad, meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
+import { maxLevelOf } from '../src/domain/fluid-sampling'
+import { type MeshLayers, type Quad, meshChunk as meshChunkResult, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
-const STONE = 1
-const GLASS = 2
-const WATER = 3
-const LAVA = 4
-const FLOWER = 5
+const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): Value => {
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
+}
+
+const makeBlockId = (value: number): BlockId => expectSuccess(KernelBlockId.result(value))
+const ORIGIN_AXIS = Result.getOrThrow(ChunkAxis.result(0))
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>) => expectSuccess(meshChunkResult(...args))
+const meshChunkNaive = (...args: Parameters<typeof meshChunkNaiveResult>) => expectSuccess(meshChunkNaiveResult(...args))
+const buildFluidLookup = (...args: Parameters<typeof buildFluidLookupResult>) => expectSuccess(buildFluidLookupResult(...args))
+
+const STONE = Option.getOrThrow(blockIdOf('stone'))
+const GLASS = Option.getOrThrow(blockIdOf('glass'))
+const WATER = Option.getOrThrow(blockIdOf('water'))
+const LAVA = Option.getOrThrow(blockIdOf('lava'))
+const FLOWER = Option.getOrThrow(blockIdOf('dandelion'))
 
 /**
  * The two max levels are the REFERENCE'S, injected rather than declared.
@@ -84,7 +100,7 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
   if (fluidCells.length === 0) {
-    return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks }
+    return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks }
   }
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
@@ -94,7 +110,7 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     sources[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = source
     falling[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = isFalling
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -117,6 +133,23 @@ const expectDefined = <T,>(value: T | undefined, message: string): T => {
   }
   return value
 }
+
+const boundedInteger = (minimum: number, maximum: number) => FastCheck.integer({ min: minimum, max: maximum })
+
+const fluidBlockIds: ReadonlyArray<BlockId> = [STONE, GLASS, WATER, LAVA, FLOWER]
+
+const arbitraryFluidBox = FastCheck.record({
+  blockIdIndex: boundedInteger(0, fluidBlockIds.length - 1),
+  falling: boundedInteger(0, 1),
+  level: boundedInteger(0, 8),
+  lx: boundedInteger(0, CHUNK_SIZE - 1),
+  lz: boundedInteger(0, CHUNK_SIZE - 1),
+  source: boundedInteger(0, 1),
+  sx: boundedInteger(1, 4),
+  sy: boundedInteger(1, 3),
+  sz: boundedInteger(1, 4),
+  y: boundedInteger(0, 6),
+})
 
 const topAt = (quads: ReadonlyArray<FluidQuad>, lx: number, lz: number): FluidQuad | undefined =>
   quads.find((quad) => quad.direction === 'yPos' && quad.vertices[0][0] === lx && quad.vertices[0][2] === lz)
@@ -252,7 +285,7 @@ describe('the height of one cell', () => {
       sources[index] = 1
 
       const layers = meshChunk(
-        { blocks, coord: chunkCoord(0, 0), height, fluid: { falling, levels, sources } },
+        { blocks, coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height, fluid: { falling, levels, sources } },
         {},
         CONFIG,
       )
@@ -264,6 +297,24 @@ describe('the height of one cell', () => {
         top + 0.875,
         top + 0.875,
       ])
+    }),
+  )
+
+  it.effect('validates a FluidView once and samples the captured sidecar', () =>
+    Effect.sync(() => {
+      const valid = chunkWith([[8, 64, 8, WATER]], [[8, 64, 8, 0, 1]])
+      const fluid = expectDefined(valid.fluid, 'expected a complete FluidView')
+      let reads = 0
+      const chunk: ChunkView = {
+        ...valid,
+        get fluid() {
+          reads += 1
+          return fluid
+        },
+      }
+
+      expect(Result.isSuccess(meshChunkResult(chunk, {}, CONFIG))).toBe(true)
+      expect(reads).toBe(1)
     }),
   )
 
@@ -281,28 +332,81 @@ describe('the height of one cell', () => {
   )
 
   it.effect(
-    'a FluidView present but shorter than the chunk reads its missing cells the same way a missing FluidView does',
+    'rejects every FluidView array that does not cover the chunk',
     () =>
       Effect.sync(() => {
-        // `levels`/`sources` arrive from outside meshing — `domain/chunk-view.ts`'s
-        // `FluidView` doc spells out why meshing does not own their encoding — so
-        // Nothing here can prove their length matches the chunk the way the
-        // Internally-built lookup tables do. An index past a too-short array reads
-        // Back `undefined`, and `levelIn`/`sourceIn` default that the same way the
-        // Wholly-missing-`FluidView` case above does: the lookup's zero sentinel, i.e. full
-        // And not a source. This is that default, witnessed with the `FluidView`
-        // Present but truncated to one entry instead of absent entirely.
         const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
         blocks[blockIndex(8, 64, 8, CHUNK_HEIGHT)] = WATER
-        const chunk: ChunkView = {
-          coord: chunkCoord(0, 0),
-          height: CHUNK_HEIGHT,
-          blocks,
-          fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        const completeFluid = {
+          falling: new Uint8Array(BLOCKS_PER_CHUNK),
+          levels: new Uint8Array(BLOCKS_PER_CHUNK),
+          sources: new Uint8Array(BLOCKS_PER_CHUNK),
         }
 
-        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
-        expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
+        for (const field of ['levels', 'sources', 'falling'] as const) {
+          const incompleteChunk: ChunkView = {
+            coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
+            height: CHUNK_HEIGHT,
+            blocks,
+            fluid: { ...completeFluid, [field]: new Uint8Array(1) },
+          }
+          const result = meshChunkResult(
+            incompleteChunk,
+            {},
+            CONFIG,
+          )
+
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) {
+            expect(result.failure).toMatchObject({
+              _tag: 'IncompleteFluidView',
+              actual: 1,
+              expected: BLOCKS_PER_CHUNK,
+              field,
+            })
+          }
+          expect(Result.isFailure(meshChunkNaiveResult(incompleteChunk, {}, CONFIG))).toBe(true)
+          const directResult = meshFluidSurfacesResult(
+            incompleteChunk,
+            {},
+            new Uint16Array(MAX_BLOCK_ID + 1),
+            new Uint8Array(MAX_BLOCK_ID + 1),
+            new Uint8Array(MAX_BLOCK_ID + 1),
+            CHUNK_HEIGHT,
+          )
+          expect(Result.isFailure(directResult)).toBe(true)
+          if (Result.isFailure(directResult)) {
+            expect(directResult.failure).toMatchObject({ _tag: 'IncompleteFluidView', field })
+          }
+          expect(
+            Result.isFailure(
+              meshChunkRegionResult(incompleteChunk, {}, CONFIG, {
+                max: [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE],
+                min: [0, 0, 0],
+              }),
+            ),
+          ).toBe(true)
+        }
+
+        const validChunk: ChunkView = {
+          coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
+          height: CHUNK_HEIGHT,
+          blocks: new Uint16Array(BLOCKS_PER_CHUNK),
+        }
+        const incompleteNeighbour: ChunkView = {
+          ...validChunk,
+          fluid: { falling: new Uint8Array(1), levels: new Uint8Array(1), sources: new Uint8Array(1) },
+        }
+        const neighbourResult = meshChunkResult(validChunk, { xPos: incompleteNeighbour }, CONFIG)
+        expect(Result.isFailure(neighbourResult)).toBe(true)
+        if (Result.isFailure(neighbourResult)) {
+          expect(neighbourResult.failure).toMatchObject({
+            _tag: 'IncompleteFluidView',
+            actual: 1,
+            expected: BLOCKS_PER_CHUNK,
+            field: 'levels',
+          })
+        }
       }),
   )
 })
@@ -844,7 +948,7 @@ describe('the injected fluid table', () => {
       expect(isFluidBlock(lookup, LAVA)).toBe(true)
       expect(isFluidBlock(lookup, STONE)).toBe(false)
       expect(isFluidBlock(lookup, GLASS)).toBe(false)
-      expect(isFluidBlock(lookup, 0)).toBe(false)
+      expect(isFluidBlock(lookup, makeBlockId(0))).toBe(false)
     }),
   )
 
@@ -856,8 +960,8 @@ describe('the injected fluid table', () => {
         transparentSolidBlockIds: new Set(),
         waterBlockIds: new Set([WATER]),
       })
-      for (let blockId = 0; blockId <= MAX_BLOCK_ID; blockId += 1) {
-        expect(isFluidBlock(lookup, blockId)).toBe(false)
+      for (let rawBlockId = 0; rawBlockId <= MAX_BLOCK_ID; rawBlockId += 1) {
+        expect(isFluidBlock(lookup, makeBlockId(rawBlockId))).toBe(false)
       }
     }),
   )
@@ -870,15 +974,19 @@ describe('the injected fluid table', () => {
       expect(lookup[WATER]).toBe(256)
       expect(isFluidBlock(lookup, WATER)).toBe(true)
       expect(isFluidBlock(lookup, STONE)).toBe(false)
-      expect(isFluidBlock(lookup, -1)).toBe(false)
-      expect(isFluidBlock(lookup, MAX_BLOCK_ID + 1)).toBe(false)
+      expect(Result.isFailure(KernelBlockId.result(-1))).toBe(true)
+      expect(Result.isFailure(KernelBlockId.result(MAX_BLOCK_ID + 1))).toBe(true)
 
-      for (const blockId of [-1, 1.5, MAX_BLOCK_ID + 1]) {
-        expect(() => buildFluidLookup({ ...CONFIG, fluidMaxLevels: new Map([[blockId, 7]]) })).toThrow(RangeError)
-      }
       for (const maxLevel of [-1, 1.5, 256]) {
-        expect(() => buildFluidLookup({ ...CONFIG, fluidMaxLevels: new Map([[WATER, maxLevel]]) })).toThrow(RangeError)
+        const result = buildFluidLookupResult({ ...CONFIG, fluidMaxLevels: new Map([[WATER, maxLevel]]) })
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({ _tag: 'InvalidFluidMaxLevel', blockId: WATER, maxLevel })
+        }
       }
+      expect(maxLevelOf(new Uint16Array(MAX_BLOCK_ID), WATER)).toStrictEqual(
+        Result.fail({ _tag: 'InvalidFluidLookupLength', actual: MAX_BLOCK_ID, expected: MAX_BLOCK_ID + 1 }),
+      )
     }),
   )
 })
@@ -889,31 +997,18 @@ describe('the injected fluid table', () => {
  * transparent solid, because the interesting faults are at the meetings: lava
  * against water, glass over a lake, a flower on a shore.
  */
-const arbitraryFluidChunk = FastCheck.array(
-  FastCheck.record({
-    blockId: FastCheck.constantFrom(STONE, GLASS, WATER, LAVA, FLOWER),
-    falling: FastCheck.integer({ min: 0, max: 1 }),
-    level: FastCheck.integer({ min: 0, max: 8 }),
-    lx: FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-    lz: FastCheck.integer({ min: 0, max: CHUNK_SIZE - 1 }),
-    source: FastCheck.integer({ min: 0, max: 1 }),
-    sx: FastCheck.integer({ min: 1, max: 4 }),
-    sy: FastCheck.integer({ min: 1, max: 3 }),
-    sz: FastCheck.integer({ min: 1, max: 4 }),
-    y: FastCheck.integer({ min: 0, max: 6 }),
-  }),
-  { maxLength: 8, minLength: 1 },
-).map((boxes): ChunkView => {
+const arbitraryFluidChunk = FastCheck.array(arbitraryFluidBox, { maxLength: 8, minLength: 1 }).map((boxes): ChunkView => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   const levels = new Uint8Array(BLOCKS_PER_CHUNK)
   const sources = new Uint8Array(BLOCKS_PER_CHUNK)
   const falling = new Uint8Array(BLOCKS_PER_CHUNK)
   for (const box of boxes) {
-    for (let {lx} = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
-      for (let {y} = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
-        for (let {lz} = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
+    const blockId = expectDefined(fluidBlockIds[box.blockIdIndex], `invalid fluid block index: ${box.blockIdIndex}`)
+    for (let { lx } = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
+      for (let { y } = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
+        for (let { lz } = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
           const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
-          blocks[index] = box.blockId
+          blocks[index] = blockId
           levels[index] = box.level
           sources[index] = box.source
           falling[index] = box.falling
@@ -921,7 +1016,7 @@ const arbitraryFluidChunk = FastCheck.array(
       }
     }
   }
-  return { coord: chunkCoord(0, 0), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 })
 
 /** A fluid quad as a string, for multiset comparison. */
@@ -955,53 +1050,40 @@ describe('the two meshers, and the merge, with fluids configured', () => {
   it.effect(
     'both meshers agree on the fluid surfaces, exactly',
     () =>
-      Effect.sync(() => {
+      Effect.sync(() =>
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
             const merged = meshChunk(chunk, {}, CONFIG).fluids.map(keyOfFluid)
             const naive = meshChunkNaive(chunk, {}, CONFIG).fluids.map(keyOfFluid)
             expect([...merged].sort()).toStrictEqual([...naive].sort())
           }),
-        )
-      }),
+          { numRuns: 100 },
+        ),
+      ),
     PROPERTY_TIMEOUT_MS,
   )
 
   it.effect(
     'REGRESSION: the coverage property still holds when fluids are configured',
     () =>
-      Effect.sync(() => {
-        // `meshing-merge-covers-the-same-surface`, restated under fluids. The
-        // Property is unchanged IN FORM and that is the point: it compares
-        // `meshChunk` against `meshChunkNaive`, and both exclude fluid ids from
-        // The cube passes, so both see the same reduced set of block faces. A
-        // Fluid surface is not a block face and never was one, so "the same
-        // Surface" means what it always meant. What WOULD break it is excluding
-        // Fluids from one mesher and not the other.
+      Effect.sync(() =>
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
             const merged = allUnitFaces(meshChunk(chunk, {}, CONFIG))
             const naive = allUnitFaces(meshChunkNaive(chunk, {}, CONFIG))
             expect([...merged].sort()).toStrictEqual([...naive].sort())
-            expect(totalQuadArea(meshChunk(chunk, {}, CONFIG))).toBe(
-              totalQuadArea(meshChunkNaive(chunk, {}, CONFIG)),
-            )
+            expect(totalQuadArea(meshChunk(chunk, {}, CONFIG))).toBe(totalQuadArea(meshChunkNaive(chunk, {}, CONFIG)))
           }),
-        )
-      }),
+          { numRuns: 100 },
+        ),
+      ),
     PROPERTY_TIMEOUT_MS,
   )
 
   it.effect(
     'REGRESSION: no two fluid quads are identical, and none merges',
     () =>
-      Effect.sync(() => {
-        // Meshing-fluid-surfaces-never-merge. Two identical fluid quads are two
-        // Coplanar surfaces at the same depth, i.e. z-fighting; and because a
-        // Merged run of N cells has N+1 corner heights per edge and `Quad` has
-        // Room for two, a fluid quad that HAD merged could only have done so by
-        // Discarding the intermediate heights — flattening the very slope that
-        // Is the feature. Every quad here must therefore describe exactly one cell.
+      Effect.sync(() =>
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
             const quads = meshChunk(chunk, {}, CONFIG).fluids
@@ -1014,17 +1096,14 @@ describe('the two meshers, and the merge, with fluids configured', () => {
               expect(Math.max(...zs) - Math.min(...zs)).toBeLessThanOrEqual(1)
             }
           }),
-        )
-      }),
+          { numRuns: 100 },
+        ),
+      ),
     PROPERTY_TIMEOUT_MS,
   )
 
   it.effect('emits in lx, then y, then lz order', () =>
     Effect.sync(() => {
-      // `greedy-meshing-fluids.ts:61-63`. Ties on purpose in every key: two
-      // Cells share lx=2, two share y=5, two share lz=2, so each of the three
-      // Positions actually decides something. `test/plant-mesh.test.ts` records
-      // At length why a fixture without ties accepts any nesting.
       const cells: ReadonlyArray<BlockCell> = [
         [2, 5, 2, WATER],
         [2, 5, 9, WATER],
@@ -1043,29 +1122,6 @@ describe('the two meshers, and the merge, with fluids configured', () => {
         .filter((quad) => quad.direction === 'yPos')
         .map((quad) => `${quad.vertices[0][0]},${Math.floor(quad.vertices[0][1])},${quad.vertices[0][2]}`)
       expect(tops).toStrictEqual(['2,5,2', '2,5,9', '2,9,2', '9,5,2'])
-    }),
-  )
-})
-
-describe('LOD simplification', () => {
-  it.effect('passes fluid surfaces through untouched', () =>
-    Effect.sync(() => {
-      // `snapQuad` snaps two integer tangent extents onto a coarser grid, and a
-      // Fluid surface has neither. Worse than merely inapplicable: a lake's
-      // Corner heights are SHARED with its neighbours', so snapping one quad's
-      // Corner without the abutting one tears the lake open along that seam.
-      // Dropping them instead would empty every lake at the first LOD boundary.
-      const chunk = chunkWith(
-        [
-          [8, 64, 8, WATER],
-          [8, 63, 8, STONE],
-        ],
-        [[8, 64, 8, 0, 1]],
-      )
-      const layers = meshChunk(chunk, {}, CONFIG)
-      expect(layers.fluids.length).toBeGreaterThan(0)
-      expect(simplifyMesh(layers, 1).fluids).toBe(layers.fluids)
-      expect(simplifyMesh(layers, 2).fluids).toBe(layers.fluids)
     }),
   )
 })

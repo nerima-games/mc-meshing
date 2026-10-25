@@ -1,23 +1,25 @@
 import { createHash } from 'node:crypto'
-import { blockIdOf, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
+import { Option, Result } from 'effect'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
 import { describe, expect, it } from './effect-test.js'
 import {
   blockIndex,
   type ChunkView,
 } from '../src/domain/chunk-view'
-import { meshChunk } from '../src/domain/mesh'
+import { simplifyMesh } from '../src/domain/lod'
+import { type MeshLayers, meshChunk as meshChunkResult } from '../src/domain/mesh'
 import type { MeshConfig } from '../src/domain/opacity'
 import { packMeshLayers, type PackedMeshBuffers } from '../src/domain/mesh-buffers'
 import { railShapeCodeOf } from '../src/domain/rail-types'
 
 const CHUNK_HEIGHT = 4
-const STONE = blockIdOf('stone')
-const WATER = blockIdOf('water')
-const GLASS = blockIdOf('glass')
-const DANDELION = blockIdOf('dandelion')
-const CACTUS = blockIdOf('cactus')
-const STONE_SLAB = blockIdOf('stone_slab')
-const RAIL = blockIdOf('rail')
+const STONE = Option.getOrThrow(blockIdOf('stone'))
+const WATER = Option.getOrThrow(blockIdOf('water'))
+const GLASS = Option.getOrThrow(blockIdOf('glass'))
+const DANDELION = Option.getOrThrow(blockIdOf('dandelion'))
+const CACTUS = Option.getOrThrow(blockIdOf('cactus'))
+const STONE_SLAB = Option.getOrThrow(blockIdOf('stone_slab'))
+const RAIL = Option.getOrThrow(blockIdOf('rail'))
 
 type Cell = {
   readonly lx: number
@@ -35,6 +37,14 @@ const CONFIG: MeshConfig = {
   fluidMaxLevels: new Map([[WATER, 7]]),
   transparentSolidBlockIds: new Set([GLASS]),
   waterBlockIds: new Set([WATER]),
+}
+
+const meshChunk = (...args: Parameters<typeof meshChunkResult>) => {
+  const result = meshChunkResult(...args)
+  if (Result.isFailure(result)) {
+    throw new Error(`Unexpected mesh failure: ${JSON.stringify(result.failure)}`)
+  }
+  return result.success
 }
 
 const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
@@ -58,7 +68,7 @@ const chunkOf = (cells: ReadonlyArray<Cell>): ChunkView => {
 
   return {
     blocks,
-    coord: chunkCoord(0, 0),
+    coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
     fluid: { falling, levels, sources },
     height: CHUNK_HEIGHT,
     railShapes,
@@ -94,6 +104,20 @@ const kernelShapeFixture = (): ChunkView =>
     },
   ])
 
+const migrationParityFixture = (): ChunkView =>
+  chunkOf([
+    { blockId: STONE, lx: 1, lz: 1, y: 1 },
+    { blockId: STONE, lx: 2, lz: 1, y: 1 },
+    { blockId: STONE, lx: 1, lz: 2, y: 1 },
+    { blockId: STONE, lx: 2, lz: 2, y: 1 },
+    { blockId: GLASS, lx: 5, lz: 1, y: 1 },
+    { blockId: STONE, lx: 6, lz: 1, y: 1 },
+    { blockId: STONE, lx: 8, lz: 8, y: 1 },
+    { blockId: STONE, lx: 9, lz: 9, y: 1 },
+    { blockId: WATER, lx: 10, lz: 2, source: true, y: 1 },
+    { blockId: WATER, falling: true, level: 1, lx: 10, lz: 2, y: 2 },
+  ])
+
 const digestOf = (buffers: PackedMeshBuffers): string => {
   const canonical = JSON.stringify({
     ambientOcclusion: Array.from(buffers.ambientOcclusion),
@@ -107,6 +131,9 @@ const digestOf = (buffers: PackedMeshBuffers): string => {
   })
   return createHash('sha256').update(canonical).digest('hex')
 }
+
+const quadSequenceDigestOf = (layers: MeshLayers): string =>
+  createHash('sha256').update(JSON.stringify(layers)).digest('hex')
 
 const GOLDEN_HASHES = {
   'merged-cubes': '4c1b29af0058f1c8e541b9b664440860e3b0c38a9057374ed8daaf547f3a3375',
@@ -130,4 +157,16 @@ describe('packed mesh golden fixtures', () => {
       expect(digestOf(buffers)).toBe(GOLDEN_HASHES[name])
     })
   }
+
+  it('keeps meshChunk and simplifyMesh quad sequences stable across the Effect 4 migration', () => {
+    const layers = meshChunk(migrationParityFixture(), {}, CONFIG)
+
+    expect(layers.opaque.length).toBeGreaterThan(0)
+    expect(layers.transparentSolid.length).toBeGreaterThan(0)
+    expect(layers.fluids.length).toBeGreaterThan(0)
+    expect(layers.opaque.some((quad) => quad.ao > 0)).toBe(true)
+    expect(quadSequenceDigestOf(layers)).toBe('a05597e98b9185f89928a80fbabecd9aefa4a4066708c3b337b18a331d3b81af')
+    expect(quadSequenceDigestOf(simplifyMesh(layers, 1))).toBe('d0e074f1b850d2565808da03cd6c2ac4b658c56ee444133997db1fb2b9a3e058')
+    expect(quadSequenceDigestOf(simplifyMesh(layers, 2))).toBe('a514616b4981b301c7da4e965b95b137d5a5ea6546392640c53d8d37e00da354')
+  })
 })

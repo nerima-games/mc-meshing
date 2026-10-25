@@ -91,8 +91,7 @@
 
 理由は 2 つ。
 
-1. **本リポジトリは純粋関数の集合であり、`meshChunk(chunk, neighbours, config)` は
-   バッファしか見ない。** 座標を入れると「どのチャンクか」という第 2 の変更理由が増える。
+1. **This repository is a collection of pure functions, and `meshChunk(chunk, neighbours, config)` computes from chunk data, neighbour data, and injected configuration.** Adding world coordinates would introduce a second reason to change the function: which chunk it addresses.
 2. **座標系は mc-kernel の資産である**（plan.md §3.1: `Position` / `AABB` / チャンク座標系）。
    ここで `ChunkCoord` を宣言すれば、ロスターに 3 つ目の綴りが増える。
    2 つ目（mc-worldgen の `{x, z}`）は kernel の `{cx, cz}` に統合されたばかりである。
