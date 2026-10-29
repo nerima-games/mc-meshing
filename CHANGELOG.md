@@ -1,5 +1,11 @@
 # @nerima-games/mc-meshing
 
+## 0.5.0
+
+### Minor Changes
+
+- Pin `@nerima-games/mc-kernel` to `0.14.0`.
+
 ## 0.4.0
 
 ### Minor Changes
