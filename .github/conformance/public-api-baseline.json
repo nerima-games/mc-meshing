@@ -1,0 +1,248 @@
+[
+  {
+    "count": 3,
+    "file": "src/domain/ambient-occlusion.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/block-data.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 12,
+    "file": "src/domain/chunk-view.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 7,
+    "file": "src/domain/fluid-mesh.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/fluid-sampling.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/light-types.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 9,
+    "file": "src/domain/lod.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 5,
+    "file": "src/domain/mesh-greedy.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/mesh-support.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/mesh.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 3,
+    "file": "src/domain/rail-geometry.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/rail-types.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/resource-pack-resolver.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "string"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/resource-pack-schema.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "string"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/special-mesh.ts",
+    "ruleId": "no-raw-exported-function-parameter",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/ambient-occlusion.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/chunk-view.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 4,
+    "file": "src/domain/fluid-sampling.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/lod.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 3,
+    "file": "src/domain/mesh-greedy.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/mesh-support.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/mesh-types.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/rail-types.ts",
+    "ruleId": "no-raw-exported-function-return",
+    "text": "number"
+  },
+  {
+    "count": 4,
+    "file": "src/domain/chunk-view.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 6,
+    "file": "src/domain/fluid-sampling.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 3,
+    "file": "src/domain/fluid-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 4,
+    "file": "src/domain/mesh-buffers.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 2,
+    "file": "src/domain/mesh-greedy.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/mesh-scratch.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 4,
+    "file": "src/domain/mesh-support.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 6,
+    "file": "src/domain/mesh-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/mesh.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/opacity.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 4,
+    "file": "src/domain/plant-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/rail-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/resource-pack-mesh.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "string"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/resource-pack-resolver.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "string"
+  },
+  {
+    "count": 1,
+    "file": "src/domain/resource-pack-schema.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "string"
+  },
+  {
+    "count": 17,
+    "file": "src/domain/resource-pack-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  },
+  {
+    "count": 10,
+    "file": "src/domain/resource-pack-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "string"
+  },
+  {
+    "count": 6,
+    "file": "src/domain/special-types.ts",
+    "ruleId": "no-raw-exported-type-field",
+    "text": "number"
+  }
+]
