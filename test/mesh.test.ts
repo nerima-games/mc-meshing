@@ -147,7 +147,7 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
 
 const chunkWithBlockStates = (
   cells: ReadonlyArray<readonly [number, number, number, BlockId, unknown]>,
-): ChunkView => {
+): ChunkView & { readonly blockStates: Uint32Array } => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
   const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
   for (const [lx, y, lz, blockId, state] of cells) {
@@ -203,6 +203,38 @@ describe('block state in cube output', () => {
         { numRuns: 12, interruptAfterTimeLimit: PROPERTY_TIMEOUT_MS },
       ),
     ),
+  )
+
+  it.effect('merges adjacent faces when their encoded model states match', () =>
+    Effect.sync(() => {
+      const chunk = chunkWithBlockStates([
+        [8, 64, 8, OAK_LOG, { axis: 'x' }],
+        [9, 64, 8, OAK_LOG, { axis: 'x' }],
+      ])
+      const front = meshChunk(chunk, {}, EMPTY_MESH_CONFIG).opaque.filter((quad) => quad.direction === 'zPos')
+      expect(front).toHaveLength(1)
+      expect(front[0]).toMatchObject({ blockState: { axis: 'x' }, lx: 8, width: 2 })
+    }),
+  )
+
+  it.effect('propagates malformed encoded states through merged and per-cell cube meshing', () =>
+    Effect.sync(() => {
+      const valid = chunkWithBlockStates([[8, 64, 8, OAK_LOG, { axis: 'x' }]])
+      const blockStates = new Uint32Array(valid.blockStates)
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      blockStates[index] = 0xFFFF_FFFF
+      const malformed = { ...valid, blockStates }
+      const failure = Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: OAK_LOG,
+        encoded: 0xFFFF_FFFF,
+        index,
+        reason: 'reserved-code',
+      })
+
+      expect(meshChunkResult(malformed, {}, EMPTY_MESH_CONFIG)).toStrictEqual(failure)
+      expect(meshChunkNaiveResult(malformed, {}, EMPTY_MESH_CONFIG)).toStrictEqual(failure)
+    }),
   )
 })
 

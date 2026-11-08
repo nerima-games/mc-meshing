@@ -241,6 +241,11 @@ describe('resource-pack resolver', () => {
     })
   })
 
+  it('omits connection entries whose optional value is absent', () => {
+    const state = invalidFixture<EffectiveBlockStateValues>({ connections: { east: Reflect.get({}, 'east') } })
+    expect(blockStatePropertiesOf(state)).toStrictEqual({})
+  })
+
   it('normalizes names and rejects empty paths', () => {
     expect(normalizeResourceName(' models/demo.json ', 'model')).toBe('minecraft:demo')
     expect(normalizeResourceName('blockstates/demo.json', 'blockstate')).toBe('minecraft:demo')

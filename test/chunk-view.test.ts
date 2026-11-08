@@ -1,5 +1,6 @@
 import { Option, Result, SchemaParser } from 'effect'
 import * as FastCheck from 'fast-check'
+import { vi } from 'vitest'
 import {
   BlockId as KernelBlockId,
   ChunkAxis as chunkAxis,
@@ -149,6 +150,36 @@ describe('blockStateAt', () => {
     }
   })
 
+  it('returns a typed failure when a kernel default cannot be encoded', async () => {
+    vi.resetModules()
+    const waterId = Option.getOrThrow(blockIdOf('water'))
+    const failure = { _tag: 'InjectedDefaultStateFailure', reason: 'invalid-property-value' }
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      const effectiveBlockStateOf: typeof kernel.effectiveBlockStateOf = (blockId, encoded) =>
+        blockId === waterId
+          ? invalidFixture(Result.fail(failure))
+          : kernel.effectiveBlockStateOf(blockId, encoded)
+      return {
+        ...kernel,
+        effectiveBlockStateOf,
+      }
+    })
+    try {
+      const { blockStateAt: readState } = await import('../src/domain/chunk-view.js')
+      const { chunk, index } = chunkWithRawBlockState('water')
+      expect(readState(chunk, index)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: waterId,
+        index,
+        reason: 'invalid-property-value',
+      }))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
   it('decodes encoded water levels across the kernel state range and validates effective values', () => {
     const waterId = Option.getOrThrow(blockIdOf('water'))
     FastCheck.assert(
@@ -217,6 +248,24 @@ describe('blockStateAt', () => {
     }
   })
 
+  it('rejects invalid chunk heights and block storage before decoding state', () => {
+    const valid = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    const invalidHeight = invalidFixture<ChunkView>({ ...valid, height: 0 })
+    expect(blockStateAt(invalidHeight, blockIndex(0, 0, 0, STATE_CHUNK_HEIGHT))).toMatchObject({
+      failure: { _tag: 'InvalidChunkHeight', height: 0 },
+    })
+
+    const invalidBlocks: ChunkView = { ...valid, blocks: new Uint16Array(valid.blocks.length - 1) }
+    expect(blockStateAt(invalidBlocks, blockIndex(0, 0, 0, STATE_CHUNK_HEIGHT))).toMatchObject({
+      failure: {
+        _tag: 'InvalidChunkBlocksLength',
+        actual: valid.blocks.length - 1,
+        coord: valid.coord,
+        expected: valid.blocks.length,
+      },
+    })
+  })
+
   it('rejects state storage with a length different from the chunk cell count', () => {
     const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
     const malformed: ChunkView = { ...empty, blockStates: new Uint32Array(1) }
@@ -245,5 +294,23 @@ describe('blockStateAt', () => {
       expect(blockStateAt(malformed, STATE_INDEX)).toMatchObject({ failure })
       expect(validateChunkViews(malformed, {})).toMatchObject({ failure })
     }
+  })
+
+  it('rejects Uint32Array proxies that do not return an encoded value at a valid index', () => {
+    const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    const blockStates = new Proxy(new Uint32Array(empty.blocks.length), {
+      get(target, property) {
+        if (property === String(STATE_INDEX)) {
+          return Reflect.get({}, 'missing')
+        }
+        return Reflect.get(target, property, target)
+      },
+    })
+    const malformed: ChunkView = { ...empty, blockStates }
+
+    expect(blockStateAt(malformed, STATE_INDEX)).toStrictEqual(Result.fail({
+      _tag: 'InvalidChunkBlockStatesType',
+      coord: empty.coord,
+    }))
   })
 })

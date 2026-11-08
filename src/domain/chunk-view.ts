@@ -6,15 +6,15 @@
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
-import { Brand, Result, SchemaParser } from 'effect'
+import { Brand, Result } from 'effect'
 import { AIR, type BlockId, blockIdAt } from './block-data.js'
 import {
   CHUNK_SIZE_XZ,
   ChunkAxis as chunkAxis,
   type Chunk as KernelChunk,
   type BlockStateCodecFailure,
+  type EncodedBlockState,
   type EffectiveBlockStateValues,
-  EncodedBlockStateSchema,
   MAX_CHUNK_HEIGHT,
   chunkCoord,
   defaultBlockState,
@@ -85,9 +85,9 @@ export type ChunkBlockStateIndexFailure = {
 export type ChunkBlockStateCodecFailure = {
   readonly _tag: 'ChunkBlockStateCodecFailure'
   readonly blockId: BlockId
-  readonly encoded?: unknown
+  readonly encoded?: number
   readonly index: ChunkBlockIndex
-  readonly reason: BlockStateCodecFailure['reason'] | 'invalid-encoded-value'
+  readonly reason: BlockStateCodecFailure['reason']
 }
 
 export type ChunkViewFailure =
@@ -320,28 +320,23 @@ const chunkBlockStateCodecFailure = (
   index: ChunkBlockIndex,
   blockId: BlockId,
   reason: ChunkBlockStateCodecFailure['reason'],
-  encoded?: unknown,
-): ChunkBlockStateCodecFailure => ({
+): Omit<ChunkBlockStateCodecFailure, 'encoded'> => ({
   _tag: 'ChunkBlockStateCodecFailure',
   blockId,
-  ...(typeof encoded === 'undefined' ? {} : { encoded }),
   index,
   reason,
 })
 
+const encodedBlockStateFromUint32 = Brand.nominal<EncodedBlockState>()
+
 const effectiveBlockStateAt = (
   blockId: BlockId,
   index: ChunkBlockIndex,
-  encoded: unknown,
+  encoded: number,
 ): Result.Result<EffectiveBlockStateValues, ChunkBlockStateCodecFailure> => {
-  const parsed = SchemaParser.decodeUnknownResult(EncodedBlockStateSchema)(encoded)
-  if (Result.isFailure(parsed)) {
-    const failure = chunkBlockStateCodecFailure(index, blockId, 'invalid-encoded-value')
-    return Result.fail(typeof encoded === 'number' ? { ...failure, encoded } : failure)
-  }
-  const effective = effectiveBlockStateOf(blockId, parsed.success)
+  const effective = effectiveBlockStateOf(blockId, encodedBlockStateFromUint32(encoded))
   if (Result.isFailure(effective)) {
-    return Result.fail(chunkBlockStateCodecFailure(index, blockId, effective.failure.reason, parsed.success))
+    return Result.fail({ ...chunkBlockStateCodecFailure(index, blockId, effective.failure.reason), encoded })
   }
   return Result.succeed(effective.success)
 }
@@ -399,7 +394,11 @@ export const blockStateAt = (
   }
   const blockId = blockIdAt(chunk.blocks, index)
   if (typeof blockStates !== 'undefined') {
-    return effectiveBlockStateAt(blockId, index, blockStates[index])
+    const encoded = blockStates[index]
+    if (typeof encoded !== 'number') {
+      return Result.fail({ _tag: 'InvalidChunkBlockStatesType', coord: chunk.coord })
+    }
+    return effectiveBlockStateAt(blockId, index, encoded)
   }
   const defaults = defaultEffectiveBlockStateOf(blockId)
   if (Result.isFailure(defaults)) {

@@ -134,7 +134,10 @@ export type SpecialBlockLookup = {
   readonly railKinds: readonly (RailRenderKind | undefined)[]
 }
 
-export type SpecialBlockLookupFailure = BlockRegistryResolutionFailure | RailRenderKindFailure
+export type SpecialBlockLookupFailure =
+  | BlockRegistryResolutionFailure
+  | RailRenderKindFailure
+  | { readonly _tag: 'MissingSpecialBlockType'; readonly blockId: BlockId }
 
 type InvalidBlockStateModelProperty =
   | keyof EffectiveBlockStateValues
@@ -203,7 +206,10 @@ const buildSpecialBlockLookup = (): Result.Result<SpecialBlockLookup, SpecialBlo
     if (Result.isFailure(blockType)) {
       return Result.fail(blockType.failure)
     }
-    kindCodes[blockId] = specialKindCodeOf(renderKind.success, collisionShape.success, blockType.success ?? 'air')
+    if (typeof blockType.success === 'undefined') {
+      return Result.fail({ _tag: 'MissingSpecialBlockType', blockId })
+    }
+    kindCodes[blockId] = specialKindCodeOf(renderKind.success, collisionShape.success, blockType.success)
     opacityCodes[blockId] = opacity.success === 'opaque' ? OPAQUE_OPACITY_CODE : NON_OPAQUE_CODE
     if (renderKind.success === 'rail') {
       const railKind = propertyOfBlockId(blockId, 'railKind')
@@ -223,7 +229,7 @@ const buildSpecialBlockLookup = (): Result.Result<SpecialBlockLookup, SpecialBlo
 export const SPECIAL_BLOCK_LOOKUP: Result.Result<SpecialBlockLookup, SpecialBlockLookupFailure> = buildSpecialBlockLookup()
 
 type BoxRenderKind = Exclude<SpecialRenderKind, 'lilyPad' | 'rail'>
-type FixedBoxRenderKind = Extract<SpecialRenderKind, 'cactus' | 'pressurePlate' | 'slab'>
+type FixedBoxRenderKind = Extract<SpecialRenderKind, 'cactus' | 'pressurePlate'>
 
 const specialKindOf = (lookup: SpecialBlockLookup, blockId: BlockId): SpecialRenderKind | null => {
   switch (lookup.kindCodes[blockId]) {
@@ -308,8 +314,6 @@ type BoxBounds = {
 
 type BlockPosition = readonly [lx: number, y: number, lz: number]
 
-const assertUnreachable = (value: never): never => value
-
 type SpecialShapeContext = {
   readonly result: Array<SpecialBlockQuad>
   readonly lookup: SpecialBlockLookup
@@ -391,14 +395,6 @@ const BOX_BOUNDS_FACTORIES: Readonly<Record<FixedBoxRenderKind, BoxBoundsFactory
     minX: lx + THIN_BLOCK_INSET,
     minY: y,
     minZ: lz + THIN_BLOCK_INSET,
-  }),
-  slab: (lx, y, lz) => ({
-    maxX: lx + UNIT_SIZE,
-    maxY: y + SLAB_HEIGHT,
-    maxZ: lz + UNIT_SIZE,
-    minX: lx,
-    minY: y,
-    minZ: lz,
   }),
 }
 
@@ -557,25 +553,17 @@ const railShapeFromState = (
   return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'shape' })
 }
 
-const boxFaceTouchesBlockBoundary = (bounds: BoxBounds, position: BlockPosition, direction: FaceDirection): boolean => {
-  const [lx, y, lz] = position
-  switch (direction) {
-    case 'xNeg':
-      return bounds.minX === lx
-    case 'xPos':
-      return bounds.maxX === lx + UNIT_SIZE
-    case 'yNeg':
-      return bounds.minY === y
-    case 'yPos':
-      return bounds.maxY === y + UNIT_SIZE
-    case 'zNeg':
-      return bounds.minZ === lz
-    case 'zPos':
-      return bounds.maxZ === lz + UNIT_SIZE
-    default:
-      return assertUnreachable(direction)
-  }
+const BLOCK_BOUNDARY_TESTS: Readonly<Record<FaceDirection, (bounds: BoxBounds, position: BlockPosition) => boolean>> = {
+  xNeg: (bounds, [lx]) => bounds.minX === lx,
+  xPos: (bounds, [lx]) => bounds.maxX === lx + UNIT_SIZE,
+  yNeg: (bounds, [, y]) => bounds.minY === y,
+  yPos: (bounds, [, y]) => bounds.maxY === y + UNIT_SIZE,
+  zNeg: (bounds, [, , lz]) => bounds.minZ === lz,
+  zPos: (bounds, [, , lz]) => bounds.maxZ === lz + UNIT_SIZE,
 }
+
+const boxFaceTouchesBlockBoundary = (bounds: BoxBounds, position: BlockPosition, direction: FaceDirection): boolean =>
+  BLOCK_BOUNDARY_TESTS[direction](bounds, position)
 
 const boxFaceVisible = (context: SpecialShapeContext, bounds: BoxBounds, face: Face): Result.Result<boolean, SpecialMeshFailure> => {
   if (!boxFaceTouchesBlockBoundary(bounds, context.position, face.direction) && context.kind !== 'cactus') {
@@ -618,6 +606,55 @@ const meshBoxCell = (
     )
   }
   return Result.void
+}
+
+type RepeaterBoundaryVisibility = Readonly<Record<FaceDirection, boolean>>
+
+const repeaterBoundaryVisibilityOf = (
+  context: SpecialShapeContext,
+  bounds: BoxBounds,
+): Result.Result<RepeaterBoundaryVisibility, SpecialMeshFailure> => {
+  const xNeg = boxFaceVisible(context, bounds, faceOf('xNeg'))
+  if (Result.isFailure(xNeg)) return Result.fail(xNeg.failure)
+  const xPos = boxFaceVisible(context, bounds, faceOf('xPos'))
+  if (Result.isFailure(xPos)) return Result.fail(xPos.failure)
+  const yNeg = boxFaceVisible(context, bounds, faceOf('yNeg'))
+  if (Result.isFailure(yNeg)) return Result.fail(yNeg.failure)
+  const zNeg = boxFaceVisible(context, bounds, faceOf('zNeg'))
+  if (Result.isFailure(zNeg)) return Result.fail(zNeg.failure)
+  const zPos = boxFaceVisible(context, bounds, faceOf('zPos'))
+  if (Result.isFailure(zPos)) return Result.fail(zPos.failure)
+  return Result.succeed({
+    xNeg: xNeg.success,
+    xPos: xPos.success,
+    yNeg: yNeg.success,
+    yPos: true,
+    zNeg: zNeg.success,
+    zPos: zPos.success,
+  })
+}
+
+const meshRepeaterBoxCell = (
+  context: SpecialShapeContext,
+  bounds: BoxBounds,
+  boundaryVisibility: RepeaterBoundaryVisibility,
+): void => {
+  const [lx, y, lz] = context.position
+  for (const face of FACES) {
+    if (boxFaceTouchesBlockBoundary(bounds, context.position, face.direction) && !boundaryVisibility[face.direction]) {
+      continue
+    }
+    context.result.push(
+      makeBoxQuad(
+        context.blockId,
+        context.kind,
+        face,
+        bounds,
+        quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
+        context.blockState,
+      ),
+    )
+  }
 }
 
 type HorizontalFacing = Exclude<NonNullable<EffectiveBlockStateValues['facing']>, 'up' | 'down'>
@@ -1122,19 +1159,16 @@ const meshStoneButtonCell = (
   )
 }
 
+const HORIZONTAL_OFFSET_FACTORS: Readonly<Record<HorizontalFacing, readonly [number, number]>> = {
+  north: [0, -1],
+  east: [1, 0],
+  south: [0, 1],
+  west: [-1, 0],
+}
+
 const horizontalOffsetForFacing = (facing: HorizontalFacing, distance: number): readonly [number, number] => {
-  switch (facing) {
-    case 'north':
-      return [0, -distance]
-    case 'east':
-      return [distance, 0]
-    case 'south':
-      return [0, distance]
-    case 'west':
-      return [-distance, 0]
-    default:
-      return assertUnreachable(facing)
-  }
+  const [dx, dz] = HORIZONTAL_OFFSET_FACTORS[facing]
+  return [dx * distance, dz * distance]
 }
 
 const leverBaseBoundsOf = (
@@ -1259,7 +1293,7 @@ const meshRepeaterTorchCells = (
   context: SpecialShapeContext,
   facing: HorizontalFacing,
   delay: number,
-): Result.Result<void, SpecialMeshFailure> => {
+): void => {
   const [lx, y, lz] = context.position
   const separation = TORCH_BASE_INSET + delay * TORCH_DELAY_STEP
   const torchCenters = [UNIT_SIZE / 2 - separation / 2, UNIT_SIZE / 2 + separation / 2]
@@ -1267,47 +1301,52 @@ const meshRepeaterTorchCells = (
     const alongZ = facing === 'north' || facing === 'south'
     const centerX = alongZ ? lx + UNIT_SIZE / 2 : lx + axisPosition
     const centerZ = alongZ ? lz + axisPosition : lz + UNIT_SIZE / 2
-    const torch = meshBoxCell(context, {
+    const bounds: BoxBounds = {
       minX: centerX - REPEATER_TORCH_SIZE / 2,
       maxX: centerX + REPEATER_TORCH_SIZE / 2,
       minY: y + REPEATER_TORCH_BASE,
       maxY: y + REPEATER_TORCH_BASE + REPEATER_TORCH_HEIGHT,
       minZ: centerZ - REPEATER_TORCH_SIZE / 2,
       maxZ: centerZ + REPEATER_TORCH_SIZE / 2,
-    })
-    if (Result.isFailure(torch)) {
-      return Result.fail(torch.failure)
+    }
+    for (const face of FACES) {
+      context.result.push(
+        makeBoxQuad(
+          context.blockId,
+          context.kind,
+          face,
+          bounds,
+          quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
+          context.blockState,
+        ),
+      )
     }
   }
-  return Result.void
 }
 
 const meshRepeaterLockMarkers = (
   context: SpecialShapeContext,
   facing: HorizontalFacing,
   locked: boolean,
-): Result.Result<void, SpecialMeshFailure> => {
+  boundaryVisibility: RepeaterBoundaryVisibility,
+): void => {
   if (!locked) {
-    return Result.void
+    return
   }
   const [lx, y, lz] = context.position
   const lockOnX = facing === 'north' || facing === 'south'
   for (const side of [GRID_COORD_MIN, GRID_COORD_MAX]) {
     const markerMin = side === GRID_COORD_MIN ? UNIT_ORIGIN : UNIT_SIZE - REPEATER_TORCH_SIZE
     const markerMax = side === GRID_COORD_MIN ? REPEATER_TORCH_SIZE : UNIT_SIZE
-    const marker = meshBoxCell(context, {
+    meshRepeaterBoxCell(context, {
       minX: lx + (lockOnX ? markerMin : UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2),
       maxX: lx + (lockOnX ? markerMax : UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2),
       minY: y + REPEATER_BASE_HEIGHT,
       maxY: y + REPEATER_BASE_HEIGHT + REPEATER_TORCH_HEIGHT / 2,
       minZ: lz + (lockOnX ? UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2 : markerMin),
       maxZ: lz + (lockOnX ? UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2 : markerMax),
-    })
-    if (Result.isFailure(marker)) {
-      return Result.fail(marker.failure)
-    }
+    }, boundaryVisibility)
   }
-  return Result.void
 }
 
 const meshRepeaterCell = (
@@ -1340,15 +1379,15 @@ const meshRepeaterCell = (
   }
   const [lx, y, lz] = position
   const context: SpecialShapeContext = { result, lookup, chunk, neighbours, blockId, kind: 'repeater', position, blockState, config }
-  const base = meshBoxCell(context, { ...fullBlockBounds(lx, y, lz), maxY: y + REPEATER_BASE_HEIGHT })
-  if (Result.isFailure(base)) {
-    return Result.fail(base.failure)
+  const baseBounds = { ...fullBlockBounds(lx, y, lz), maxY: y + REPEATER_BASE_HEIGHT }
+  const boundaryVisibility = repeaterBoundaryVisibilityOf(context, baseBounds)
+  if (Result.isFailure(boundaryVisibility)) {
+    return Result.fail(boundaryVisibility.failure)
   }
-  const torches = meshRepeaterTorchCells(context, facing.success, delay.success)
-  if (Result.isFailure(torches)) {
-    return Result.fail(torches.failure)
-  }
-  return meshRepeaterLockMarkers(context, facing.success, locked.success)
+  meshRepeaterBoxCell(context, baseBounds, boundaryVisibility.success)
+  meshRepeaterTorchCells(context, facing.success, delay.success)
+  meshRepeaterLockMarkers(context, facing.success, locked.success, boundaryVisibility.success)
+  return Result.void
 }
 
 const meshRailCell = (
@@ -1432,27 +1471,53 @@ const wireBoundsOf = (
   return { minX: lx + maxInset, maxX: lx + UNIT_SIZE, minY: top, maxY: top, minZ: lz + minInset, maxZ: lz + maxInset }
 }
 
+type UpWireVertices = readonly [SpecialVertex, SpecialVertex, SpecialVertex, SpecialVertex]
+type UpWireVertexFactory = (
+  lx: number,
+  lz: number,
+  minInset: number,
+  maxInset: number,
+  low: number,
+  high: number,
+) => UpWireVertices
+
+const UP_WIRE_VERTEX_FACTORIES: Readonly<Record<HorizontalConnection, UpWireVertexFactory>> = {
+  north: (lx, lz, minInset, maxInset, low, high) => [
+    [lx + maxInset, low, lz + minInset],
+    [lx + maxInset, high, lz],
+    [lx + minInset, high, lz],
+    [lx + minInset, low, lz + minInset],
+  ],
+  east: (lx, lz, minInset, maxInset, low, high) => [
+    [lx + maxInset, low, lz + maxInset],
+    [lx + UNIT_SIZE, high, lz + maxInset],
+    [lx + UNIT_SIZE, high, lz + minInset],
+    [lx + maxInset, low, lz + minInset],
+  ],
+  south: (lx, lz, minInset, maxInset, low, high) => [
+    [lx + minInset, low, lz + maxInset],
+    [lx + minInset, high, lz + UNIT_SIZE],
+    [lx + maxInset, high, lz + UNIT_SIZE],
+    [lx + maxInset, low, lz + maxInset],
+  ],
+  west: (lx, lz, minInset, maxInset, low, high) => [
+    [lx + minInset, low, lz + minInset],
+    [lx, high, lz + minInset],
+    [lx, high, lz + maxInset],
+    [lx + minInset, low, lz + maxInset],
+  ],
+}
+
 const upWireVerticesOf = (
   position: BlockPosition,
   direction: HorizontalConnection,
-): readonly [SpecialVertex, SpecialVertex, SpecialVertex, SpecialVertex] => {
+): UpWireVertices => {
   const [lx, y, lz] = position
   const minInset = UNIT_SIZE / 2 - WIRE_EDGE_INSET
   const maxInset = UNIT_SIZE / 2 + WIRE_EDGE_INSET
   const low = y + WIRE_HEIGHT
   const high = y + UNIT_SIZE + WIRE_HEIGHT
-  switch (direction) {
-    case 'north':
-      return [[lx + maxInset, low, lz + minInset], [lx + maxInset, high, lz], [lx + minInset, high, lz], [lx + minInset, low, lz + minInset]]
-    case 'east':
-      return [[lx + maxInset, low, lz + maxInset], [lx + UNIT_SIZE, high, lz + maxInset], [lx + UNIT_SIZE, high, lz + minInset], [lx + maxInset, low, lz + minInset]]
-    case 'south':
-      return [[lx + minInset, low, lz + maxInset], [lx + minInset, high, lz + UNIT_SIZE], [lx + maxInset, high, lz + UNIT_SIZE], [lx + maxInset, low, lz + maxInset]]
-    case 'west':
-      return [[lx + minInset, low, lz + minInset], [lx, high, lz + minInset], [lx, high, lz + maxInset], [lx + minInset, low, lz + maxInset]]
-    default:
-      return assertUnreachable(direction)
-  }
+  return UP_WIRE_VERTEX_FACTORIES[direction](lx, lz, minInset, maxInset, low, high)
 }
 
 const wireQuad = (
@@ -1529,6 +1594,132 @@ const meshPlanarCell = (
   return Result.void
 }
 
+type StatefulSpecialRenderKind = Exclude<SpecialRenderKind, 'cactus' | 'lilyPad'>
+
+type StatefulSpecialCellContext = {
+  readonly result: Array<SpecialBlockQuad>
+  readonly lookup: SpecialBlockLookup
+  readonly chunk: ChunkView
+  readonly neighbours: ChunkNeighbours
+  readonly blockId: BlockId
+  readonly position: BlockPosition
+  readonly blockState: EffectiveBlockStateValues
+  readonly config: MeshConfig
+}
+
+type StatefulSpecialMesher = (context: StatefulSpecialCellContext) => Result.Result<void, SpecialMeshFailure>
+
+const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, StatefulSpecialMesher>> = {
+  door: (context) => meshDoorCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  ladder: (context) => meshLadderCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  lever: (context) => meshLeverCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  pressurePlate: (context) => meshPressurePlateCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  rail: (context) => meshRailCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  redstoneWire: (context) => meshRedstoneWireCell(
+    context.result,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+  ),
+  repeater: (context) => meshRepeaterCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  slab: (context) => meshSlabCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  stairs: (context) => meshStairsCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  stoneButton: (context) => meshStoneButtonCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+  snowLayer: (context) => meshSnowLayerCell(
+    context.result,
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.blockId,
+    context.position,
+    context.blockState,
+    context.config,
+  ),
+}
+
 const meshSpecialCell = (
   result: Array<SpecialBlockQuad>,
   lookup: SpecialBlockLookup,
@@ -1553,32 +1744,7 @@ const meshSpecialCell = (
   if (Result.isFailure(state)) {
     return Result.fail(state.failure)
   }
-  switch (kind) {
-    case 'door':
-      return meshDoorCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'ladder':
-      return meshLadderCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'lever':
-      return meshLeverCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'pressurePlate':
-      return meshPressurePlateCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'rail':
-      return meshRailCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'redstoneWire':
-      return meshRedstoneWireCell(result, chunk, neighbours, blockId, position, state.success)
-    case 'repeater':
-      return meshRepeaterCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'slab':
-      return meshSlabCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'stairs':
-      return meshStairsCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'stoneButton':
-      return meshStoneButtonCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    case 'snowLayer':
-      return meshSnowLayerCell(result, lookup, chunk, neighbours, blockId, position, state.success, config)
-    default:
-      return assertUnreachable(kind)
-  }
+  return STATEFUL_SPECIAL_MESHERS[kind]({ result, lookup, chunk, neighbours, blockId, position, blockState: state.success, config })
 }
 
 /** Meshes every special shape described by mc-kernel's registry. */

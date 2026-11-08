@@ -4,8 +4,10 @@ import { Effect, Option, Result, Schema } from 'effect'
 import { vi } from 'vitest'
 import {
   BLOCK_IDS,
+  BlockId as KernelBlockId,
   ChunkAxis as chunkAxis,
   EffectiveBlockStateValuesSchema,
+  type EffectiveBlockStateValues,
   chunkCoord,
   blockTypeOfId,
   encodeBlockState,
@@ -36,6 +38,7 @@ import { railRenderKindOf } from '../src/domain/special-types'
 
 const MESH_CONFIG = Result.getOrThrow(MINECRAFT_MESH_CONFIG)
 const SPECIAL_LOOKUP = Result.getOrThrow(SPECIAL_BLOCK_LOOKUP)
+const invalidFixture = <T,>(value: any): T => value
 
 const firstBlockId = (renderKind: RenderKind): BlockId =>
   Option.getOrThrow(Option.fromNullishOr(
@@ -159,8 +162,9 @@ describe('kernel-defined special block geometry', () => {
         FastCheck.constantFrom(...facingValues),
         FastCheck.constantFrom('left' as const, 'right' as const),
         FastCheck.boolean(),
-        (facing, hinge, open) => {
-          const encodedState = encodeState(DOOR, { facing, hinge, open, half: 'lower' })
+        FastCheck.constantFrom('lower' as const, 'upper' as const),
+        (facing, hinge, open, half) => {
+          const encodedState = encodeState(DOOR, { facing, hinge, open, half })
           const quads = Result.getOrThrow(meshSpecialBlocks(
             SPECIAL_LOOKUP,
             chunkWithStates([[8, 64, 8, DOOR]], [[8, 64, 8, encodedState]]),
@@ -182,6 +186,7 @@ describe('kernel-defined special block geometry', () => {
           expect(vertexBounds(quads)).toMatchObject(expectedFace === 'north' || expectedFace === 'south'
             ? { minZ: expectedFace === 'north' ? 8 : 9 - 3 / 16, maxZ: expectedFace === 'north' ? 8 + 3 / 16 : 9 }
             : { minX: expectedFace === 'west' ? 8 : 9 - 3 / 16, maxX: expectedFace === 'west' ? 8 + 3 / 16 : 9 })
+          expect(quads.every((quad) => quad.blockState?.half === half)).toBe(true)
         },
       ))
     }),
@@ -283,6 +288,184 @@ describe('kernel-defined special block geometry', () => {
       const railQuads = layers.specialBlocks.filter((quad) => quad.kind === 'rail')
       expect(railQuads.every((quad) => !Object.hasOwn(quad, 'railShape'))).toBe(true)
       expect(railQuads.every((quad) => quad.blockState?.shape === 'east_west')).toBe(true)
+    }),
+  )
+
+  it.effect('meshes every rail shape and each redstone wire arm direction', () =>
+    Effect.sync(() => {
+      const cells: Array<readonly [number, number, number, number]> = []
+      const states: Array<readonly [number, number, number, number]> = []
+      const records: Array<{
+        readonly blockId: BlockId
+        readonly position: readonly [number, number, number]
+        readonly state: Readonly<Record<string, unknown>>
+      }> = []
+      const railRecords: Array<{ readonly record: typeof records[number]; readonly shape: typeof railShapes[number] }> = []
+      const wireRecords: Array<{
+        readonly record: typeof records[number]
+        readonly connection: 'none' | 'side' | 'up'
+      }> = []
+      const place = (blockId: BlockId, state: Readonly<Record<string, unknown>>) => {
+        const index = records.length
+        const position = [(index % 8) * 2, 64, Math.floor(index / 8) * 2] as const
+        cells.push([position[0], position[1], position[2], blockId])
+        states.push([position[0], position[1], position[2], encodeState(blockId, state)])
+        const record = { blockId, position, state }
+        records.push(record)
+        return record
+      }
+
+      const railShapes = [
+        'north_south', 'east_west',
+        'ascending_east', 'ascending_west', 'ascending_north', 'ascending_south',
+        'south_east', 'south_west', 'north_west', 'north_east',
+      ] as const
+      for (const shape of railShapes) {
+        railRecords.push({ record: place(RAIL, { shape }), shape })
+      }
+
+      const directions = ['north', 'east', 'south', 'west'] as const
+      for (const direction of directions) {
+        for (const connection of ['none', 'side', 'up'] as const) {
+          const connections = { north: 'none', east: 'none', south: 'none', west: 'none', [direction]: connection }
+          wireRecords.push({ record: place(REDSTONE_WIRE, { connections, power: 7 }), connection })
+        }
+      }
+
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(cells, states),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const quadsAt = (record: typeof records[number]) => {
+        const [lx, y, lz] = record.position
+        return quads.filter((quad) => quad.vertices.every(([x, vertexY, z]) =>
+          x >= lx && x <= lx + 1 && z >= lz && z <= lz + 1 && vertexY >= y && vertexY <= y + 1 + 1 / 16,
+        ))
+      }
+
+      for (const { record, shape } of railRecords) {
+        const railQuads = quadsAt(record)
+        expect(railQuads).toHaveLength(2)
+        expect(railQuads.every((quad) => quad.kind === 'rail' && quad.blockState?.shape === shape)).toBe(true)
+        const top = railQuads.find((quad) => quad.kind === 'rail' && quad.role === 'top')
+        const expectedTop = shape.startsWith('ascending_') ? 64 + 17 / 16 : 64 + 1 / 16
+        expect(top?.vertices.some(([, y]) => y === expectedTop)).toBe(true)
+      }
+
+      const connectionQuadCounts = { none: 1, side: 2, up: 2 } as const
+      for (const { record, connection } of wireRecords) {
+        const wireQuads = quadsAt(record)
+        expect(wireQuads).toHaveLength(connectionQuadCounts[connection])
+        expect(wireQuads.every((quad) => quad.kind === 'redstoneWire' && quad.blockState?.power === 7)).toBe(true)
+        if (connection === 'up') {
+          expect(wireQuads.some((quad) => quad.vertices.some(([, y]) => y > 64 + 1))).toBe(true)
+        }
+      }
+    }),
+  )
+
+  it.effect('meshes every stair, ladder, button, lever, and repeater state orientation', () =>
+    Effect.sync(() => {
+      const cells: Array<readonly [number, number, number, number]> = []
+      const states: Array<readonly [number, number, number, number]> = []
+      const records: Array<{
+        readonly blockId: BlockId
+        readonly position: readonly [number, number, number]
+        readonly state: Readonly<Record<string, unknown>>
+      }> = []
+      const place = (blockId: BlockId, state: Readonly<Record<string, unknown>>) => {
+        const index = records.length
+        const position = [((index % 8) * 2), 64 + Math.floor(index / 64) * 2, (Math.floor(index % 64 / 8) * 2)] as const
+        cells.push([position[0], position[1], position[2], blockId])
+        states.push([position[0], position[1], position[2], encodeState(blockId, state)])
+        const record = { blockId, position, state }
+        records.push(record)
+        return record
+      }
+
+      const facings = ['north', 'east', 'south', 'west'] as const
+      const stairShapes = ['straight', 'inner_left', 'inner_right', 'outer_left', 'outer_right'] as const
+      for (const facing of facings) {
+        for (const half of ['bottom', 'top'] as const) {
+          for (const shape of stairShapes) {
+            place(STAIRS, { facing, half, shape })
+          }
+        }
+      }
+      for (const facing of facings) {
+        place(LADDER, { facing })
+      }
+      for (const facing of facings) {
+        for (const face of ['floor', 'wall', 'ceiling'] as const) {
+          for (const powered of [false, true]) {
+            place(STONE_BUTTON, { facing, face, powered })
+          }
+        }
+      }
+      const leverRecords = new Map<string, { readonly off: typeof records[number]; readonly on: typeof records[number] }>()
+      for (const facing of facings) {
+        for (const face of ['floor', 'wall', 'ceiling'] as const) {
+          const off = place(LEVER, { facing, face, powered: false })
+          const on = place(LEVER, { facing, face, powered: true })
+          leverRecords.set(`${facing}:${face}`, { off, on })
+        }
+      }
+      const repeaterRecords = new Map<string, { readonly unlocked: typeof records[number]; readonly locked: typeof records[number] }>()
+      for (const facing of facings) {
+        for (const delay of [1, 2, 3, 4] as const) {
+          const unlocked = place(REPEATER, { facing, delay, locked: false })
+          const locked = place(REPEATER, { facing, delay, locked: true })
+          repeaterRecords.set(`${facing}:${delay}`, { unlocked, locked })
+        }
+      }
+
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(cells, states),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const quadsAt = (record: typeof records[number]) => {
+        const [lx, y, lz] = record.position
+        return quads.filter((quad) => quad.vertices.every(([x, vertexY, z]) =>
+          x >= lx && x <= lx + 1 && z >= lz && z <= lz + 1 && vertexY >= y && vertexY <= y + 1,
+        ))
+      }
+      const keyOf = (record: typeof records[number]): string => quadsAt(record)
+        .flatMap((quad) => quad.vertices.map((vertex) => vertex.join(',')))
+        .sort()
+        .join('|')
+
+      for (const record of records) {
+        const cellQuads = quadsAt(record)
+        expect(cellQuads.length).toBeGreaterThan(0)
+        expect(cellQuads.every((quad) => quad.blockId === record.blockId)).toBe(true)
+        for (const [property, value] of Object.entries(record.state)) {
+          expect(cellQuads.every((quad) => {
+            const state = Reflect.get(quad, 'blockState')
+            return typeof state === 'object' && state !== null && Reflect.get(state, property) === value
+          })).toBe(true)
+        }
+      }
+      for (const { off, on } of leverRecords.values()) {
+        const offBounds = vertexBounds(quadsAt(off))
+        const onBounds = vertexBounds(quadsAt(on))
+        expect(offBounds.maxY - offBounds.minY).toBeGreaterThan(onBounds.maxY - onBounds.minY)
+      }
+      for (const [key, { unlocked, locked }] of repeaterRecords) {
+        expect(quadsAt(locked).length).toBeGreaterThan(quadsAt(unlocked).length)
+        if (key.endsWith(':1')) {
+          const facing = key.slice(0, key.indexOf(':'))
+          const fourTick = repeaterRecords.get(`${facing}:4`)?.unlocked
+          expect(fourTick).toBeDefined()
+          if (typeof fourTick === 'undefined') {
+            throw new Error(`Expected four-tick repeater for ${facing}`)
+          }
+          expect(keyOf(unlocked)).not.toBe(keyOf(fourTick))
+        }
+      }
     }),
   )
 
@@ -494,6 +677,40 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
+  it.effect('does not mesh a rail covered by an opaque block', () =>
+    Effect.sync(() => {
+      expect(Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWith([
+          [8, 64, 8, RAIL],
+          [8, 65, 8, OPAQUE_CUBE],
+        ]),
+        {},
+        CHUNK_HEIGHT,
+      ))).toStrictEqual([])
+    }),
+  )
+
+  it.effect('culls repeater boundary faces behind opaque neighbours', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWith([
+          [8, 64, 8, REPEATER],
+          [9, 64, 8, OPAQUE_CUBE],
+        ]),
+        {},
+        CHUNK_HEIGHT,
+        Reflect.get({}, 'region'),
+        MESH_CONFIG,
+      ))
+
+      expect(quads.filter((quad) =>
+        quad.blockId === REPEATER && quad.direction === 'xPos' && quad.vertices.every(([x]) => x === 9),
+      )).toHaveLength(0)
+    }),
+  )
+
   it.effect('rejects the kernel sentinel for rail render geometry', () =>
     Effect.sync(() => {
       expect(railRenderKindOf('normal')).toStrictEqual(Result.succeed('normal'))
@@ -576,6 +793,55 @@ describe('kernel-defined special block geometry', () => {
         _tag: 'Failure',
         failure: { _tag: 'MissingSpecialBlockLookupEntry', blockId: OPAQUE_CUBE },
       })
+    }),
+  )
+
+  it.effect('propagates unregistered neighbour failures through voxel and attached special geometry', () =>
+    Effect.sync(() => {
+      const unknownId = Result.getOrThrow(KernelBlockId.result(300))
+      const cases = [
+        {
+          cells: [[8, 64, 8, STAIRS], [9, 64, 8, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, LEVER], [9, 64, 8, unknownId]] as const,
+          stateCells: [[8, 64, 8, encodeState(LEVER, { facing: 'east', face: 'wall', powered: false })]] as const,
+        },
+        {
+          cells: [[8, 64, 8, REPEATER], [9, 64, 8, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, REPEATER], [7, 64, 8, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, REPEATER], [8, 63, 8, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, REPEATER], [8, 64, 7, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, REPEATER], [8, 64, 9, unknownId]] as const,
+          stateCells: [],
+        },
+        {
+          cells: [[8, 64, 8, RAIL], [8, 65, 8, unknownId]] as const,
+          stateCells: [],
+        },
+      ]
+
+      for (const { cells, stateCells } of cases) {
+        const chunk = stateCells.length === 0
+          ? chunkWith(cells)
+          : chunkWithStates(cells, stateCells)
+        expect(meshSpecialBlocks(SPECIAL_LOOKUP, chunk, {}, CHUNK_HEIGHT, Reflect.get({}, 'region'), MESH_CONFIG)).toStrictEqual(
+          Result.fail({ _tag: 'MissingSpecialBlockLookupEntry', blockId: unknownId }),
+        )
+      }
     }),
   )
 
@@ -700,6 +966,123 @@ describe('kernel-defined special block geometry', () => {
         _tag: 'Failure',
         failure: { _tag: 'MissingRailRenderKind', railKind: 'none' },
       })
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
+  it('propagates kernel block-type lookup failures while building the special lookup', async () => {
+    vi.resetModules()
+    const failure = { _tag: 'InjectedBlockTypeFailure' }
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      const mockedBlockTypeOfId: typeof kernel.blockTypeOfId = (blockId) => blockId === CACTUS
+        ? invalidFixture(Result.fail(failure))
+        : kernel.blockTypeOfId(blockId)
+      return {
+        ...kernel,
+        blockTypeOfId: mockedBlockTypeOfId,
+      }
+    })
+    try {
+      const { SPECIAL_BLOCK_LOOKUP: lookupResult } = await import('../src/domain/special-mesh.js')
+      expect(lookupResult).toStrictEqual(Result.fail(failure))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
+  it('rejects a registered special block whose kernel lookup omits its block type', async () => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      const mockedBlockTypeOfId: typeof kernel.blockTypeOfId = (blockId) => blockId === CACTUS
+        ? Result.succeed(Reflect.get({}, 'type'))
+        : kernel.blockTypeOfId(blockId)
+      return { ...kernel, blockTypeOfId: mockedBlockTypeOfId }
+    })
+    try {
+      const { SPECIAL_BLOCK_LOOKUP: lookupResult } = await import('../src/domain/special-mesh.js')
+      expect(lookupResult).toStrictEqual(Result.fail({ _tag: 'MissingSpecialBlockType', blockId: CACTUS }))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
+  it('returns typed failures for malformed effective state properties', async () => {
+    vi.resetModules()
+    let effectiveState = invalidFixture<EffectiveBlockStateValues>({})
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        effectiveBlockStateOf: invalidFixture<typeof kernel.effectiveBlockStateOf>(
+          () => Result.succeed(effectiveState),
+        ),
+      }
+    })
+    try {
+      const { SPECIAL_BLOCK_LOOKUP: lookupResult, meshSpecialBlocks: meshSpecials } =
+        await import('../src/domain/special-mesh.js')
+      const lookup = Result.getOrThrow(lookupResult)
+      const invalidCases: ReadonlyArray<{
+        readonly blockId: BlockId
+        readonly state: Readonly<Record<string, unknown>>
+        readonly property: string
+      }> = [
+        { blockId: STAIRS, state: {}, property: 'facing' },
+        { blockId: STAIRS, state: { facing: 'north' }, property: 'half' },
+        { blockId: STAIRS, state: { facing: 'north', half: 'bottom' }, property: 'shape' },
+        { blockId: DOOR, state: {}, property: 'facing' },
+        { blockId: DOOR, state: { facing: 'north' }, property: 'hinge' },
+        { blockId: DOOR, state: { facing: 'north', hinge: 'middle' }, property: 'hinge' },
+        { blockId: DOOR, state: { facing: 'north', hinge: 'left', half: 'middle' }, property: 'half' },
+        { blockId: DOOR, state: { facing: 'north', hinge: 'left', half: 'lower' }, property: 'open' },
+        { blockId: DOOR, state: { facing: 'north', hinge: 'left', half: 'lower', open: 'false' }, property: 'open' },
+        { blockId: SLAB, state: {}, property: 'type' },
+        { blockId: SLAB, state: { type: 'middle' }, property: 'type' },
+        { blockId: PRESSURE_PLATE, state: {}, property: 'powered' },
+        { blockId: PRESSURE_PLATE, state: { powered: 1 }, property: 'powered' },
+        { blockId: SNOW, state: {}, property: 'layers' },
+        { blockId: SNOW, state: { layers: 9 }, property: 'layers' },
+        { blockId: LADDER, state: {}, property: 'facing' },
+        { blockId: STONE_BUTTON, state: {}, property: 'facing' },
+        { blockId: STONE_BUTTON, state: { facing: 'north' }, property: 'face' },
+        { blockId: STONE_BUTTON, state: { facing: 'north', face: 'side' }, property: 'face' },
+        { blockId: STONE_BUTTON, state: { facing: 'north', face: 'floor' }, property: 'powered' },
+        { blockId: STONE_BUTTON, state: { facing: 'north', face: 'floor', powered: 1 }, property: 'powered' },
+        { blockId: LEVER, state: {}, property: 'facing' },
+        { blockId: LEVER, state: { facing: 'north' }, property: 'face' },
+        { blockId: LEVER, state: { facing: 'north', face: 'side' }, property: 'face' },
+        { blockId: LEVER, state: { facing: 'north', face: 'floor' }, property: 'powered' },
+        { blockId: LEVER, state: { facing: 'north', face: 'floor', powered: 1 }, property: 'powered' },
+        { blockId: REPEATER, state: {}, property: 'facing' },
+        { blockId: REPEATER, state: { facing: 'north' }, property: 'delay' },
+        { blockId: REPEATER, state: { facing: 'north', delay: 5 }, property: 'delay' },
+        { blockId: REPEATER, state: { facing: 'north', delay: 1 }, property: 'locked' },
+        { blockId: REPEATER, state: { facing: 'north', delay: 1, locked: 1 }, property: 'locked' },
+        { blockId: RAIL, state: { shape: 'invalid' }, property: 'shape' },
+        { blockId: REDSTONE_WIRE, state: {}, property: 'connections' },
+        { blockId: REDSTONE_WIRE, state: { connections: { north: 'diagonal', east: 'none', south: 'none', west: 'none' } }, property: 'connections.north' },
+      ]
+
+      for (const { blockId, state, property } of invalidCases) {
+        effectiveState = invalidFixture<EffectiveBlockStateValues>(state)
+        const result = meshSpecials(
+          lookup,
+          chunkWithStates([[8, 64, 8, blockId]], [[8, 64, 8, 0]]),
+          {},
+          CHUNK_HEIGHT,
+        )
+        expect(result).toStrictEqual(Result.fail({
+          _tag: 'InvalidBlockStateModelProperty',
+          blockId,
+          property,
+        }))
+      }
     } finally {
       vi.doUnmock('@nerima-games/mc-kernel')
       vi.resetModules()

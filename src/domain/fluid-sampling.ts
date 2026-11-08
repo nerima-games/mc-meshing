@@ -1,6 +1,7 @@
 import { Result } from 'effect'
 import {
   BlockId as KernelBlockId,
+  FLUID_LEVEL_MAX,
   FLOWING_FLUID_LEVEL,
   blockTypeOfId,
   type EffectiveBlockStateValues,
@@ -31,6 +32,7 @@ const INDEX_TO_COUNT_OFFSET = 1
 const FLUID_LOOKUP_UNSET = 0
 const MIN_FLUID_LEVEL = 0
 const MAX_FLUID_LEVEL = 0xff
+const MAX_FLUID_STATE_LEVEL = FLUID_LEVEL_MAX
 const FULL_HEIGHT = 1
 const ZERO_INDEX = 0
 const CORNER_WINDOW_START_OFFSET = 1
@@ -66,9 +68,7 @@ type BlockIdValidationFailure = ReturnType<typeof KernelBlockId.result> extends 
 
 export type FluidLookupFailure =
   | BlockIdValidationFailure
-  | { readonly _tag: 'InvalidFluidLookupLength'; readonly actual: number; readonly expected: number }
   | { readonly _tag: 'InvalidFluidMaxLevel'; readonly blockId: BlockId; readonly maxLevel: number }
-  | { readonly _tag: 'MissingFluidLookupEntry'; readonly blockId: BlockId }
 
 export type FluidViewFailure =
   | {
@@ -82,6 +82,15 @@ export type FluidViewFailure =
       readonly _tag: 'InvalidFluidView'
       readonly coord: ChunkView['coord']
       readonly field: 'falling' | 'fluid' | 'levels' | 'sources'
+    }
+
+export type FluidSamplingFailure =
+  | ChunkViewFailure
+  | {
+      readonly _tag: 'InvalidFluidBlockStateLevel'
+      readonly blockId: BlockId
+      readonly index: ChunkBlockIndex
+      readonly level: unknown
     }
 
 const FLUID_LOOKUP_DATA_VIEWS = new WeakMap<Uint16Array, DataView>()
@@ -197,28 +206,6 @@ export const isFluidBlock = (lookup: Uint16Array, blockId: BlockId): boolean => 
   return typeof entry !== 'undefined' && entry !== FLUID_LOOKUP_UNSET
 }
 
-/**
- * Exported so the defensive branch (a `blockId` genuinely absent from
- * `lookup`, which every caller only reaches after `isFluidBlock` has already
- * confirmed presence) has a direct test instead of an untestable one buried
- * inside callers that never violate that precondition.
- */
-export const maxLevelOf = (lookup: Uint16Array, blockId: BlockId): Result.Result<number, FluidLookupFailure> => {
-  const expectedLength = MAX_BLOCK_ID + INDEX_TO_COUNT_OFFSET
-  if (lookup.length !== expectedLength) {
-    return Result.fail({ _tag: 'InvalidFluidLookupLength', actual: lookup.length, expected: expectedLength })
-  }
-  const validBlockId = KernelBlockId.result(blockId)
-  if (Result.isFailure(validBlockId)) {
-    return Result.fail(validBlockId.failure)
-  }
-  const entry = lookup[validBlockId.success]
-  if (typeof entry === 'undefined' || entry === FLUID_LOOKUP_UNSET) {
-    return Result.fail({ _tag: 'MissingFluidLookupEntry', blockId: validBlockId.success })
-  }
-  return Result.succeed(entry - INDEX_TO_COUNT_OFFSET)
-}
-
 const heightForLevel = (level: number, maxLevel: number, source: boolean): number => {
   if (source) {
     return SOURCE_SURFACE_HEIGHT
@@ -244,13 +231,14 @@ export type FluidSpace = {
   readonly context: FluidContext
   readonly fluidViews?: ReadonlyMap<ChunkView, FluidView>
   readonly blockStateSamples?: Map<ChunkView, Map<ChunkBlockIndex, FluidBlockStateSample | null>>
-  readonly stateFailure?: { failure: ChunkViewFailure | null }
+  readonly stateFailure: { failure: FluidSamplingFailure | null }
 }
 
 type FluidBlockStateSample = {
   readonly blockState: EffectiveBlockStateValues
   readonly falling: boolean
   readonly level: number
+  readonly maximum: number
   readonly source: boolean
 }
 
@@ -296,44 +284,87 @@ const fallingIn = (fluid: FluidView | undefined, index: number): boolean => {
   return fluidArrayValueAt(fluid.falling, index) !== FLUID_LOOKUP_UNSET
 }
 
-const stateSampleFor = (
+const blockStateSampleCacheFor = (
   space: FluidSpace,
   view: ChunkView,
-  index: ChunkBlockIndex,
-  blockId: BlockId,
-): FluidBlockStateSample | null => {
+): Map<ChunkBlockIndex, FluidBlockStateSample | null> | undefined => {
   const samples = space.blockStateSamples
   let viewSamples = samples?.get(view)
   if (samples && !viewSamples) {
     viewSamples = new Map()
     samples.set(view, viewSamples)
   }
+  return viewSamples
+}
+
+const keepFirstStateFailure = (space: FluidSpace, failure: FluidSamplingFailure): void => {
+  if (space.stateFailure.failure === null) {
+    space.stateFailure.failure = failure
+  }
+}
+
+const rememberUnknownBlockStateFailure = (space: FluidSpace, view: ChunkView, index: ChunkBlockIndex): void => {
+  if (typeof view.blockStates === 'undefined') {
+    return
+  }
+  const state = blockStateAt(view, index)
+  if (Result.isFailure(state)) {
+    keepFirstStateFailure(space, state.failure)
+  }
+}
+
+const rememberNoFluidSample = (
+  viewSamples: Map<ChunkBlockIndex, FluidBlockStateSample | null> | undefined,
+  index: ChunkBlockIndex,
+): null => {
+  viewSamples?.set(index, null)
+  return null
+}
+
+const isFluidBlockType = (blockType: string | undefined): boolean => blockType === 'water' || blockType === 'lava'
+
+const isFluidStateLevel = (rawLevel: unknown): rawLevel is number =>
+  typeof rawLevel === 'number' && Number.isInteger(rawLevel) &&
+  rawLevel >= MIN_FLUID_LEVEL && rawLevel <= MAX_FLUID_STATE_LEVEL
+
+const stateSampleFor = (
+  space: FluidSpace,
+  view: ChunkView,
+  index: ChunkBlockIndex,
+  blockId: BlockId,
+): FluidBlockStateSample | null => {
+  const viewSamples = blockStateSampleCacheFor(space, view)
   if (viewSamples?.has(index)) {
     return viewSamples.get(index) ?? null
   }
 
   const blockType = blockTypeOfId(blockId)
-  if (Result.isFailure(blockType) || (blockType.success !== 'water' && blockType.success !== 'lava')) {
-    viewSamples?.set(index, null)
-    return null
+  if (Result.isFailure(blockType) || typeof blockType.success !== 'string') {
+    rememberUnknownBlockStateFailure(space, view, index)
+    return rememberNoFluidSample(viewSamples, index)
+  }
+  if (!isFluidBlockType(blockType.success)) {
+    return rememberNoFluidSample(viewSamples, index)
   }
 
   const state = blockStateAt(view, index)
   if (Result.isFailure(state)) {
-    if (space.stateFailure && space.stateFailure.failure === null) {
-      space.stateFailure.failure = state.failure
-    }
-    viewSamples?.set(index, null)
-    return null
+    keepFirstStateFailure(space, state.failure)
+    return rememberNoFluidSample(viewSamples, index)
   }
 
-  const rawLevel = state.success.level ?? 0
+  const rawLevel = state.success.level
+  if (!isFluidStateLevel(rawLevel)) {
+    keepFirstStateFailure(space, { _tag: 'InvalidFluidBlockStateLevel', blockId, index, level: rawLevel })
+    return rememberNoFluidSample(viewSamples, index)
+  }
   const maximum = encodedLevelForKnownFluid(space.context.fluids, blockId) - INDEX_TO_COUNT_OFFSET
   const level = Math.min(maximum, Math.ceil((rawLevel * maximum) / FLOWING_FLUID_LEVEL))
   const sample: FluidBlockStateSample = {
     blockState: state.success,
     falling: rawLevel >= FIRST_FALLING_FLUID_LEVEL,
     level,
+    maximum,
     source: rawLevel === ZERO_INDEX,
   }
   viewSamples?.set(index, sample)
@@ -370,7 +401,7 @@ const heightInView = (space: FluidSpace, view: ChunkView, position: FluidPositio
       if (state.falling) {
         return FULL_HEIGHT
       }
-      return heightForLevel(state.level, encodedLevelForKnownFluid(space.context.fluids, wantId) - INDEX_TO_COUNT_OFFSET, state.source)
+      return heightForLevel(state.level, state.maximum, state.source)
     }
   }
   return heightForLevel(

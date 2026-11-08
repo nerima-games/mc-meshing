@@ -7,7 +7,6 @@ import {
   type ChunkView,
   type ChunkViewFailure,
   blockIndex,
-  blockStateAt,
   getBlockAcrossBoundary,
 } from './chunk-view.js'
 import { FACES, type Face, type FacePlacement, facePlacementOf } from './faces.js'
@@ -26,6 +25,7 @@ import { isCrossPlant } from './plant-mesh.js'
 import { isFluidBlock } from './fluid-mesh.js'
 import { isSpecialBlock, type SpecialBlockLookup } from './special-mesh.js'
 import { quadLightAt } from './light-sampling.js'
+import { meshBlockStateReaderFor, type MeshBlockStateReader } from './mesh-state-reader.js'
 
 const OPAQUE_LAYER = MESH_LAYERS.indexOf('opaque')
 /**
@@ -246,22 +246,9 @@ const growRuns = (
   return [innerRun, outerRun]
 }
 
-/**
- * Read one cell out of a greedy-expansion mask. Exported so the defensive
- * branch (an index `expandGreedy`'s loop bounds should never produce) has a
- * direct test instead of an untestable one buried inside `expandCell`.
- */
 export type GreedyMaskFailure = {
   readonly _tag: 'GreedyMaskIndexOutOfRange'
   readonly index: number
-}
-
-export const maskCellAt = (mask: Uint32Array, base: number): Result.Result<number, GreedyMaskFailure> => {
-  const cell = mask[base]
-  if (typeof cell === 'undefined') {
-    return Result.fail({ _tag: 'GreedyMaskIndexOutOfRange', index: base })
-  }
-  return Result.succeed(cell)
 }
 
 const expandCell = (ctx: GreedyExpansionContext, depth: number, outer: number, inner: number): void => {
@@ -308,6 +295,7 @@ type ColumnPassContext = {
   readonly light: LightMasks | undefined
   readonly region: MeshRegion | undefined
   readonly maskFailure: { failure: Option.Option<GreedyMaskFailure> }
+  readonly readBlockState: MeshBlockStateReader
   readonly stateFailure: { failure: Option.Option<ChunkViewFailure> }
 }
 
@@ -371,14 +359,13 @@ const resolveExposedCell = (
   cellIndex: ChunkBlockIndex,
 ): void => {
   if (isFaceExposed(ctx, blockId, neighbourId)) {
-    const encodedState = ctx.chunk.blockStates?.[cellIndex] ?? NO_FACE
     const isOpaque = layerAt(ctx.lookup, blockId) === OPAQUE_LAYER
     const ao = ambientOcclusionAt(ctx.chunk, ctx.neighbours, ctx.face.direction, lx, y, lz)
     const light = lightAt(ctx, lx, y, lz)
     if (isOpaque) {
       ctx.mask[maskIndex] = packFaceCell(blockId, ao)
       if (ctx.blockStateMask) {
-        ctx.blockStateMask[maskIndex] = encodedState
+        ctx.blockStateMask[maskIndex] = ctx.chunk.blockStates?.[cellIndex] ?? NO_FACE
       }
       if (ctx.light && light) {
         ctx.light.block[maskIndex] = packLightChannel(light, 'block')
@@ -387,7 +374,7 @@ const resolveExposedCell = (
       return
     }
 
-    const stateResult = blockStateAt(ctx.chunk, cellIndex)
+    const stateResult = ctx.readBlockState(blockId, cellIndex)
     if (Result.isFailure(stateResult)) {
       keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
       return
@@ -506,7 +493,10 @@ const meshXPass = (ctx: MeshPassContext): void => {
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
-    const stateResult = blockStateAt(ctx.chunk, blockIndex(depth, inner, outer, ctx.chunk.height))
+    const stateResult = ctx.readBlockState(
+      faceCellBlockId(cell),
+      blockIndex(depth, inner, outer, ctx.chunk.height),
+    )
     if (Result.isFailure(stateResult)) {
       keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
       return
@@ -547,7 +537,10 @@ const meshYPass = (ctx: MeshPassContext): void => {
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
-    const stateResult = blockStateAt(ctx.chunk, blockIndex(outer, depth, inner, ctx.chunk.height))
+    const stateResult = ctx.readBlockState(
+      faceCellBlockId(cell),
+      blockIndex(outer, depth, inner, ctx.chunk.height),
+    )
     if (Result.isFailure(stateResult)) {
       keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
       return
@@ -588,7 +581,10 @@ const meshZPass = (ctx: MeshPassContext): void => {
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
-    const stateResult = blockStateAt(ctx.chunk, blockIndex(outer, inner, depth, ctx.chunk.height))
+    const stateResult = ctx.readBlockState(
+      faceCellBlockId(cell),
+      blockIndex(outer, inner, depth, ctx.chunk.height),
+    )
     if (Result.isFailure(stateResult)) {
       keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
       return
@@ -637,6 +633,7 @@ export const meshAllFaces = (
 ): Result.Result<void, GreedyMaskFailure | ChunkViewFailure> => {
   const maskFailure: { failure: Option.Option<GreedyMaskFailure> } = { failure: Option.none() }
   const stateFailure: { failure: Option.Option<ChunkViewFailure> } = { failure: Option.none() }
+  const readBlockState = meshBlockStateReaderFor(ctx.chunk)
   for (const face of FACES) {
     const faceContext: MeshPassContext = {
       chunk: ctx.chunk,
@@ -653,6 +650,7 @@ export const meshAllFaces = (
       push: ctx.push,
       region: ctx.region,
       maskFailure,
+      readBlockState,
       stateFailure,
       yLimit: ctx.yLimit,
     }

@@ -3,19 +3,9 @@ import { Result } from 'effect'
 import { AO_MAX } from '../src/domain/ambient-occlusion.js'
 import { MAX_BLOCK_ID } from '../src/domain/block-data.js'
 import { emptyChunk } from '../src/domain/chunk-view.js'
-import { faceCellAo, faceCellBlockId, maskCellAt, meshAllFaces, packFaceCell } from '../src/domain/mesh-greedy.js'
+import { faceCellAo, faceCellBlockId, meshAllFaces, packFaceCell } from '../src/domain/mesh-greedy.js'
 import { layerLookupFromTable } from '../src/domain/mesh-support.js'
 import { SPECIAL_BLOCK_LOOKUP } from '../src/domain/special-mesh.js'
-
-describe('maskCellAt', () => {
-  it('rejects a mask index outside the mask array', () => {
-    const mask = new Uint32Array([0, 5, 9])
-    expect(maskCellAt(mask, 1)).toStrictEqual(Result.succeed(5))
-    expect(maskCellAt(mask, 3)).toStrictEqual(
-      Result.fail({ _tag: 'GreedyMaskIndexOutOfRange', index: 3 }),
-    )
-  })
-})
 
 describe('greedy face expansion', () => {
   it('returns the first out-of-range mask index instead of expanding from a short work buffer', () => {
@@ -38,8 +28,7 @@ describe('greedy face expansion', () => {
 
 describe('packed face cells', () => {
   it('keeps the full 16-bit block id below ambient-occlusion bits', () => {
-    const mask = new Uint32Array([packFaceCell(MAX_BLOCK_ID, AO_MAX)])
-    const packed = Result.getOrThrow(maskCellAt(mask, 0))
+    const packed = packFaceCell(MAX_BLOCK_ID, AO_MAX)
 
     expect(faceCellBlockId(packed)).toBe(MAX_BLOCK_ID)
     expect(faceCellAo(packed)).toBe(AO_MAX)

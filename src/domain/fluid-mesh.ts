@@ -5,13 +5,13 @@ import {
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
-  type ChunkViewFailure,
   type FluidView,
   getBlock,
   getBlockAcrossBoundary,
 } from './chunk-view.js'
 import {
   type FluidPosition,
+  type FluidSamplingFailure,
   type FluidSpace,
   type FluidViewFailure,
   blockStateIn,
@@ -27,7 +27,7 @@ import { type FluidQuad, NO_FLUID_QUADS } from './fluid-types.js'
 import { quadLightAt } from './light-sampling.js'
 
 export type { FluidFlow, FluidQuad, FluidVertex } from './fluid-types.js'
-export type { FluidLookupFailure, FluidViewFailure } from './fluid-sampling.js'
+export type { FluidLookupFailure, FluidSamplingFailure, FluidViewFailure } from './fluid-sampling.js'
 export { buildFluidLookup, isFluidBlock, SOURCE_SURFACE_HEIGHT } from './fluid-sampling.js'
 
 const NO_FLUID = -1
@@ -62,7 +62,7 @@ type FluidCell = {
   readonly space: FluidSpace
   readonly position: FluidPosition
   readonly blockId: BlockId
-  readonly blockState: FluidQuad['blockState']
+  readonly blockState?: FluidQuad['blockState']
   readonly here: number
   readonly corners: readonly [number, number, number, number]
 }
@@ -309,7 +309,9 @@ const meshFluidCell = (
 ): void => {
   const cell: FluidCell = {
     blockId,
-    blockState: blockStateIn(space, position, blockId),
+    ...(typeof space.chunk.blockStates !== 'undefined' || space.fluidViews?.has(space.chunk) !== true
+      ? { blockState: blockStateIn(space, position, blockId) }
+      : {}),
     corners: topPatchCorners(space, position, blockId),
     here: heightIn(space, position, blockId),
     position,
@@ -340,9 +342,9 @@ const meshFluidCellsInBounds = (
     readonly max: readonly [number, number, number]
   },
   fluidViews: ReadonlyMap<ChunkView, FluidView>,
-): Result.Result<ReadonlyArray<FluidQuad>, ChunkViewFailure> => {
+): Result.Result<ReadonlyArray<FluidQuad>, FluidSamplingFailure> => {
   const quads: Array<FluidQuad> = []
-  const stateFailure: { failure: ChunkViewFailure | null } = { failure: null }
+  const stateFailure: { failure: FluidSamplingFailure | null } = { failure: null }
   const space: FluidSpace = {
     chunk,
     context: { fluids, layers, plants },
@@ -381,7 +383,7 @@ export const meshFluidSurfaces = (
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
   } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: [ZERO_INDEX, ZERO_INDEX, ZERO_INDEX] },
-): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure | ChunkViewFailure> =>
+): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure | FluidSamplingFailure> =>
   Result.flatMap(validateFluidViews(chunk, neighbours), (fluidViews) => {
     if (!anyFluidConfigured(fluids)) {
       return Result.succeed(NO_FLUID_QUADS)

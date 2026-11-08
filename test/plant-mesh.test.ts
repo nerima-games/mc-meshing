@@ -12,14 +12,17 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result, SchemaParser } from 'effect'
+import { vi } from 'vitest'
 import * as FastCheck from 'fast-check'
 import {
   BlockId as KernelBlockId,
   ChunkAxis as chunkAxis,
   blockIdOf,
+  blockTypeOfId,
   chunkCoord,
   encodeBlockState,
   type BlockId,
+  type EffectiveBlockStateValues,
 } from '@nerima-games/mc-kernel'
 import {
   BLOCKS_PER_CHUNK,
@@ -45,6 +48,7 @@ import {
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const blockId = (value: number): BlockId => Result.getOrThrow(KernelBlockId.result(value))
+const invalidFixture = <T,>(value: any): T => value
 
 const STONE = blockId(1)
 const GLASS = blockId(2)
@@ -596,4 +600,54 @@ describe('crop texture stages', () => {
       })
     }),
   )
+
+  it.effect('returns no texture stage for non-plants and propagates unknown block ids', () =>
+    Effect.sync(() => {
+      const index = blockIndex(4, 30, 5)
+      const stone = Option.getOrThrow(blockIdOf('stone'))
+      expect(plantTextureStageAt(chunkWith([[4, 30, 5, stone]]), index)).toStrictEqual(Result.succeed(Option.none()))
+
+      const unknownId = blockId(300)
+      const unknownType = blockTypeOfId(unknownId)
+      expect(unknownType).toStrictEqual(Result.succeed(Reflect.get({}, 'missing')))
+      expect(plantTextureStageAt(chunkWith([[4, 30, 5, unknownId]]), index)).toStrictEqual(Result.succeed(Option.none()))
+
+      const encodedStates = new Uint32Array(BLOCKS_PER_CHUNK)
+      const unknownWithStates: ChunkView = {
+        ...chunkWith([[4, 30, 5, unknownId]]),
+        blockStates: encodedStates,
+      }
+      expect(plantTextureStageAt(unknownWithStates, index)).toMatchObject({
+        failure: { _tag: 'ChunkBlockStateCodecFailure', blockId: unknownId, index, reason: 'unknown-block-id' },
+      })
+    }),
+  )
+
+  it('returns a typed failure if a kernel crop state has no texture stage', async () => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        effectiveBlockStateOf: invalidFixture<typeof kernel.effectiveBlockStateOf>(
+          () => Result.succeed(invalidFixture<EffectiveBlockStateValues>({ age: 8 })),
+        ),
+      }
+    })
+    try {
+      const { plantTextureStageAt: selectStage } = await import('../src/domain/plant-mesh.js')
+      const { chunk, index } = cropChunk('wheat_crop', 0)
+      expect(selectStage(chunk, index)).toMatchObject({
+        failure: {
+          _tag: 'InvalidPlantTextureStage',
+          blockType: 'wheat_crop',
+          blockId: Option.getOrThrow(blockIdOf('wheat_crop')),
+          stage: 8,
+        },
+      })
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
 })
