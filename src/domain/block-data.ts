@@ -4,6 +4,8 @@ import {
   AIR_BLOCK_ID,
   BLOCK_ID_MAX,
   BLOCK_IDS,
+  FLOWING_FLUID_LEVEL,
+  FLUID_LEVEL_STEP,
   type BlockId,
   type RenderKind,
   blockIdsWithOpacity as kernelBlockIdsWithOpacity,
@@ -82,13 +84,12 @@ export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: Result.Result<
   BlockRegistryResolutionFailure
 > = blockIdsWithRenderKind('cross')
 
-/**
- * The kernel exposes fluid kind but not the state-propagation level ceiling.
- * These are Minecraft's meshing-state ceilings, kept here until that state
- * becomes part of the kernel's public registry contract.
- */
-const WATER_MAX_LEVEL = 7
-const LAVA_MAX_LEVEL = 3
+/** Overworld and End lava skips one fluid level between flowing blocks. */
+const LAVA_LEVELS_PER_BLOCK = 2
+const WATER_MAX_LEVEL = FLOWING_FLUID_LEVEL / FLUID_LEVEL_STEP
+const LAVA_MAX_LEVEL = Math.floor(
+  FLOWING_FLUID_LEVEL / (LAVA_LEVELS_PER_BLOCK * FLUID_LEVEL_STEP),
+)
 
 export type MissingFluidKindFailure = {
   readonly _tag: 'MissingFluidKind'

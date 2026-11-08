@@ -16,7 +16,7 @@
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result } from 'effect'
 import * as FastCheck from 'fast-check'
-import { BlockId as KernelBlockId, ChunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { BlockId as KernelBlockId, ChunkAxis, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { MAX_BLOCK_ID, type BlockId } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
@@ -113,6 +113,15 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
   return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
 }
 
+const chunkWithBlockState = (blockId: BlockId, state: unknown): ChunkView => {
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+  const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+  blocks[index] = blockId
+  blockStates[index] = expectSuccess(encodeBlockState(blockId, state))
+  return { blockStates, blocks, coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT }
+}
+
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
 const faceOfDirection = (quads: ReadonlyArray<FluidQuad>, direction: string): FluidQuad | undefined => {
   const found = quads.filter((quad) => quad.direction === direction)
@@ -189,6 +198,39 @@ describe('the height of one cell', () => {
       expect(heightOf(LAVA, 0)).toBe(1)
       expect(heightOf(LAVA, 1)).toBe(3 / 4)
       expect(heightOf(LAVA, 3)).toBe(1 / 4)
+    }),
+  )
+
+  it.effect('uses encoded water and lava levels when no fluid sidecar is present', () =>
+    Effect.sync(() => {
+      const heightOfState = (blockId: BlockId, level: number): number => {
+        const chunk = chunkWithBlockState(blockId, { level })
+        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
+        return expectDefined(top, 'Expected a visible fluid surface').vertices[0][1] - 64
+      }
+
+      expect(heightOfState(WATER, 0)).toBe(SOURCE_SURFACE_HEIGHT)
+      expect(heightOfState(WATER, 7)).toBe(1 / 8)
+      expect(heightOfState(WATER, 8)).toBe(1)
+      expect(heightOfState(LAVA, 0)).toBe(SOURCE_SURFACE_HEIGHT)
+      expect(heightOfState(LAVA, 6)).toBe(1 / 4)
+
+      const waterTop = faceOfDirection(meshChunk(chunkWithBlockState(WATER, { level: 6 }), {}, CONFIG).fluids, 'yPos')
+      expect(waterTop?.blockState?.level).toBe(6)
+    }),
+  )
+
+  it.effect('returns a typed codec failure for malformed fluid block state during meshing', () =>
+    Effect.sync(() => {
+      const chunk = chunkWithBlockState(WATER, { level: 0 })
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const blockStates = new Uint32Array(expectDefined(chunk.blockStates, 'expected encoded block states'))
+      blockStates[index] = 0xffff_ffff
+      const malformed: ChunkView = { ...chunk, blockStates }
+
+      expect(meshChunkResult(malformed, {}, CONFIG)).toMatchObject({
+        failure: { _tag: 'ChunkBlockStateCodecFailure', blockId: WATER, index },
+      })
     }),
   )
 
@@ -318,16 +360,14 @@ describe('the height of one cell', () => {
     }),
   )
 
-  it.effect('a missing FluidView reads as full, non-source cells rather than as no fluid', () =>
+  it.effect('a missing FluidView uses the kernel default fluid state rather than hiding the fluid', () =>
     Effect.sync(() => {
-      // A caller holding block ids but no simulation state yet gets flat
-      // Full-height fluid. The alternative — treating absent state as absent
-      // Fluid — makes every lake INVISIBLE, because the cube passes have already
-      // Skipped it. Same instinct as `getBlock` returning AIR for an absent
-      // Neighbour: degrade to the answer that still shows the player a world.
+      // Kernel's default level 0 is a source, so its surface sits at 14/16.
+      // The fallback still emits the fluid instead of treating absent sidecars
+      // as absent fluid, because the cube passes have already skipped it.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]]), {}, CONFIG)
       const top = faceOfDirection(layers.fluids, 'yPos')
-      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([64.875, 64.875, 64.875, 64.875])
     }),
   )
 

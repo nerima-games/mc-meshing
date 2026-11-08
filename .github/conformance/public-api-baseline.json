@@ -96,12 +96,6 @@
     "text": "number"
   },
   {
-    "count": 2,
-    "file": "src/domain/chunk-view.ts",
-    "ruleId": "no-raw-exported-function-return",
-    "text": "number"
-  },
-  {
     "count": 4,
     "file": "src/domain/fluid-sampling.ts",
     "ruleId": "no-raw-exported-function-return",

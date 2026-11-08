@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { Result } from 'effect'
-import { ChunkAxis as chunkAxis, chunkCoord } from '@nerima-games/mc-kernel'
+import { Option, Result } from 'effect'
+import * as FastCheck from 'fast-check'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import {
   CHUNK_SIZE,
   blockIndex,
@@ -23,6 +24,17 @@ const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): V
     throw new Error(`Unexpected Result failure: ${JSON.stringify(result.failure)}`)
   }
   return result.success
+}
+
+const sampleChunkWithLogAxis = (axis: 'x' | 'y' | 'z'): ChunkView => {
+  const height = 4
+  const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
+  const blockStates = new Uint32Array(blocks.length)
+  const index = blockIndex(1, 1, 1, height)
+  const logId = Option.getOrThrow(blockIdOf('oak_log'))
+  blocks[index] = logId
+  blockStates[index] = expectSuccess(encodeBlockState(logId, { axis }))
+  return { blocks, blockStates, coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height }
 }
 
 const meshChunk = (...args: Parameters<typeof meshChunkResult>) => expectSuccess(meshChunkResult(...args))
@@ -59,6 +71,22 @@ describe('mesh scratch workspace', () => {
     )
   })
 
+  it('allocates and reuses a block-state mask only for stateful chunks', () => {
+    FastCheck.assert(
+      FastCheck.property(FastCheck.integer({ min: 0, max: 64 }), (required) => {
+        const scratch = createMeshScratch()
+        const first = expectSuccess(scratch.buffersFor(required, false, true))
+        const repeated = expectSuccess(scratch.buffersFor(required, false, true))
+        const stateless = expectSuccess(scratch.buffersFor(required, false))
+
+        expect(first.blockStateMask).toHaveLength(required)
+        expect(repeated.blockStateMask).toBe(first.blockStateMask)
+        expect(stateless.blockStateMask).toBeUndefined()
+      }),
+      { numRuns: 80 },
+    )
+  })
+
   it('keeps cold and reusable meshing equivalent without aliasing output', () => {
     const scratch = createMeshScratch()
     const chunk = sampleChunk()
@@ -70,6 +98,21 @@ describe('mesh scratch workspace', () => {
 
     meshChunk(sampleChunk(), {}, EMPTY_MESH_CONFIG, scratch)
     expect(JSON.stringify(warm)).toBe(snapshot)
+  })
+
+  it('reuses the state mask across chunks with different model selectors', () => {
+    const scratch = createMeshScratch()
+    const firstChunk = sampleChunkWithLogAxis('x')
+    const secondChunk = sampleChunkWithLogAxis('z')
+    const firstCold = meshChunk(firstChunk, {}, EMPTY_MESH_CONFIG)
+    const secondCold = meshChunk(secondChunk, {}, EMPTY_MESH_CONFIG)
+    const firstWarm = meshChunk(firstChunk, {}, EMPTY_MESH_CONFIG, scratch)
+    const firstSnapshot = JSON.stringify(firstWarm)
+    const secondWarm = meshChunk(secondChunk, {}, EMPTY_MESH_CONFIG, scratch)
+
+    expect(firstWarm).toStrictEqual(firstCold)
+    expect(secondWarm).toStrictEqual(secondCold)
+    expect(JSON.stringify(firstWarm)).toBe(firstSnapshot)
   })
 
   it('reuses light workspaces while preserving sampled light', () => {

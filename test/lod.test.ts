@@ -18,8 +18,9 @@
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result, Schema } from 'effect'
 import * as FastCheck from 'fast-check'
-import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { AO_NONE } from '../src/domain/ambient-occlusion'
+import type { BlockId } from '../src/domain/block-data'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, CHUNK_SIZE, type ChunkView, blockIndex, emptyChunk as emptyChunkResult } from '../src/domain/chunk-view'
 import {
   FACES,
@@ -56,6 +57,7 @@ const STONE = Option.getOrThrow(blockIdOf('stone'))
 const DIRT = Option.getOrThrow(blockIdOf('dirt'))
 const WATER = Option.getOrThrow(blockIdOf('water'))
 const GLASS = Option.getOrThrow(blockIdOf('glass'))
+const OAK_LOG = Option.getOrThrow(blockIdOf('oak_log'))
 
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set(),
@@ -70,6 +72,19 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
     blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
   }
   return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
+}
+
+const chunkWithBlockStates = (
+  cells: ReadonlyArray<readonly [number, number, number, BlockId, unknown]>,
+): ChunkView => {
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+  for (const [lx, y, lz, blockId, state] of cells) {
+    const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
+    blocks[index] = blockId
+    blockStates[index] = expectSuccess(encodeBlockState(blockId, state))
+  }
+  return { blockStates, blocks, coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT }
 }
 
 /** A solid `side` x `side` x 1 slab of stone at y=64, anchored at the origin. */
@@ -225,6 +240,36 @@ describe('LOD 0 and the empty cases', () => {
       expect(waterOnly.water.length).toBe(6)
       expect(simplifyMesh(waterOnly, 2)).toBe(waterOnly)
     }),
+  )
+})
+
+describe('LOD model-state preservation', () => {
+  it.effect('keeps state-bearing quads at their original extent and preserves their selectors', () =>
+    Effect.sync(() =>
+      FastCheck.assert(
+        FastCheck.property(
+          FastCheck.tuple(FastCheck.constantFrom('x', 'y', 'z'), FastCheck.constantFrom('x', 'y', 'z')).filter(
+            ([left, right]) => left !== right,
+          ),
+          ([left, right]) => {
+            const source = meshChunk(
+              chunkWithBlockStates([
+                [0, 64, 0, OAK_LOG, { axis: left }],
+                [1, 64, 0, OAK_LOG, { axis: right }],
+              ]),
+              {},
+              CONFIG,
+            )
+            const simplified = simplifyMesh(source, 1)
+            const front = inDirection(simplified, 'zPos')
+            expect(front).toHaveLength(2)
+            expect(front.every((quad) => quad.width === 1)).toBe(true)
+            expect(front.map((quad) => quad.blockState?.axis).sort()).toStrictEqual([left, right].sort())
+          },
+        ),
+        { numRuns: 12 },
+      ),
+    ),
   )
 })
 

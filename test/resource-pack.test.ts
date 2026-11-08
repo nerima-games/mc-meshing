@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { Result } from 'effect'
+import { Option, Result } from 'effect'
+import {
+  ChunkAxis as chunkAxis,
+  blockIdOf,
+  chunkCoord,
+  encodeBlockState,
+  type EffectiveBlockStateValues,
+} from '@nerima-games/mc-kernel'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, blockIndex, type ChunkView } from '../src/domain/chunk-view.js'
+import { meshChunk as meshChunkResult } from '../src/domain/mesh.js'
+import { EMPTY_MESH_CONFIG } from '../src/domain/opacity.js'
 import {
   meshBlockModel as meshBlockModelResult,
   meshBlockState as meshBlockStateResult,
+  meshEffectiveBlockState as meshEffectiveBlockStateResult,
 } from '../src/domain/resource-pack-mesh.js'
 import {
+  blockStatePropertiesOf,
   normalizeResourceName as normalizeResourceNameResult,
   resolveBlockModel as resolveBlockModelResult,
   resolveBlockStateModels as resolveBlockStateModelsResult,
@@ -56,6 +68,8 @@ const meshBlockModel = (...args: Parameters<typeof meshBlockModelResult>) =>
   successOf(meshBlockModelResult(...args))
 const meshBlockState = (...args: Parameters<typeof meshBlockStateResult>) =>
   successOf(meshBlockStateResult(...args))
+const meshEffectiveBlockState = (...args: Parameters<typeof meshEffectiveBlockStateResult>) =>
+  successOf(meshEffectiveBlockStateResult(...args))
 const modelName = (name: string): ModelName => successOf(normalizeResourceNameResult(name, 'model'))
 const resourceName = (name: string): ResourceName => successOf(normalizeResourceNameResult(name, 'blockstate'))
 
@@ -139,6 +153,7 @@ const assets: ResourcePackAssets = {
     'minecraft:demo': {
       variants: {
         'facing=north,open=false': { model: 'block/child', y: 90, uvlock: true },
+        'axis=x': { model: 'block/bare' },
         'facing=south|east': [
           { model: 'block/weighted-a', weight: 1 },
           { model: 'block/weighted-b' },
@@ -205,6 +220,27 @@ const assets: ResourcePackAssets = {
 }
 
 describe('resource-pack resolver', () => {
+  it('maps kernel state values and connections to resource-pack property strings', () => {
+    const state = {
+      connections: { east: 'up', north: 'side', south: 'none', west: false },
+      eye: true,
+      facing: 'north',
+      level: 7,
+      open: false,
+    } satisfies EffectiveBlockStateValues
+
+    expect(blockStatePropertiesOf(state)).toStrictEqual({
+      east: 'up',
+      eye: 'true',
+      facing: 'north',
+      level: '7',
+      north: 'side',
+      open: 'false',
+      south: 'none',
+      west: 'false',
+    })
+  })
+
   it('normalizes names and rejects empty paths', () => {
     expect(normalizeResourceName(' models/demo.json ', 'model')).toBe('minecraft:demo')
     expect(normalizeResourceName('blockstates/demo.json', 'blockstate')).toBe('minecraft:demo')
@@ -565,12 +601,61 @@ describe('resource-pack mesh', () => {
     expect(stateQuads.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
     expect(stateQuads.every((quad) => quad.ambientOcclusion)).toBe(true)
 
+    const effectiveStateQuads = meshEffectiveBlockState(resourceName('demo'), { facing: 'north', open: false }, assets, { seed: 3 })
+    expect(effectiveStateQuads).toHaveLength(2)
+    expect(effectiveStateQuads.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
+
     const multipartQuads = meshBlockState(resourceName('multi'), { powered: 'true', open: 'true' }, assets)
     expect(multipartQuads).toHaveLength(9)
   })
 
   it('meshes models without elements as an empty result', () => {
     expect(meshBlockModel(modelName('builtin/generated'), assets)).toEqual([])
+  })
+
+  it('selects a resource-pack model from block state emitted by chunk meshing', () => {
+    const doorId = Option.getOrThrow(blockIdOf('door'))
+    const logId = Option.getOrThrow(blockIdOf('oak_log'))
+    const doorIndex = blockIndex(4, 30, 5)
+    const logIndex = blockIndex(5, 30, 5)
+    const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+    blocks[doorIndex] = doorId
+    blocks[logIndex] = logId
+    const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+    blockStates[doorIndex] = successOf(
+      encodeBlockState(doorId, {
+        facing: 'north',
+        half: 'lower',
+        hinge: 'left',
+        open: false,
+        powered: false,
+      }),
+    )
+    blockStates[logIndex] = successOf(encodeBlockState(logId, { axis: 'x' }))
+    const chunk: ChunkView = {
+      blockStates,
+      blocks,
+      coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      height: CHUNK_HEIGHT,
+    }
+    const layers = successOf(meshChunkResult(chunk, {}, EMPTY_MESH_CONFIG))
+    const doorQuad = layers.specialBlocks.find((quad) => quad.kind === 'door')
+    if (typeof doorQuad?.blockState === 'undefined') {
+      throw new Error('Chunk meshing did not preserve the door state.')
+    }
+
+    const selected = meshEffectiveBlockState(resourceName('demo'), doorQuad.blockState, assets, { seed: 3 })
+    expect(selected).toHaveLength(2)
+    expect(selected.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
+
+    const logQuad = layers.opaque.find((quad) => quad.blockId === logId)
+    if (typeof logQuad?.blockState === 'undefined') {
+      throw new Error('Chunk meshing did not preserve the generic block state.')
+    }
+    const logModel = meshEffectiveBlockState(resourceName('demo'), logQuad.blockState, assets)
+    expect(logQuad.blockState.axis).toBe('x')
+    expect(logModel.length).toBeGreaterThan(0)
+    expect(logModel.every((quad) => quad.model === 'minecraft:block/bare')).toBe(true)
   })
 
   it('rejects non-axis-aligned runtime block rotations', () => {

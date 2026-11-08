@@ -1,5 +1,14 @@
-import { Option, Result } from 'effect'
-import { ChunkAxis as chunkAxis, MAX_CHUNK_HEIGHT, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { Option, Result, SchemaParser } from 'effect'
+import * as FastCheck from 'fast-check'
+import {
+  BlockId as KernelBlockId,
+  ChunkAxis as chunkAxis,
+  EffectiveBlockStateValuesSchema,
+  MAX_CHUNK_HEIGHT,
+  blockIdOf,
+  chunkCoord,
+  encodeBlockState,
+} from '@nerima-games/mc-kernel'
 import { describe, expect, it } from './effect-test.js'
 import {
   BLOCKS_PER_CHUNK,
@@ -10,6 +19,7 @@ import {
   blockCount,
   blockCountOf,
   blockIndex,
+  blockStateAt,
   emptyChunk,
   getBlock,
   validateChunkViews,
@@ -22,6 +32,23 @@ const STONE_X = 3
 const STONE_Z = 5
 const STONE_Y = 42
 const invalidFixture = <T,>(value: any): T => value
+const STATE_CHUNK_HEIGHT = 8
+const STATE_INDEX = blockIndex(2, 3, 4, STATE_CHUNK_HEIGHT)
+
+type StatefulBlockType = 'water' | 'wheat_crop' | 'oak_log' | 'door_open'
+
+const chunkWithRawBlockState = (blockType: StatefulBlockType, rawState?: number) => {
+  const blockId = Option.getOrThrow(blockIdOf(blockType))
+  const blocks = new Uint16Array(Result.getOrThrow(blockCount(STATE_CHUNK_HEIGHT)))
+  blocks[STATE_INDEX] = blockId
+  const base = { blocks, coord: chunkCoord(CHUNK_X, CHUNK_Z), height: STATE_CHUNK_HEIGHT }
+  if (typeof rawState === 'undefined') {
+    return { chunk: base, blockId, index: STATE_INDEX }
+  }
+  const blockStates = new Uint32Array(blocks.length)
+  blockStates[STATE_INDEX] = rawState
+  return { chunk: { ...base, blockStates }, blockId, index: STATE_INDEX }
+}
 
 describe('ChunkView', () => {
   it('keeps kernel coordinates alongside height-aware element storage', () => {
@@ -83,5 +110,140 @@ describe('validateChunkViews', () => {
     const neighbours = invalidFixture<ChunkNeighbours>({ unexpected: invalidExtra })
 
     expect(Result.isSuccess(validateChunkViews(valid, neighbours))).toBe(true)
+  })
+})
+
+describe('blockStateAt', () => {
+  it('reads kernel defaults when storage is omitted, including block-id-fixed properties', () => {
+    const water = chunkWithRawBlockState('water')
+    const waterState = Result.getOrThrow(blockStateAt(water.chunk, water.index))
+    expect(waterState.level).toBe(0)
+
+    const openDoor = chunkWithRawBlockState('door_open')
+    const doorState = Result.getOrThrow(blockStateAt(openDoor.chunk, openDoor.index))
+    expect(doorState.open).toBe(true)
+  })
+
+  it('uses empty state for custom IDs only when state storage is omitted', () => {
+    const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
+    const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    const blocks = new Uint16Array(empty.blocks)
+    blocks[STATE_INDEX] = customBlockId
+    const chunk: ChunkView = { ...empty, blocks }
+
+    expect(blockStateAt(chunk, STATE_INDEX)).toStrictEqual(Result.succeed({}))
+
+    const blockStates = new Uint32Array(blocks.length)
+    const chunkWithNeutralStates: ChunkView = { ...chunk, blockStates }
+    for (const encoded of [0, 1]) {
+      blockStates[STATE_INDEX] = encoded
+      expect(blockStateAt(chunkWithNeutralStates, STATE_INDEX)).toMatchObject({
+        failure: {
+          _tag: 'ChunkBlockStateCodecFailure',
+          blockId: customBlockId,
+          encoded,
+          index: STATE_INDEX,
+          reason: 'unknown-block-id',
+        },
+      })
+    }
+  })
+
+  it('decodes encoded water levels across the kernel state range and validates effective values', () => {
+    const waterId = Option.getOrThrow(blockIdOf('water'))
+    FastCheck.assert(
+      FastCheck.property(FastCheck.integer({ min: 0, max: 15 }), (level) => {
+        const encoded = encodeBlockState(waterId, { level })
+        if (Result.isFailure(encoded)) {
+          return false
+        }
+        const { chunk, index } = chunkWithRawBlockState('water', encoded.success)
+        const state = blockStateAt(chunk, index)
+        if (Result.isFailure(state)) {
+          return false
+        }
+        const validated = SchemaParser.decodeUnknownResult(EffectiveBlockStateValuesSchema)(state.success)
+        return Result.isSuccess(validated) && state.success.level === level
+      }),
+      { numRuns: 120 },
+    )
+  })
+
+  it.each([
+    ['minimum water level', 0, true],
+    ['maximum water level', 15, true],
+    ['one below the water range', -1, false],
+    ['one above the water range', 16, false],
+  ])('handles %s at the encoded fluid-level boundaries', (_label, level, valid) => {
+    const waterId = Option.getOrThrow(blockIdOf('water'))
+    const encoded = encodeBlockState(waterId, { level })
+    if (!valid) {
+      expect(encoded).toMatchObject({ failure: { _tag: 'BlockStateCodecFailure', reason: 'invalid-property-value' } })
+      return
+    }
+    if (Result.isFailure(encoded)) {
+      throw new Error('The kernel rejected a documented water-level boundary.')
+    }
+    const { chunk, index } = chunkWithRawBlockState('water', encoded.success)
+    expect(blockStateAt(chunk, index)).toMatchObject({ success: { level } })
+  })
+
+  it.each([16, -1])('rejects reserved encoded water level %s with a typed codec failure', (rawState) => {
+    const { chunk, blockId, index } = chunkWithRawBlockState('water', rawState)
+    const encoded = rawState === -1 ? 0xffff_ffff : rawState
+    expect(blockStateAt(chunk, index)).toStrictEqual(Result.fail({
+      _tag: 'ChunkBlockStateCodecFailure',
+      blockId,
+      encoded,
+      index,
+      reason: 'reserved-code',
+    }))
+  })
+
+  it('returns a typed failure for an index outside the chunk cell count', () => {
+    const { chunk } = chunkWithRawBlockState('water', 0)
+    const expected = chunk.blocks.length
+    for (const index of [
+      blockIndex(0, -1, 0, chunk.height),
+      blockIndex(0, expected, 0, chunk.height),
+      blockIndex(0, Number.NaN, 0, chunk.height),
+      blockIndex(0, 0.5, 0, chunk.height),
+    ]) {
+      expect(blockStateAt(chunk, index)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateIndexOutOfRange',
+        expected,
+        index,
+      }))
+    }
+  })
+
+  it('rejects state storage with a length different from the chunk cell count', () => {
+    const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    const malformed: ChunkView = { ...empty, blockStates: new Uint32Array(1) }
+    const validWithStates: ChunkView = { ...empty, blockStates: new Uint32Array(empty.blocks.length) }
+    const failure = {
+      _tag: 'InvalidChunkBlockStatesLength',
+      actual: 1,
+      coord: empty.coord,
+      expected: empty.blocks.length,
+    }
+
+    expect(blockStateAt(malformed, blockIndex(0, 0, 0, malformed.height))).toMatchObject({ failure })
+    expect(validateChunkViews(malformed, {})).toMatchObject({ failure })
+    expect(Result.isSuccess(validateChunkViews(validWithStates, {}))).toBe(true)
+    expect(Result.isSuccess(validateChunkViews(empty, {}))).toBe(true)
+  })
+
+  it('rejects state storage that is not a Uint32Array', () => {
+    const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    for (const blockStates of [null, new Uint8Array(empty.blocks.length)]) {
+      const malformed: ChunkView = {
+        ...empty,
+        blockStates: invalidFixture<Readonly<Uint32Array>>(blockStates),
+      }
+      const failure = { _tag: 'InvalidChunkBlockStatesType', coord: empty.coord }
+      expect(blockStateAt(malformed, STATE_INDEX)).toMatchObject({ failure })
+      expect(validateChunkViews(malformed, {})).toMatchObject({ failure })
+    }
   })
 })

@@ -5,6 +5,7 @@ import {
   CHUNK_SIZE,
   type ChunkNeighbours,
   type ChunkView,
+  type ChunkViewFailure,
   type FluidView,
   getBlock,
   getBlockAcrossBoundary,
@@ -13,6 +14,7 @@ import {
   type FluidPosition,
   type FluidSpace,
   type FluidViewFailure,
+  blockStateIn,
   cornerHeight,
   flowAt,
   heightAcross,
@@ -60,6 +62,7 @@ type FluidCell = {
   readonly space: FluidSpace
   readonly position: FluidPosition
   readonly blockId: BlockId
+  readonly blockState: FluidQuad['blockState']
   readonly here: number
   readonly corners: readonly [number, number, number, number]
 }
@@ -193,6 +196,7 @@ const pushSide = (
   quads.push({
     ao: 0,
     blockId: cell.blockId,
+    ...(typeof cell.blockState === 'undefined' ? {} : { blockState: cell.blockState }),
     direction,
     vertices: [
       [nearX, bottom, nearZ],
@@ -262,6 +266,7 @@ const pushTopFace = (
   quads.push({
     ao: 0,
     blockId,
+    ...(typeof cell.blockState === 'undefined' ? {} : { blockState: cell.blockState }),
     direction: 'yPos',
     flow: flowAt(cell),
     vertices: [
@@ -304,6 +309,7 @@ const meshFluidCell = (
 ): void => {
   const cell: FluidCell = {
     blockId,
+    blockState: blockStateIn(space, position, blockId),
     corners: topPatchCorners(space, position, blockId),
     here: heightIn(space, position, blockId),
     position,
@@ -334,13 +340,16 @@ const meshFluidCellsInBounds = (
     readonly max: readonly [number, number, number]
   },
   fluidViews: ReadonlyMap<ChunkView, FluidView>,
-): ReadonlyArray<FluidQuad> => {
+): Result.Result<ReadonlyArray<FluidQuad>, ChunkViewFailure> => {
   const quads: Array<FluidQuad> = []
+  const stateFailure: { failure: ChunkViewFailure | null } = { failure: null }
   const space: FluidSpace = {
     chunk,
     context: { fluids, layers, plants },
     fluidViews,
     neighbours,
+    blockStateSamples: new Map(),
+    stateFailure,
   }
   const [[minX, minY, minZ], [maxX, maxY, maxZ]] = [bounds.min, bounds.max]
 
@@ -355,7 +364,10 @@ const meshFluidCellsInBounds = (
     }
   }
 
-  return quads
+  if (stateFailure.failure !== null) {
+    return Result.fail(stateFailure.failure)
+  }
+  return Result.succeed(quads)
 }
 
 export const meshFluidSurfaces = (
@@ -369,12 +381,12 @@ export const meshFluidSurfaces = (
     readonly min: readonly [number, number, number]
     readonly max: readonly [number, number, number]
   } = { max: [CHUNK_SIZE, yLimit, CHUNK_SIZE], min: [ZERO_INDEX, ZERO_INDEX, ZERO_INDEX] },
-): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure> =>
+): Result.Result<ReadonlyArray<FluidQuad>, FluidViewFailure | ChunkViewFailure> =>
   Result.flatMap(validateFluidViews(chunk, neighbours), (fluidViews) => {
     if (!anyFluidConfigured(fluids)) {
       return Result.succeed(NO_FLUID_QUADS)
     }
-    return Result.succeed(meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds, fluidViews))
+    return meshFluidCellsInBounds(chunk, neighbours, fluids, layers, plants, yLimit, bounds, fluidViews)
   })
 
 /*

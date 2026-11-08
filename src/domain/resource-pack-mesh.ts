@@ -16,10 +16,12 @@ import type {
   ResourceModelVertex,
   ResourcePackAssets,
 } from './resource-pack-types.js'
+import type { EffectiveBlockStateValues } from '@nerima-games/mc-kernel'
 import { Result } from 'effect'
 import { FACE_DIRECTIONS, type FaceDirection } from './faces.js'
 import {
   type ResourcePackResolutionFailure,
+  blockStatePropertiesOf,
   resolveBlockModel,
   resolveBlockStateModels,
   resolveModelTexture,
@@ -517,3 +519,12 @@ export const meshBlockState = (
     }
     return Result.succeed(quads)
   })
+
+/** Resolve and mesh the resource-pack variant selected by an effective kernel state. */
+export const meshEffectiveBlockState = (
+  name: ResourceName,
+  state: EffectiveBlockStateValues,
+  assets: ResourcePackAssets,
+  options?: BlockStateResolveOptions,
+): Result.Result<ReadonlyArray<ResourceModelQuad>, ResourcePackResolutionFailure | ResourceModelMeshFailure> =>
+  meshBlockState(name, blockStatePropertiesOf(state), assets, options)

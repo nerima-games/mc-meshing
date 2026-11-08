@@ -6,11 +6,29 @@
  * meshing hot path. The caller copies opaque kernel block storage at the
  * boundary; this package does not expose a second adapter API.
  */
-import { Result } from 'effect'
+import { Brand, Result, SchemaParser } from 'effect'
 import { AIR, type BlockId, blockIdAt } from './block-data.js'
-import { CHUNK_SIZE_XZ, ChunkAxis as chunkAxis, type Chunk as KernelChunk, MAX_CHUNK_HEIGHT, chunkCoord } from '@nerima-games/mc-kernel'
+import {
+  CHUNK_SIZE_XZ,
+  ChunkAxis as chunkAxis,
+  type Chunk as KernelChunk,
+  type BlockStateCodecFailure,
+  type EffectiveBlockStateValues,
+  EncodedBlockStateSchema,
+  MAX_CHUNK_HEIGHT,
+  chunkCoord,
+  defaultBlockState,
+  effectiveBlockStateOf,
+  encodeBlockState,
+} from '@nerima-games/mc-kernel'
 import type { LightView } from './light-types.js'
 import type { RailShapeView } from './rail-types.js'
+
+export type ChunkBlockIndex = Brand.Branded<number, 'ChunkBlockIndex'>
+export type ChunkBlockCount = Brand.Branded<number, 'ChunkBlockCount'>
+
+const chunkBlockIndexFromNumber = Brand.nominal<ChunkBlockIndex>()
+const chunkBlockCountFromNumber = Brand.nominal<ChunkBlockCount>()
 
 export type { ChunkCoord } from '@nerima-games/mc-kernel'
 
@@ -46,13 +64,46 @@ export type ChunkLightFailure = {
   readonly coord: ChunkView['coord']
 }
 
-export type ChunkViewFailure = ChunkBlocksFailure | ChunkHeightFailure | ChunkLightFailure
+export type ChunkBlockStatesFailure = {
+  readonly _tag: 'InvalidChunkBlockStatesLength'
+  readonly actual: ChunkBlockCount
+  readonly coord: ChunkView['coord']
+  readonly expected: ChunkBlockCount
+}
 
-export const blockCount = (height: number): Result.Result<number, ChunkHeightFailure> => {
+export type ChunkBlockStatesTypeFailure = {
+  readonly _tag: 'InvalidChunkBlockStatesType'
+  readonly coord: ChunkView['coord']
+}
+
+export type ChunkBlockStateIndexFailure = {
+  readonly _tag: 'ChunkBlockStateIndexOutOfRange'
+  readonly expected: ChunkBlockCount
+  readonly index: ChunkBlockIndex
+}
+
+export type ChunkBlockStateCodecFailure = {
+  readonly _tag: 'ChunkBlockStateCodecFailure'
+  readonly blockId: BlockId
+  readonly encoded?: unknown
+  readonly index: ChunkBlockIndex
+  readonly reason: BlockStateCodecFailure['reason'] | 'invalid-encoded-value'
+}
+
+export type ChunkViewFailure =
+  | ChunkBlocksFailure
+  | ChunkBlockStatesFailure
+  | ChunkBlockStatesTypeFailure
+  | ChunkBlockStateIndexFailure
+  | ChunkBlockStateCodecFailure
+  | ChunkHeightFailure
+  | ChunkLightFailure
+
+export const blockCount = (height: number): Result.Result<ChunkBlockCount, ChunkHeightFailure> => {
   if (!Number.isInteger(height) || height < MIN_CHUNK_HEIGHT || height > MAX_CHUNK_HEIGHT) {
     return Result.fail({ _tag: 'InvalidChunkHeight', height })
   }
-  return Result.succeed(CHUNK_SIZE * height * CHUNK_SIZE)
+  return Result.succeed(chunkBlockCountFromNumber(CHUNK_SIZE * height * CHUNK_SIZE))
 }
 
 export const blockCountOf: (height: number) => Result.Result<number, ChunkHeightFailure> = blockCount
@@ -91,6 +142,18 @@ export const validateChunkViews = (
         expected: expected.success,
       })
     }
+    const blockStates: Readonly<Uint32Array> | null | undefined = view.blockStates
+    if (typeof blockStates !== 'undefined' && !(blockStates instanceof Uint32Array)) {
+      return Result.fail({ _tag: 'InvalidChunkBlockStatesType', coord: view.coord })
+    }
+    if (typeof blockStates !== 'undefined' && blockStates.length !== expected.success) {
+      return Result.fail({
+        _tag: 'InvalidChunkBlockStatesLength',
+        actual: chunkBlockCountFromNumber(blockStates.length),
+        coord: view.coord,
+        expected: expected.success,
+      })
+    }
     const light: LightView | null | undefined = view.light
     if (light === null) {
       return Result.fail({ _tag: 'InvalidChunkLight', coord: view.coord })
@@ -107,8 +170,8 @@ export const validateChunkViews = (
  * (`greedy-meshing-ao.ts:8`), which matters: it is what lets the reference's
  * chunk fixtures be reused directly as golden inputs.
  */
-export const blockIndex = (lx: number, y: number, lz: number, height: number = CHUNK_HEIGHT): number =>
-  y + lz * height + lx * height * CHUNK_SIZE
+export const blockIndex = (lx: number, y: number, lz: number, height: number = CHUNK_HEIGHT): ChunkBlockIndex =>
+  chunkBlockIndexFromNumber(y + lz * height + lx * height * CHUNK_SIZE)
 
 /**
  * The fluid simulation's per-cell state, as meshing needs to see it.
@@ -176,6 +239,8 @@ export type ChunkView = Omit<KernelChunk, 'blocks' | 'height'> & {
   readonly height: number
   /** `CHUNK_SIZE * height * CHUNK_SIZE` block ids, laid out per `blockIndex`. */
   readonly blocks: Readonly<Uint16Array>
+  /** Kernel-encoded block state per cell, laid out per `blockIndex`. */
+  readonly blockStates?: Readonly<Uint32Array>
   /**
    * Per-cell decoded fluid state when available from the simulation boundary.
    *
@@ -249,6 +314,102 @@ export const getBlock = (chunk: Pick<ChunkView, 'blocks' | 'height'>, lx: number
     return AIR
   }
   return blockIdAt(blocks, y + lz * height + lx * height * CHUNK_SIZE)
+}
+
+const chunkBlockStateCodecFailure = (
+  index: ChunkBlockIndex,
+  blockId: BlockId,
+  reason: ChunkBlockStateCodecFailure['reason'],
+  encoded?: unknown,
+): ChunkBlockStateCodecFailure => ({
+  _tag: 'ChunkBlockStateCodecFailure',
+  blockId,
+  ...(typeof encoded === 'undefined' ? {} : { encoded }),
+  index,
+  reason,
+})
+
+const effectiveBlockStateAt = (
+  blockId: BlockId,
+  index: ChunkBlockIndex,
+  encoded: unknown,
+): Result.Result<EffectiveBlockStateValues, ChunkBlockStateCodecFailure> => {
+  const parsed = SchemaParser.decodeUnknownResult(EncodedBlockStateSchema)(encoded)
+  if (Result.isFailure(parsed)) {
+    const failure = chunkBlockStateCodecFailure(index, blockId, 'invalid-encoded-value')
+    return Result.fail(typeof encoded === 'number' ? { ...failure, encoded } : failure)
+  }
+  const effective = effectiveBlockStateOf(blockId, parsed.success)
+  if (Result.isFailure(effective)) {
+    return Result.fail(chunkBlockStateCodecFailure(index, blockId, effective.failure.reason, parsed.success))
+  }
+  return Result.succeed(effective.success)
+}
+
+const DEFAULT_EFFECTIVE_BLOCK_STATES = new Map<
+  BlockId,
+  Result.Result<EffectiveBlockStateValues, BlockStateCodecFailure>
+>()
+
+const defaultEffectiveBlockStateOf = (
+  blockId: BlockId,
+): Result.Result<EffectiveBlockStateValues, BlockStateCodecFailure> => {
+  const cached = DEFAULT_EFFECTIVE_BLOCK_STATES.get(blockId)
+  if (typeof cached !== 'undefined') {
+    return cached
+  }
+  const decoded = Result.flatMap(defaultBlockState(blockId), (state) =>
+    Result.flatMap(encodeBlockState(blockId, state), (encoded) => effectiveBlockStateOf(blockId, encoded)),
+  )
+  DEFAULT_EFFECTIVE_BLOCK_STATES.set(blockId, decoded)
+  return decoded
+}
+
+/** Read the effective kernel block state at one chunk storage index. */
+export const blockStateAt = (
+  chunk: ChunkView,
+  index: ChunkBlockIndex,
+): Result.Result<EffectiveBlockStateValues, ChunkViewFailure> => {
+  const expected = blockCount(chunk.height)
+  if (Result.isFailure(expected)) {
+    return Result.fail(expected.failure)
+  }
+  if (!Number.isInteger(index) || index < FIRST_LOCAL_INDEX || index >= expected.success) {
+    return Result.fail({ _tag: 'ChunkBlockStateIndexOutOfRange', expected: expected.success, index })
+  }
+  if (chunk.blocks.length !== expected.success) {
+    return Result.fail({
+      _tag: 'InvalidChunkBlocksLength',
+      actual: chunk.blocks.length,
+      coord: chunk.coord,
+      expected: expected.success,
+    })
+  }
+  const blockStates: Readonly<Uint32Array> | null | undefined = chunk.blockStates
+  if (typeof blockStates !== 'undefined' && !(blockStates instanceof Uint32Array)) {
+    return Result.fail({ _tag: 'InvalidChunkBlockStatesType', coord: chunk.coord })
+  }
+  if (typeof blockStates !== 'undefined' && blockStates.length !== expected.success) {
+    return Result.fail({
+      _tag: 'InvalidChunkBlockStatesLength',
+      actual: chunkBlockCountFromNumber(blockStates.length),
+      coord: chunk.coord,
+      expected: expected.success,
+    })
+  }
+  const blockId = blockIdAt(chunk.blocks, index)
+  if (typeof blockStates !== 'undefined') {
+    return effectiveBlockStateAt(blockId, index, blockStates[index])
+  }
+  const defaults = defaultEffectiveBlockStateOf(blockId)
+  if (Result.isFailure(defaults)) {
+    if (defaults.failure.reason === 'unknown-block-id') {
+      // Custom IDs without kernel state definitions remain usable when state storage is omitted.
+      return Result.succeed({})
+    }
+    return Result.fail(chunkBlockStateCodecFailure(index, blockId, defaults.failure.reason))
+  }
+  return Result.succeed(defaults.success)
 }
 
 /**

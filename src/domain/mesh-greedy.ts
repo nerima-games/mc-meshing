@@ -2,8 +2,12 @@ import { Brand, Option, Result } from 'effect'
 import { AIR, type BlockId, MAX_BLOCK_ID, blockIdAt } from './block-data.js'
 import {
   CHUNK_SIZE,
+  type ChunkBlockIndex,
   type ChunkNeighbours,
   type ChunkView,
+  type ChunkViewFailure,
+  blockIndex,
+  blockStateAt,
   getBlockAcrossBoundary,
 } from './chunk-view.js'
 import { FACES, type Face, type FacePlacement, facePlacementOf } from './faces.js'
@@ -108,6 +112,7 @@ type LightMasks = {
 }
 
 type GreedyMasks = {
+  readonly blockStateMask: Uint32Array | undefined
   readonly light: LightMasks | undefined
   /** Packed `blockId | (ao << AO_SHIFT)` cells; `Uint32Array` because a 16-bit id plus ao no longer fits 16 bits. */
   readonly mask: Uint32Array
@@ -120,10 +125,14 @@ const rowMatches = (
   cell: number,
   blockLight: number,
   skyLight: number,
+  blockState: number,
 ): boolean => {
   const { light } = masks
   for (let offset = FIRST_INDEX; offset < length; offset += STEP) {
     if (masks.mask[start + offset] !== cell) {
+      return false
+    }
+    if (masks.blockStateMask && masks.blockStateMask[start + offset] !== blockState) {
       return false
     }
     if (light && (light.block[start + offset] !== blockLight || light.sky[start + offset] !== skyLight)) {
@@ -141,10 +150,15 @@ const growInnerRun = (
   cell: number,
   blockLight: number,
   skyLight: number,
+  blockState: number,
 ): number => {
   const { light } = masks
   let innerRun = 1
-  while (inner + innerRun < innerSize && masks.mask[base + innerRun] === cell) {
+  while (
+    inner + innerRun < innerSize &&
+    masks.mask[base + innerRun] === cell &&
+    (!masks.blockStateMask || masks.blockStateMask[base + innerRun] === blockState)
+  ) {
     const index = base + innerRun
     if (light && (light.block[index] !== blockLight || light.sky[index] !== skyLight)) {
       break
@@ -155,26 +169,26 @@ const growInnerRun = (
 }
 
 const growOuterRun = (
-  masks: GreedyMasks,
+  ctx: GreedyExpansionContext,
   outer: number,
   inner: number,
-  outerSize: number,
-  innerSize: number,
   innerRun: number,
   cell: number,
   blockLight: number,
   skyLight: number,
+  blockState: number,
 ): number => {
   let outerRun = 1
   while (
-    outer + outerRun < outerSize &&
+    outer + outerRun < ctx.outerSize &&
     rowMatches(
-      masks,
-      (outer + outerRun) * innerSize + inner,
+      ctx.masks,
+      (outer + outerRun) * ctx.innerSize + inner,
       innerRun,
       cell,
       blockLight,
       skyLight,
+      blockState,
     )
   ) {
     outerRun += STEP
@@ -194,6 +208,7 @@ const clearRectangle = (
   for (let row = FIRST_INDEX; row < outerRun; row += STEP) {
     const rowStart = (outer + row) * innerSize + inner
     masks.mask.fill(NO_FACE, rowStart, rowStart + innerRun)
+    masks.blockStateMask?.fill(NO_FACE, rowStart, rowStart + innerRun)
     light?.block.fill(NO_FACE, rowStart, rowStart + innerRun)
     light?.sky.fill(NO_FACE, rowStart, rowStart + innerRun)
   }
@@ -214,19 +229,19 @@ const growRuns = (
   cell: number,
   blockLight: number,
   skyLight: number,
+  blockState: number,
 ): readonly [number, number] => {
   const base = outer * ctx.innerSize + inner
-  const innerRun = growInnerRun(ctx.masks, base, inner, ctx.innerSize, cell, blockLight, skyLight)
+  const innerRun = growInnerRun(ctx.masks, base, inner, ctx.innerSize, cell, blockLight, skyLight, blockState)
   const outerRun = growOuterRun(
-    ctx.masks,
+    ctx,
     outer,
     inner,
-    ctx.outerSize,
-    ctx.innerSize,
     innerRun,
     cell,
     blockLight,
     skyLight,
+    blockState,
   )
   return [innerRun, outerRun]
 }
@@ -264,7 +279,8 @@ const expandCell = (ctx: GreedyExpansionContext, depth: number, outer: number, i
   const { light } = ctx.masks
   const blockLight = light?.block[base] ?? NO_FACE
   const skyLight = light?.sky[base] ?? NO_FACE
-  const [innerRun, outerRun] = growRuns(ctx, outer, inner, cell, blockLight, skyLight)
+  const blockState = ctx.masks.blockStateMask?.[base] ?? NO_FACE
+  const [innerRun, outerRun] = growRuns(ctx, outer, inner, cell, blockLight, skyLight, blockState)
   clearRectangle(ctx.masks, outer, inner, outerRun, innerRun, ctx.innerSize)
   ctx.emit(outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth)
 }
@@ -282,6 +298,7 @@ type ColumnPassContext = {
   readonly face: Face
   readonly fluids: Uint16Array
   readonly lookup: LayerLookup
+  readonly blockStateMask: Uint32Array | undefined
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly placement: FacePlacement
@@ -291,16 +308,36 @@ type ColumnPassContext = {
   readonly light: LightMasks | undefined
   readonly region: MeshRegion | undefined
   readonly maskFailure: { failure: Option.Option<GreedyMaskFailure> }
+  readonly stateFailure: { failure: Option.Option<ChunkViewFailure> }
 }
 
 type MeshPassContext = ColumnPassContext & {
   readonly yLimit: number
 }
 
+type BlockStateProperties = Pick<Quad, 'blockState'>
+
+const blockStatePropertiesOf = (state: NonNullable<Quad['blockState']>): BlockStateProperties => {
+  if (Object.keys(state).length > 0) {
+    return { blockState: state }
+  }
+  return {}
+}
+
+const keepFirstStateFailure = (
+  target: { failure: Option.Option<ChunkViewFailure> },
+  failure: ChunkViewFailure,
+): void => {
+  if (Option.isNone(target.failure)) {
+    target.failure = Option.some(failure)
+  }
+}
+
 export type MeshAllFacesContext = {
   readonly chunk: ChunkView
   readonly fluids: Uint16Array
   readonly lookup: LayerLookup
+  readonly blockStateMask?: Uint32Array | undefined
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly plants: Uint8Array
@@ -331,29 +368,42 @@ const resolveExposedCell = (
   lz: number,
   neighbourId: BlockId,
   maskIndex: number,
+  cellIndex: ChunkBlockIndex,
 ): void => {
   if (isFaceExposed(ctx, blockId, neighbourId)) {
+    const encodedState = ctx.chunk.blockStates?.[cellIndex] ?? NO_FACE
+    const isOpaque = layerAt(ctx.lookup, blockId) === OPAQUE_LAYER
     const ao = ambientOcclusionAt(ctx.chunk, ctx.neighbours, ctx.face.direction, lx, y, lz)
     const light = lightAt(ctx, lx, y, lz)
-    if (layerAt(ctx.lookup, blockId) === OPAQUE_LAYER) {
+    if (isOpaque) {
       ctx.mask[maskIndex] = packFaceCell(blockId, ao)
+      if (ctx.blockStateMask) {
+        ctx.blockStateMask[maskIndex] = encodedState
+      }
       if (ctx.light && light) {
         ctx.light.block[maskIndex] = packLightChannel(light, 'block')
         ctx.light.sky[maskIndex] = packLightChannel(light, 'sky')
       }
-    } else {
-      ctx.push({
-        ao,
-        blockId,
-        ...ctx.placement,
-        ...lightPropertiesOf(light),
-        height: 1,
-        lx,
-        lz,
-        width: 1,
-        y,
-      })
+      return
     }
+
+    const stateResult = blockStateAt(ctx.chunk, cellIndex)
+    if (Result.isFailure(stateResult)) {
+      keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
+      return
+    }
+    ctx.push({
+      ao,
+      blockId,
+      ...blockStatePropertiesOf(stateResult.success),
+      ...ctx.placement,
+      ...lightPropertiesOf(light),
+      height: 1,
+      lx,
+      lz,
+      width: 1,
+      y,
+    })
   }
 }
 
@@ -365,6 +415,7 @@ const isPaintableCell = (ctx: ColumnPassContext, blockId: BlockId): boolean =>
 
 const clearMasks = (ctx: ColumnPassContext, length: number): void => {
   ctx.mask.fill(NO_FACE, FIRST_INDEX, length)
+  ctx.blockStateMask?.fill(NO_FACE, FIRST_INDEX, length)
   ctx.light?.block.fill(NO_FACE, FIRST_INDEX, length)
   ctx.light?.sky.fill(NO_FACE, FIRST_INDEX, length)
 }
@@ -389,6 +440,7 @@ const fillXSliceMask = (ctx: ColumnPassContext, lx: number, yLimit: number): voi
           lz,
           getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx + ctx.face.nx, y, lz),
           rowBase + y,
+          blockIndex(lx, y, lz, height),
         )
       }
     }
@@ -414,6 +466,7 @@ const fillYSliceMask = (ctx: ColumnPassContext, y: number): void => {
           lz,
           getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx, y + ctx.face.ny, lz),
           rowBase + lz,
+          blockIndex(lx, y, lz, height),
         )
       }
     }
@@ -439,6 +492,7 @@ const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): voi
           lz,
           getBlockAcrossBoundary(ctx.chunk, ctx.neighbours, lx, y, lz + ctx.face.nz),
           rowBase + y,
+          blockIndex(lx, y, lz, height),
         )
       }
     }
@@ -447,13 +501,20 @@ const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): voi
 
 const meshXPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
+    blockStateMask: ctx.blockStateMask,
     light: ctx.light,
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
+    const stateResult = blockStateAt(ctx.chunk, blockIndex(depth, inner, outer, ctx.chunk.height))
+    if (Result.isFailure(stateResult)) {
+      keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
+      return
+    }
     ctx.push({
       ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
+      ...blockStatePropertiesOf(stateResult.success),
       ...ctx.placement,
       ...packedLightPropertiesOf(ctx.chunk, blockLight, skyLight),
       height: outerRun,
@@ -481,13 +542,20 @@ const meshXPass = (ctx: MeshPassContext): void => {
 
 const meshYPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
+    blockStateMask: ctx.blockStateMask,
     light: ctx.light,
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
+    const stateResult = blockStateAt(ctx.chunk, blockIndex(outer, depth, inner, ctx.chunk.height))
+    if (Result.isFailure(stateResult)) {
+      keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
+      return
+    }
     ctx.push({
       ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
+      ...blockStatePropertiesOf(stateResult.success),
       ...ctx.placement,
       ...packedLightPropertiesOf(ctx.chunk, blockLight, skyLight),
       height: innerRun,
@@ -515,13 +583,20 @@ const meshYPass = (ctx: MeshPassContext): void => {
 
 const meshZPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
+    blockStateMask: ctx.blockStateMask,
     light: ctx.light,
     mask: ctx.mask,
   }
   const emit: EmitQuad = (outer, inner, outerRun, innerRun, cell, blockLight, skyLight, depth) => {
+    const stateResult = blockStateAt(ctx.chunk, blockIndex(outer, inner, depth, ctx.chunk.height))
+    if (Result.isFailure(stateResult)) {
+      keepFirstStateFailure(ctx.stateFailure, stateResult.failure)
+      return
+    }
     ctx.push({
       ao: faceCellAo(cell),
       blockId: faceCellBlockId(cell),
+      ...blockStatePropertiesOf(stateResult.success),
       ...ctx.placement,
       ...packedLightPropertiesOf(ctx.chunk, blockLight, skyLight),
       height: innerRun,
@@ -557,13 +632,17 @@ function meshFace(ctx: MeshPassContext): void {
   }
 }
 
-export const meshAllFaces = (ctx: MeshAllFacesContext): Result.Result<void, GreedyMaskFailure> => {
+export const meshAllFaces = (
+  ctx: MeshAllFacesContext,
+): Result.Result<void, GreedyMaskFailure | ChunkViewFailure> => {
   const maskFailure: { failure: Option.Option<GreedyMaskFailure> } = { failure: Option.none() }
+  const stateFailure: { failure: Option.Option<ChunkViewFailure> } = { failure: Option.none() }
   for (const face of FACES) {
     const faceContext: MeshPassContext = {
       chunk: ctx.chunk,
       face,
       fluids: ctx.fluids,
+      blockStateMask: ctx.blockStateMask,
       light: ctx.light,
       lookup: ctx.lookup,
       mask: ctx.mask,
@@ -574,9 +653,13 @@ export const meshAllFaces = (ctx: MeshAllFacesContext): Result.Result<void, Gree
       push: ctx.push,
       region: ctx.region,
       maskFailure,
+      stateFailure,
       yLimit: ctx.yLimit,
     }
     meshFace(faceContext)
+  }
+  if (Option.isSome(stateFailure.failure)) {
+    return Result.fail(stateFailure.failure.value)
   }
   if (Option.isSome(maskFailure.failure)) {
     return Result.fail(maskFailure.failure.value)

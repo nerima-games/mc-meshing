@@ -1,6 +1,7 @@
 import type { BlockId } from './block-data.js'
 import type { FaceDirection } from './faces.js'
 import type { QuadLight } from './light-types.js'
+import type { EffectiveBlockStateValues } from '@nerima-games/mc-kernel'
 
 export type FluidVertex = readonly [number, number, number]
 
@@ -11,6 +12,7 @@ export type FluidFlow = {
 
 export type FluidQuad = {
   readonly blockId: BlockId
+  readonly blockState?: EffectiveBlockStateValues
   readonly direction: FaceDirection
   readonly vertices: readonly [FluidVertex, FluidVertex, FluidVertex, FluidVertex]
   readonly flow?: FluidFlow
