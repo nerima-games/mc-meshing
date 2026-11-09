@@ -845,6 +845,27 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
+  it.effect('propagates missing lookup entries from every repeater boundary face', () =>
+    Effect.sync(() => {
+      const unknownId = Result.getOrThrow(KernelBlockId.result(300))
+      const region = { max: [9, 65, 9], min: [8, 64, 8] } as const
+      const cases = [
+        [[7, 64, 8, unknownId]] as const,
+        [[9, 64, 8, unknownId]] as const,
+        [[8, 63, 8, unknownId]] as const,
+        [[8, 64, 7, unknownId]] as const,
+        [[8, 64, 9, unknownId]] as const,
+      ]
+
+      for (const cells of cases) {
+        const chunk = chunkWith([[8, 64, 8, REPEATER], ...cells])
+        expect(meshSpecialBlocks(SPECIAL_LOOKUP, chunk, {}, CHUNK_HEIGHT, region, MESH_CONFIG)).toStrictEqual(
+          Result.fail({ _tag: 'MissingSpecialBlockLookupEntry', blockId: unknownId }),
+        )
+      }
+    }),
+  )
+
   it.effect('returns failures for invalid rail shape data and missing rail render metadata', () =>
     Effect.sync(() => {
       const railShapes = new Uint8Array(BLOCKS_PER_CHUNK)

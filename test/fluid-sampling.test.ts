@@ -1,6 +1,6 @@
 import { Brand, Result } from 'effect'
 import { BlockId as KernelBlockId, BLOCK_ID_MAX, type BlockId } from '@nerima-games/mc-kernel'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   blockIndex,
   emptyChunk as emptyChunkResult,
@@ -157,6 +157,58 @@ describe('fluid lookup construction', () => {
     }
 
     expect(heightIn(space, position, BLOCK_ID)).toBe(8 / 9)
+  })
+
+  it('reads each fluid maximum once per sampling space across sidecar height samples', () => {
+    const height = 2
+    const empty = Result.getOrThrow(emptyChunkResult(height))
+    const positions: readonly [readonly [number, number, number], readonly [number, number, number]] = [
+      [2, 0, 3],
+      [4, 1, 5],
+    ]
+    const blocks = new Uint16Array(empty.blocks)
+    const fluid = {
+      levels: new Uint8Array(empty.blocks.length),
+      sources: new Uint8Array(empty.blocks.length),
+      falling: new Uint8Array(empty.blocks.length),
+    }
+    const [firstPosition, secondPosition] = positions
+    const firstIndex = blockIndex(...firstPosition, height)
+    const secondIndex = blockIndex(...secondPosition, height)
+    blocks[firstIndex] = BLOCK_ID
+    blocks[secondIndex] = BLOCK_ID
+    fluid.levels[firstIndex] = 1
+    fluid.levels[secondIndex] = 2
+
+    const makeSpace = (maxLevel: number) => {
+      const config = {
+        ...EMPTY_MESH_CONFIG,
+        fluidMaxLevels: new Map<BlockId, number>([[BLOCK_ID, maxLevel]]),
+      }
+      return {
+        chunk: { ...empty, blocks, fluid },
+        neighbours: {},
+        context: {
+          fluids: Result.getOrThrow(buildFluidLookup(config)),
+          layers: new Uint8Array(BLOCK_ID_MAX + 1),
+          plants: new Uint8Array(BLOCK_ID_MAX + 1),
+        },
+        stateFailure: { failure: null },
+      }
+    }
+    const firstSpace = makeSpace(8)
+    const secondSpace = makeSpace(3)
+    const getUint16 = vi.spyOn(DataView.prototype, 'getUint16')
+
+    try {
+      expect(heightIn(firstSpace, firstPosition, BLOCK_ID)).toBe(8 / 9)
+      expect(heightIn(firstSpace, secondPosition, BLOCK_ID)).toBe(7 / 9)
+      expect(heightIn(firstSpace, firstPosition, BLOCK_ID)).toBe(8 / 9)
+      expect(heightIn(secondSpace, firstPosition, BLOCK_ID)).toBe(3 / 4)
+      expect(getUint16).toHaveBeenCalledTimes(2)
+    } finally {
+      getUint16.mockRestore()
+    }
   })
 
   it('reports an invalid fluid max level without throwing', () => {

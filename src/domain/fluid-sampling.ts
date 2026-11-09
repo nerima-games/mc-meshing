@@ -244,6 +244,23 @@ type FluidBlockStateSample = {
 
 export type FluidPosition = readonly [lx: number, y: number, lz: number]
 
+const FLUID_MAXIMUM_LEVELS_BY_SPACE = new WeakMap<FluidSpace, Map<BlockId, number>>()
+
+const maximumLevelForFluidIn = (space: FluidSpace, blockId: BlockId): number => {
+  let maximumLevels = FLUID_MAXIMUM_LEVELS_BY_SPACE.get(space)
+  if (!maximumLevels) {
+    maximumLevels = new Map()
+    FLUID_MAXIMUM_LEVELS_BY_SPACE.set(space, maximumLevels)
+  }
+  const cached = maximumLevels.get(blockId)
+  if (typeof cached !== 'undefined') {
+    return cached
+  }
+  const maximum = encodedLevelForKnownFluid(space.context.fluids, blockId) - INDEX_TO_COUNT_OFFSET
+  maximumLevels.set(blockId, maximum)
+  return maximum
+}
+
 export type FluidSample = {
   readonly space: FluidSpace
   readonly position: FluidPosition
@@ -304,9 +321,6 @@ const keepFirstStateFailure = (space: FluidSpace, failure: FluidSamplingFailure)
 }
 
 const rememberUnknownBlockStateFailure = (space: FluidSpace, view: ChunkView, index: ChunkBlockIndex): void => {
-  if (typeof view.blockStates === 'undefined') {
-    return
-  }
   const state = blockStateAt(view, index)
   if (Result.isFailure(state)) {
     keepFirstStateFailure(space, state.failure)
@@ -358,7 +372,7 @@ const stateSampleFor = (
     keepFirstStateFailure(space, { _tag: 'InvalidFluidBlockStateLevel', blockId, index, level: rawLevel })
     return rememberNoFluidSample(viewSamples, index)
   }
-  const maximum = encodedLevelForKnownFluid(space.context.fluids, blockId) - INDEX_TO_COUNT_OFFSET
+  const maximum = maximumLevelForFluidIn(space, blockId)
   const level = Math.min(maximum, Math.ceil((rawLevel * maximum) / FLOWING_FLUID_LEVEL))
   const sample: FluidBlockStateSample = {
     blockState: state.success,
@@ -378,10 +392,6 @@ export const blockStateIn = (
 ): EffectiveBlockStateValues | undefined => {
   const [lx, y, lz] = position
   const view = space.chunk
-  const fluid = fluidViewIn(space, view)
-  if (typeof view.blockStates === 'undefined' && typeof fluid !== 'undefined') {
-    return
-  }
   return stateSampleFor(space, view, blockIndex(lx, y, lz, view.height), wantId)?.blockState
 }
 
@@ -406,7 +416,7 @@ const heightInView = (space: FluidSpace, view: ChunkView, position: FluidPositio
   }
   return heightForLevel(
     levelIn(fluid, index),
-    encodedLevelForKnownFluid(space.context.fluids, wantId) - INDEX_TO_COUNT_OFFSET,
+    maximumLevelForFluidIn(space, wantId),
     sourceIn(fluid, index),
   )
 }

@@ -85,7 +85,7 @@ export type ChunkBlockStateIndexFailure = {
 export type ChunkBlockStateCodecFailure = {
   readonly _tag: 'ChunkBlockStateCodecFailure'
   readonly blockId: BlockId
-  readonly encoded?: number
+  readonly encoded?: EncodedBlockState
   readonly index: ChunkBlockIndex
   readonly reason: BlockStateCodecFailure['reason']
 }
@@ -336,7 +336,10 @@ const effectiveBlockStateAt = (
 ): Result.Result<EffectiveBlockStateValues, ChunkBlockStateCodecFailure> => {
   const effective = effectiveBlockStateOf(blockId, encodedBlockStateFromUint32(encoded))
   if (Result.isFailure(effective)) {
-    return Result.fail({ ...chunkBlockStateCodecFailure(index, blockId, effective.failure.reason), encoded })
+    return Result.fail({
+      ...chunkBlockStateCodecFailure(index, blockId, effective.failure.reason),
+      encoded: encodedBlockStateFromUint32(encoded),
+    })
   }
   return Result.succeed(effective.success)
 }

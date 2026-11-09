@@ -127,12 +127,22 @@ const rowMatches = (
   skyLight: number,
   blockState: number,
 ): boolean => {
-  const { light } = masks
+  const { blockStateMask, light } = masks
+  if (blockStateMask) {
+    for (let offset = FIRST_INDEX; offset < length; offset += STEP) {
+      const index = start + offset
+      if (masks.mask[index] !== cell || blockStateMask[index] !== blockState) {
+        return false
+      }
+      if (light && (light.block[index] !== blockLight || light.sky[index] !== skyLight)) {
+        return false
+      }
+    }
+    return true
+  }
+
   for (let offset = FIRST_INDEX; offset < length; offset += STEP) {
     if (masks.mask[start + offset] !== cell) {
-      return false
-    }
-    if (masks.blockStateMask && masks.blockStateMask[start + offset] !== blockState) {
       return false
     }
     if (light && (light.block[start + offset] !== blockLight || light.sky[start + offset] !== skyLight)) {
@@ -152,13 +162,24 @@ const growInnerRun = (
   skyLight: number,
   blockState: number,
 ): number => {
-  const { light } = masks
+  const { blockStateMask, light } = masks
   let innerRun = 1
-  while (
-    inner + innerRun < innerSize &&
-    masks.mask[base + innerRun] === cell &&
-    (!masks.blockStateMask || masks.blockStateMask[base + innerRun] === blockState)
-  ) {
+  if (blockStateMask) {
+    while (
+      inner + innerRun < innerSize &&
+      masks.mask[base + innerRun] === cell &&
+      blockStateMask[base + innerRun] === blockState
+    ) {
+      const index = base + innerRun
+      if (light && (light.block[index] !== blockLight || light.sky[index] !== skyLight)) {
+        break
+      }
+      innerRun += STEP
+    }
+    return innerRun
+  }
+
+  while (inner + innerRun < innerSize && masks.mask[base + innerRun] === cell) {
     const index = base + innerRun
     if (light && (light.block[index] !== blockLight || light.sky[index] !== skyLight)) {
       break
@@ -365,6 +386,7 @@ const resolveExposedCell = (
     if (isOpaque) {
       ctx.mask[maskIndex] = packFaceCell(blockId, ao)
       if (ctx.blockStateMask) {
+        // This mask exists only when validated block-state storage exists.
         ctx.blockStateMask[maskIndex] = ctx.chunk.blockStates?.[cellIndex] ?? NO_FACE
       }
       if (ctx.light && light) {

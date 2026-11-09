@@ -1081,6 +1081,40 @@ describe('the injected fluid table', () => {
     }),
   )
 
+  it.effect('meshes a custom fluid id without kernel state only when state storage is omitted', () =>
+    Effect.sync(() => {
+      const customFluid = makeBlockId(300)
+      const chunk = chunkWith([[8, 64, 8, customFluid]])
+      const config: MeshConfig = {
+        ...CONFIG,
+        fluidMaxLevels: new Map([[customFluid, WATER_MAX_LEVEL]]),
+        waterBlockIds: new Set([customFluid]),
+      }
+
+      const result = meshChunkResult(chunk, {}, config)
+      expect(Result.isSuccess(result)).toBe(true)
+      if (Result.isSuccess(result)) {
+        expect(result.success.fluids.filter((quad) => quad.direction === 'yPos')).toHaveLength(1)
+        expect(result.success.fluids.every((quad) => quad.blockId === customFluid && typeof quad.blockState === 'undefined')).toBe(true)
+      }
+    }),
+  )
+
+  it.effect('uses configured fluid geometry for a known block type without fluid state', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([[8, 64, 8, STONE]])
+      const config: MeshConfig = {
+        ...CONFIG,
+        fluidMaxLevels: new Map([[STONE, WATER_MAX_LEVEL]]),
+        waterBlockIds: new Set([STONE]),
+      }
+
+      const fluids = meshChunk(chunk, {}, config).fluids
+      expect(fluids.filter((quad) => quad.direction === 'yPos')).toHaveLength(1)
+      expect(fluids.every((quad) => quad.blockId === STONE && typeof quad.blockState === 'undefined')).toBe(true)
+    }),
+  )
+
   it.each([
     ['no level', Reflect.get({}, 'level')],
     ['a fractional level', 0.5],

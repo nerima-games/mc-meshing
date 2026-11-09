@@ -650,4 +650,28 @@ describe('crop texture stages', () => {
       vi.resetModules()
     }
   })
+
+  it('propagates kernel block-type lookup failures when selecting a plant stage', async () => {
+    vi.resetModules()
+    const failure = { _tag: 'InjectedBlockTypeFailure' }
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        blockTypeOfId: (candidateId: BlockId) => candidateId === Option.getOrThrow(blockIdOf('sapling'))
+          ? invalidFixture(Result.fail(failure))
+          : kernel.blockTypeOfId(candidateId),
+      }
+    })
+    try {
+      const { plantTextureStageAt: selectStage } = await import('../src/domain/plant-mesh.js')
+      const { chunk, index } = cropChunk('wheat_crop', null, false)
+      const blocks = new Uint16Array(chunk.blocks)
+      blocks[index] = Option.getOrThrow(blockIdOf('sapling'))
+      expect(selectStage({ ...chunk, blocks }, index)).toStrictEqual(Result.fail(failure))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result } from 'effect'
-import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { ChunkAxis as chunkAxis, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, type ChunkView, blockIndex, emptyChunk as emptyChunkResult } from '../src/domain/chunk-view'
 import { type MeshLayers, type MeshRegion, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
@@ -17,6 +17,7 @@ const meshChunkRegion = (...args: Parameters<typeof meshChunkRegionResult>) => e
 const emptyChunk = (height?: number): ChunkView => expectSuccess(emptyChunkResult(height))
 
 const STONE = Option.getOrThrow(blockIdOf('stone'))
+const OAK_LOG = Option.getOrThrow(blockIdOf('oak_log'))
 const WATER = Option.getOrThrow(blockIdOf('water'))
 const FLOWER = Option.getOrThrow(blockIdOf('dandelion'))
 const CONFIG: MeshConfig = {
@@ -90,6 +91,23 @@ describe('subregion meshing', () => {
       expect(result.ownedRegion).toStrictEqual(result.dirtyRegion)
       expect(result.layers).toStrictEqual(project(meshChunkNaive(chunk, { xPos }, CONFIG), result.dirtyRegion))
       expect(result.layers.opaque.some((quad) => quad.direction === 'xPos')).toBe(false)
+    }),
+  )
+
+  it.effect('retains encoded block state while meshing a dirty region', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([[8, 20, 8, OAK_LOG]])
+      const blockStates = new Uint32Array(chunk.blocks.length)
+      blockStates[blockIndex(8, 20, 8, CHUNK_HEIGHT)] = expectSuccess(encodeBlockState(OAK_LOG, { axis: 'x' }))
+      const result = meshChunkRegion(
+        { ...chunk, blockStates },
+        {},
+        CONFIG,
+        { max: [9, 21, 9], min: [8, 20, 8] },
+      )
+
+      expect(result.layers.opaque).toHaveLength(6)
+      expect(result.layers.opaque.every((quad) => quad.blockState?.axis === 'x')).toBe(true)
     }),
   )
 
