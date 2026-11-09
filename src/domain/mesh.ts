@@ -333,9 +333,25 @@ const lightMasksOf = (
 }
 
 type MeshWorkBuffers = {
-  readonly blockStateMask?: Uint32Array<ArrayBufferLike>
+  readonly blockStateMask?: {
+    readonly encodedStates: DataView
+    readonly values: Uint32Array<ArrayBufferLike>
+  }
   readonly mask: Uint32Array<ArrayBufferLike>
   readonly light: { block: Uint16Array; sky: Uint16Array } | undefined
+}
+
+const encodedBlockStatesOf = (blockStates: Readonly<Uint32Array>): DataView =>
+  new DataView(blockStates.buffer, blockStates.byteOffset, blockStates.byteLength)
+
+const blockStateMaskOf = (
+  blockStates: ChunkView['blockStates'],
+  values: Uint32Array<ArrayBufferLike> | undefined,
+): MeshWorkBuffers['blockStateMask'] => {
+  if (!blockStates || !values) {
+    return
+  }
+  return { encodedStates: encodedBlockStatesOf(blockStates), values }
 }
 
 const meshBuffersOf = (
@@ -344,14 +360,20 @@ const meshBuffersOf = (
   scratch: MeshScratch | undefined,
 ): Result.Result<MeshWorkBuffers, MeshScratchFailure> => {
   if (scratch) {
-    return Result.map(scratch.buffersFor(length, Boolean(chunk.light), Boolean(chunk.blockStates)), (buffers) => ({
-      ...(buffers.blockStateMask ? { blockStateMask: buffers.blockStateMask } : {}),
-      light: buffers.light,
-      mask: buffers.mask,
-    }))
+    return Result.map(scratch.buffersFor(length, Boolean(chunk.light), Boolean(chunk.blockStates)), (buffers) => {
+      const blockStateMask = blockStateMaskOf(chunk.blockStates, buffers.blockStateMask)
+      return {
+        ...(blockStateMask ? { blockStateMask } : {}),
+        light: buffers.light,
+        mask: buffers.mask,
+      }
+    })
   }
+  const blockStates = chunk.blockStates
   return Result.succeed({
-    ...(chunk.blockStates ? { blockStateMask: new Uint32Array(length) } : {}),
+    ...(blockStates
+      ? { blockStateMask: { encodedStates: encodedBlockStatesOf(blockStates), values: new Uint32Array(length) } }
+      : {}),
     light: lightMasksOf(chunk, length),
     mask: new Uint32Array(length),
   })
@@ -669,10 +691,17 @@ export const meshChunkRegion = (
                     const required = CHUNK_SIZE * Math.max(maxY, CHUNK_SIZE)
                     const light = lightMasksOf(chunk, required)
                     const mask = new Uint32Array(required)
-                    const blockStateMask = chunk.blockStates ? new Uint32Array(required) : null
+                    const blockStates = chunk.blockStates
                     return Result.map(meshAllFaces({
                       chunk,
-                      ...(blockStateMask ? { blockStateMask } : {}),
+                      ...(blockStates
+                        ? {
+                            blockStateMask: {
+                              encodedStates: encodedBlockStatesOf(blockStates),
+                              values: new Uint32Array(required),
+                            },
+                          }
+                        : {}),
                       fluids,
                       light,
                       lookup,

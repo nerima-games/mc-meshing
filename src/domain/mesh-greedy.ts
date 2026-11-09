@@ -41,6 +41,7 @@ const LIGHT_NIBBLE_MASK = 0x0f
 const LIGHT_CORNER_SHIFT = 4
 const SECOND_LIGHT_CORNER = 2
 const THIRD_LIGHT_CORNER = 3
+const HOST_IS_LITTLE_ENDIAN = new DataView(new Uint16Array([1]).buffer).getUint8(0) === 1
 
 export const packFaceCell = (blockId: number, ao: number): number => blockId | (ao << AO_SHIFT)
 
@@ -109,6 +110,11 @@ type EmitQuad = (
 type LightMasks = {
   readonly block: Uint16Array
   readonly sky: Uint16Array
+}
+
+type BlockStateMask = {
+  readonly encodedStates: DataView
+  readonly values: Uint32Array
 }
 
 type GreedyMasks = {
@@ -306,7 +312,7 @@ type ColumnPassContext = {
   readonly face: Face
   readonly fluids: Uint16Array
   readonly lookup: LayerLookup
-  readonly blockStateMask: Uint32Array | undefined
+  readonly blockStateMask: BlockStateMask | undefined
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly placement: FacePlacement
@@ -346,7 +352,7 @@ export type MeshAllFacesContext = {
   readonly chunk: ChunkView
   readonly fluids: Uint16Array
   readonly lookup: LayerLookup
-  readonly blockStateMask?: Uint32Array | undefined
+  readonly blockStateMask?: BlockStateMask | undefined
   readonly mask: Uint32Array
   readonly neighbours: ChunkNeighbours
   readonly plants: Uint8Array
@@ -386,8 +392,10 @@ const resolveExposedCell = (
     if (isOpaque) {
       ctx.mask[maskIndex] = packFaceCell(blockId, ao)
       if (ctx.blockStateMask) {
-        // This mask exists only when validated block-state storage exists.
-        ctx.blockStateMask[maskIndex] = ctx.chunk.blockStates?.[cellIndex] ?? NO_FACE
+        ctx.blockStateMask.values[maskIndex] = ctx.blockStateMask.encodedStates.getUint32(
+          cellIndex * Uint32Array.BYTES_PER_ELEMENT,
+          HOST_IS_LITTLE_ENDIAN,
+        )
       }
       if (ctx.light && light) {
         ctx.light.block[maskIndex] = packLightChannel(light, 'block')
@@ -424,7 +432,7 @@ const isPaintableCell = (ctx: ColumnPassContext, blockId: BlockId): boolean =>
 
 const clearMasks = (ctx: ColumnPassContext, length: number): void => {
   ctx.mask.fill(NO_FACE, FIRST_INDEX, length)
-  ctx.blockStateMask?.fill(NO_FACE, FIRST_INDEX, length)
+  ctx.blockStateMask?.values.fill(NO_FACE, FIRST_INDEX, length)
   ctx.light?.block.fill(NO_FACE, FIRST_INDEX, length)
   ctx.light?.sky.fill(NO_FACE, FIRST_INDEX, length)
 }
@@ -510,7 +518,7 @@ const fillZSliceMask = (ctx: ColumnPassContext, lz: number, yLimit: number): voi
 
 const meshXPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
-    blockStateMask: ctx.blockStateMask,
+    blockStateMask: ctx.blockStateMask?.values,
     light: ctx.light,
     mask: ctx.mask,
   }
@@ -554,7 +562,7 @@ const meshXPass = (ctx: MeshPassContext): void => {
 
 const meshYPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
-    blockStateMask: ctx.blockStateMask,
+    blockStateMask: ctx.blockStateMask?.values,
     light: ctx.light,
     mask: ctx.mask,
   }
@@ -598,7 +606,7 @@ const meshYPass = (ctx: MeshPassContext): void => {
 
 const meshZPass = (ctx: MeshPassContext): void => {
   const masks: GreedyMasks = {
-    blockStateMask: ctx.blockStateMask,
+    blockStateMask: ctx.blockStateMask?.values,
     light: ctx.light,
     mask: ctx.mask,
   }
