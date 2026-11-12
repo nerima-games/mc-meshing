@@ -389,12 +389,12 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
-  it.effect('keeps an unknown block id on its neutral mesh path when encoded state storage is present', () =>
+  it.effect('keeps an unknown block id on its neutral mesh path when state storage is omitted', () =>
     Effect.sync(() => {
       const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
       const config = { ...MESH_CONFIG, transparentSolidBlockIds: new Set([customBlockId]) }
       const layers = Result.getOrThrow(meshChunk(
-        chunkWithStates([[8, 64, 8, customBlockId]], [[8, 64, 8, 1]]),
+        chunkWith([[8, 64, 8, customBlockId]]),
         {},
         config,
       ))

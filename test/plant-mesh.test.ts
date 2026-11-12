@@ -601,7 +601,7 @@ describe('crop texture stages', () => {
     }),
   )
 
-  it.effect('returns no texture stage for non-plants and propagates unknown block ids', () =>
+  it.effect('returns no texture stage for non-plants and rejects explicit state for unknown ids', () =>
     Effect.sync(() => {
       const index = blockIndex(4, 30, 5)
       const stone = Option.getOrThrow(blockIdOf('stone'))
@@ -617,7 +617,13 @@ describe('crop texture stages', () => {
         ...chunkWith([[4, 30, 5, unknownId]]),
         blockStates: encodedStates,
       }
-      expect(plantTextureStageAt(unknownWithStates, index)).toStrictEqual(Result.succeed(Option.none()))
+      expect(plantTextureStageAt(unknownWithStates, index)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: unknownId,
+        encoded: 0,
+        index,
+        reason: 'unknown-block-id',
+      }))
     }),
   )
 

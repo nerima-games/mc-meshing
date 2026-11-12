@@ -36,7 +36,7 @@ const invalidFixture = <T,>(value: any): T => value
 const STATE_CHUNK_HEIGHT = 8
 const STATE_INDEX = blockIndex(2, 3, 4, STATE_CHUNK_HEIGHT)
 
-type StatefulBlockType = 'water' | 'wheat_crop' | 'oak_log' | 'door_open'
+type StatefulBlockType = 'water' | 'wheat_crop' | 'oak_log' | 'door_open' | 'stone'
 
 const chunkWithRawBlockState = (blockType: StatefulBlockType, rawState?: number) => {
   const blockId = Option.getOrThrow(blockIdOf(blockType))
@@ -125,7 +125,7 @@ describe('blockStateAt', () => {
     expect(doorState.open).toBe(true)
   })
 
-  it('uses neutral state for custom IDs with or without encoded state storage', () => {
+  it('uses neutral state for an unregistered ID when state storage is omitted', () => {
     const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
     const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
     const blocks = new Uint16Array(empty.blocks)
@@ -133,12 +133,39 @@ describe('blockStateAt', () => {
     const chunk: ChunkView = { ...empty, blocks }
 
     expect(blockStateAt(chunk, STATE_INDEX)).toStrictEqual(Result.succeed({}))
+  })
 
-    const blockStates = new Uint32Array(blocks.length)
-    const chunkWithNeutralStates: ChunkView = { ...chunk, blockStates }
+  it('accepts only encoded zero for a kernel-registered block without state slots', () => {
+    const neutral = chunkWithRawBlockState('stone', 0)
+    expect(blockStateAt(neutral.chunk, neutral.index)).toStrictEqual(Result.succeed({}))
+
+    const nonNeutral = chunkWithRawBlockState('stone', 1)
+    expect(blockStateAt(nonNeutral.chunk, nonNeutral.index)).toStrictEqual(Result.fail({
+      _tag: 'ChunkBlockStateCodecFailure',
+      blockId: nonNeutral.blockId,
+      encoded: 1,
+      index: nonNeutral.index,
+      reason: 'reserved-code',
+    }))
+  })
+
+  it('returns typed failures for explicit values on IDs absent from the kernel registry', () => {
+    const unknownBlockId = Result.getOrThrow(KernelBlockId.result(300))
+    const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
+    const blocks = new Uint16Array(empty.blocks)
+    blocks[STATE_INDEX] = unknownBlockId
+
     for (const encoded of [0, 1]) {
+      const blockStates = new Uint32Array(blocks.length)
       blockStates[STATE_INDEX] = encoded
-      expect(blockStateAt(chunkWithNeutralStates, STATE_INDEX)).toStrictEqual(Result.succeed({}))
+      const chunk: ChunkView = { ...empty, blocks, blockStates }
+      expect(blockStateAt(chunk, STATE_INDEX)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: unknownBlockId,
+        encoded,
+        index: STATE_INDEX,
+        reason: 'unknown-block-id',
+      }))
     }
   })
 

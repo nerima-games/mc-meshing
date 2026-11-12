@@ -236,6 +236,28 @@ describe('block state in cube output', () => {
       expect(meshChunkNaiveResult(malformed, {}, EMPTY_MESH_CONFIG)).toStrictEqual(failure)
     }),
   )
+
+  it.effect('rejects explicit states for unregistered IDs before cube faces are emitted', () =>
+    Effect.sync(() => {
+      const source = chunkWith([[8, 64, 8, UNREGISTERED_BLOCK_ID]])
+      const chunk = { ...source, blockStates: new Uint32Array(BLOCKS_PER_CHUNK) }
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const config: MeshConfig = {
+        ...EMPTY_MESH_CONFIG,
+        transparentSolidBlockIds: new Set([UNREGISTERED_BLOCK_ID]),
+      }
+      const failure = Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: UNREGISTERED_BLOCK_ID,
+        encoded: 0,
+        index,
+        reason: 'unknown-block-id',
+      })
+
+      expect(meshChunkResult(chunk, {}, config)).toStrictEqual(failure)
+      expect(meshChunkNaiveResult(chunk, {}, config)).toStrictEqual(failure)
+    }),
+  )
 })
 
 /**

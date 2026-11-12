@@ -298,6 +298,33 @@ describe('resource-pack resolver', () => {
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
   })
 
+  it('selects a namespaced custom block variant from caller-supplied state properties', () => {
+    const customAssets: ResourcePackAssets = {
+      blockstates: {
+        'mod:crystal': {
+          variants: {
+            'charge=charged': { model: 'mod:block/crystal-charged' },
+            'charge=empty': { model: 'mod:block/crystal-empty' },
+          },
+        },
+      },
+      models: {
+        'mod:block/crystal-charged': {
+          textures: { side: 'mod:block/crystal-charged' },
+          elements: [modelElement({ up: face('#side') })],
+        },
+        'mod:block/crystal-empty': {
+          textures: { side: 'mod:block/crystal-empty' },
+          elements: [modelElement({ up: face('#side') })],
+        },
+      },
+    }
+
+    const selected = meshBlockState(resourceName('mod:crystal'), { charge: 'charged' }, customAssets)
+    expect(selected).toHaveLength(1)
+    expect(selected[0]?.model).toBe('mod:block/crystal-charged')
+  })
+
   it('rejects non-finite blockstate resolver seeds', () => {
     for (const seed of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
       expect(failureOf(resolveBlockStateModelsResult(

@@ -347,6 +347,10 @@ const stateSampleFor = (
 
   const blockType = blockTypeOfId(blockId)
   if (Result.isFailure(blockType) || typeof blockType.success !== 'string') {
+    const state = blockStateAt(view, index)
+    if (Result.isFailure(state)) {
+      keepFirstStateFailure(space, state.failure)
+    }
     return rememberNoFluidSample(viewSamples, index)
   }
   if (!isFluidBlockType(blockType.success)) {

@@ -10,6 +10,7 @@ import { Brand, Result } from 'effect'
 import { AIR, type BlockId, blockIdAt } from './block-data.js'
 import {
   CHUNK_SIZE_XZ,
+  BLOCK_IDS,
   ChunkAxis as chunkAxis,
   type Chunk as KernelChunk,
   type BlockStateCodecFailure,
@@ -328,6 +329,7 @@ const chunkBlockStateCodecFailure = (
 })
 
 const encodedBlockStateFromUint32 = Brand.nominal<EncodedBlockState>()
+const KERNEL_REGISTERED_BLOCK_IDS = new Set<BlockId>(BLOCK_IDS)
 
 const effectiveBlockStateAt = (
   blockId: BlockId,
@@ -336,9 +338,14 @@ const effectiveBlockStateAt = (
 ): Result.Result<EffectiveBlockStateValues, ChunkBlockStateCodecFailure> => {
   const effective = effectiveBlockStateOf(blockId, encodedBlockStateFromUint32(encoded))
   if (Result.isFailure(effective)) {
-    if (effective.failure.reason === 'unknown-block-id') {
-      // Keep custom block IDs opaque to the kernel's state codec.
-      return Result.succeed({})
+    if (effective.failure.reason === 'unknown-block-id' && KERNEL_REGISTERED_BLOCK_IDS.has(blockId)) {
+      if (encoded === 0) {
+        return Result.succeed({})
+      }
+      return Result.fail({
+        ...chunkBlockStateCodecFailure(index, blockId, 'reserved-code'),
+        encoded: encodedBlockStateFromUint32(encoded),
+      })
     }
     return Result.fail({
       ...chunkBlockStateCodecFailure(index, blockId, effective.failure.reason),
