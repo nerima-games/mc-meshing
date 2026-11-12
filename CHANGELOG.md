@@ -4,9 +4,9 @@
 
 ### Minor Changes
 
-- Select block models using encoded block states.
-- Mesh doors, stairs, and rails using their state-defined shapes.
-- Determine visibility between adjacent special-block faces from the shapes those blocks occupy.
+- Select each block model and plant texture stage from that block's state.
+- Build door and stair shapes and rail paths from their block states.
+- Hide a shared face between adjacent special blocks only when the neighboring block's shape covers that face.
 - Pin `@nerima-games/mc-kernel` to `0.17.0`.
 
 ## 0.5.0
