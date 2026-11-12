@@ -291,6 +291,16 @@ const quadsWithinBlock = (
   ),
 )
 
+const geometryFaceKeysOnPlane = (
+  quads: ReadonlyArray<SpecialBlockQuad>,
+  direction: string,
+  axis: 0 | 1 | 2,
+  coordinate: number,
+): ReadonlyArray<string> => quads
+  .filter((quad) => quad.direction === direction && quad.vertices.every((vertex) => vertex[axis] === coordinate))
+  .map((quad) => geometryFaceKey(quad.direction, quad.vertices))
+  .sort()
+
 describe('kernel-defined special block geometry', () => {
   it.effect('derives every supported non-cube kind from mc-kernel', () =>
     Effect.sync(() => {
@@ -778,7 +788,7 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
-  it.effect('culls shared cactus faces and hides a cactus face behind an opaque cube', () =>
+  it.effect('preserves cactus faces that do not meet adjacent geometry', () =>
     Effect.sync(() => {
       const adjacent = Result.getOrThrow(meshChunk(
         chunkWith([
@@ -788,7 +798,7 @@ describe('kernel-defined special block geometry', () => {
         {},
         MESH_CONFIG,
       ))
-      expect(adjacent.specialBlocks).toHaveLength(10)
+      expect(adjacent.specialBlocks).toHaveLength(12)
 
       const blocked = Result.getOrThrow(meshChunk(
         chunkWith([
@@ -798,13 +808,13 @@ describe('kernel-defined special block geometry', () => {
         {},
         MESH_CONFIG,
       ))
-      expect(blocked.specialBlocks).toHaveLength(5)
+      expect(blocked.specialBlocks).toHaveLength(6)
       expect(blocked.specialBlocks.every((quad) => quad.kind === 'cactus')).toBe(true)
       expect(blocked.opaque.length).toBeGreaterThan(0)
     }),
   )
 
-  it.effect('emits the lily-pad top only when it is not covered', () =>
+  it.effect('emits the lily-pad top when an above block does not reach its plane', () =>
     Effect.sync(() => {
       const open = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, chunkWith([[8, 64, 8, LILY_PAD]]), {}, CHUNK_HEIGHT))
       expect(open).toHaveLength(1)
@@ -820,7 +830,8 @@ describe('kernel-defined special block geometry', () => {
         {},
         CHUNK_HEIGHT,
       ))
-      expect(covered).toHaveLength(0)
+      expect(covered).toHaveLength(1)
+      expect(covered[0]).toMatchObject({ direction: 'yPos', kind: 'lilyPad', role: 'top' })
 
       const aboveDifferentKind = Result.getOrThrow(meshSpecialBlocks(
         SPECIAL_LOOKUP,
@@ -870,9 +881,9 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
-  it.effect('does not mesh a rail covered by an opaque block', () =>
+  it.effect('keeps rail planes below an opaque block that does not reach them', () =>
     Effect.sync(() => {
-      expect(Result.getOrThrow(meshSpecialBlocks(
+      const quads = Result.getOrThrow(meshSpecialBlocks(
         SPECIAL_LOOKUP,
         chunkWith([
           [8, 64, 8, RAIL],
@@ -880,7 +891,10 @@ describe('kernel-defined special block geometry', () => {
         ]),
         {},
         CHUNK_HEIGHT,
-      ))).toStrictEqual([])
+      ))
+      const rails = quads.filter((quad): quad is RailSpecialBlockQuad => quad.kind === 'rail')
+      expect(rails).toHaveLength(2)
+      expect(new Set(rails.map((quad) => quad.role))).toStrictEqual(new Set(['top', 'bottom']))
     }),
   )
 
@@ -1056,6 +1070,22 @@ describe('kernel-defined special block geometry', () => {
           Result.fail({ _tag: 'MissingSpecialBlockLookupEntry', blockId: unknownId }),
         )
       }
+    }),
+  )
+
+  it.effect('propagates a missing neighbour lookup from locked repeater markers', () =>
+    Effect.sync(() => {
+      const unknownId = Result.getOrThrow(KernelBlockId.result(300))
+      const lockedState = encodeState(REPEATER, { facing: 'east', delay: 1, locked: true })
+      const chunk = chunkWithStates(
+        [[8, 64, 8, REPEATER], [8, 64, 9, unknownId]],
+        [[8, 64, 8, lockedState]],
+      )
+      const repeaterOnlyRegion = { min: [8, 64, 8], max: [9, 65, 9] } as const
+
+      expect(meshSpecialBlocks(SPECIAL_LOOKUP, chunk, {}, CHUNK_HEIGHT, repeaterOnlyRegion)).toStrictEqual(
+        Result.fail({ _tag: 'MissingSpecialBlockLookupEntry', blockId: unknownId }),
+      )
     }),
   )
 
@@ -1336,4 +1366,608 @@ describe('kernel-defined special block geometry', () => {
       vi.resetModules()
     }
   })
+})
+
+describe('adjacent special-block boundary visibility', () => {
+  it.effect('matches fixed vanilla stair faces for adjacent directions, halves, and corner shapes', () =>
+    Effect.sync(() => {
+      // Literal east-face patches from the Java 1.21.4 oak_stairs blockstate and model boxes.
+      // These coordinates are independent of the mesher's occupancy table.
+      const eastFacePatches = {
+        lowerNorth: [[1, 64, 0], [1, 64, 0.5], [1, 64.5, 0.5], [1, 64.5, 0]],
+        lowerSouth: [[1, 64, 0.5], [1, 64, 1], [1, 64.5, 1], [1, 64.5, 0.5]],
+        upperNorth: [[1, 64.5, 0], [1, 64.5, 0.5], [1, 65, 0.5], [1, 65, 0]],
+        upperSouth: [[1, 64.5, 0.5], [1, 64.5, 1], [1, 65, 1], [1, 65, 0.5]],
+      } as const satisfies Readonly<Record<string, ReadonlyArray<GeometryVertex>>>
+
+      const cases = [
+        { id: 'same-facing straight', neighbor: { facing: 'east', half: 'bottom', shape: 'straight' }, expected: ['upperNorth', 'upperSouth'] },
+        { id: 'opposite-facing straight', neighbor: { facing: 'west', half: 'bottom', shape: 'straight' }, expected: [] },
+        { id: 'upper neighbor', neighbor: { facing: 'east', half: 'top', shape: 'straight' }, expected: ['lowerNorth', 'lowerSouth'] },
+        { id: 'inner-left neighbor', neighbor: { facing: 'east', half: 'bottom', shape: 'inner_left' }, expected: ['upperSouth'] },
+        { id: 'inner-right neighbor', neighbor: { facing: 'east', half: 'bottom', shape: 'inner_right' }, expected: ['upperNorth'] },
+        { id: 'outer-left neighbor', neighbor: { facing: 'east', half: 'bottom', shape: 'outer_left' }, expected: ['upperNorth', 'upperSouth'] },
+        { id: 'outer-right neighbor', neighbor: { facing: 'east', half: 'bottom', shape: 'outer_right' }, expected: ['upperNorth', 'upperSouth'] },
+        { id: 'opposite-facing inner-left neighbor', neighbor: { facing: 'west', half: 'bottom', shape: 'inner_left' }, expected: [] },
+        { id: 'opposite-facing inner-right neighbor', neighbor: { facing: 'west', half: 'bottom', shape: 'inner_right' }, expected: [] },
+        { id: 'opposite-facing outer-left neighbor', neighbor: { facing: 'west', half: 'bottom', shape: 'outer_left' }, expected: ['upperNorth'] },
+        { id: 'opposite-facing outer-right neighbor', neighbor: { facing: 'west', half: 'bottom', shape: 'outer_right' }, expected: ['upperSouth'] },
+      ] as const
+
+      for (const testCase of cases) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(
+          SPECIAL_LOOKUP,
+          chunkWithStates(
+            [[0, 64, 0, STAIRS], [1, 64, 0, STAIRS]],
+            [
+              [0, 64, 0, encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })],
+              [1, 64, 0, encodeState(STAIRS, testCase.neighbor)],
+            ],
+          ),
+          {},
+          CHUNK_HEIGHT,
+        ))
+        const actual = geometryFaceKeysOnPlane(
+          quads.filter((quad) => quad.kind === 'stairs'),
+          'xPos',
+          0,
+          1,
+        )
+        const expected = testCase.expected
+          .map((patch) => geometryFaceKey('xPos', eastFacePatches[patch]))
+          .sort()
+        expect(actual, testCase.id).toStrictEqual(expected)
+      }
+    }),
+  )
+
+  it.effect('matches fixed vanilla stair faces against blocks above and below', () =>
+    Effect.sync(() => {
+      const anchor = encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })
+      const above = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[0, 64, 0, STAIRS], [0, 65, 0, STAIRS]],
+          [
+            [0, 64, 0, anchor],
+            [0, 65, 0, encodeState(STAIRS, { facing: 'west', half: 'top', shape: 'straight' })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(geometryFaceKeysOnPlane(
+        above.filter((quad) => quad.kind === 'stairs'),
+        'yPos',
+        1,
+        65,
+      )).toStrictEqual([
+        geometryFaceKey('yPos', [[0.5, 65, 0], [1, 65, 0], [1, 65, 0.5], [0.5, 65, 0.5]]),
+        geometryFaceKey('yPos', [[0.5, 65, 0.5], [1, 65, 0.5], [1, 65, 1], [0.5, 65, 1]]),
+      ].sort())
+
+      const below = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[0, 63, 0, STAIRS], [0, 64, 0, STAIRS]],
+          [
+            [0, 63, 0, encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })],
+            [0, 64, 0, anchor],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(geometryFaceKeysOnPlane(
+        below.filter((quad) => quad.kind === 'stairs'),
+        'yNeg',
+        1,
+        64,
+      )).toStrictEqual([
+        geometryFaceKey('yNeg', [[0, 64, 0], [0.5, 64, 0], [0.5, 64, 0.5], [0, 64, 0.5]]),
+        geometryFaceKey('yNeg', [[0, 64, 0.5], [0.5, 64, 0.5], [0.5, 64, 1], [0, 64, 1]]),
+      ].sort())
+    }),
+  )
+
+  it.effect('culls the shared cap between vertically adjacent cactus blocks', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWith([[8, 64, 8, CACTUS], [8, 65, 8, CACTUS]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const cactusQuads = quads.filter((quad) => quad.kind === 'cactus')
+
+      expect(geometryFaceKeysOnPlane(cactusQuads, 'yPos', 1, 65)).toStrictEqual([])
+      expect(geometryFaceKeysOnPlane(cactusQuads, 'yNeg', 1, 65)).toStrictEqual([])
+    }),
+  )
+
+  it.effect('keeps the full snow-layer face when a shorter neighbor leaves any part exposed', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[8, 64, 8, SNOW], [9, 64, 8, SNOW]],
+          [
+            [8, 64, 8, encodeState(SNOW, { layers: 8 })],
+            [9, 64, 8, encodeState(SNOW, { layers: 4 })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const snowQuads = quads.filter((quad) => quad.kind === 'snowLayer')
+
+      expect(geometryFaceKeysOnPlane(snowQuads, 'xPos', 0, 9)).toStrictEqual([
+        geometryFaceKey('xPos', [[9, 64, 9], [9, 64, 8], [9, 65, 8], [9, 65, 9]]),
+      ])
+      expect(geometryFaceKeysOnPlane(snowQuads, 'xNeg', 0, 9)).toStrictEqual([])
+    }),
+  )
+
+  it.effect('removes the shared repeater-base face for adjacent unlocked repeaters', () =>
+    Effect.sync(() => {
+      const repeaterState = encodeState(REPEATER, { facing: 'east', delay: 1, locked: false })
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[8, 64, 8, REPEATER], [9, 64, 8, REPEATER]],
+          [[8, 64, 8, repeaterState], [9, 64, 8, repeaterState]],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+
+      expect(geometryFaceKeysOnPlane(
+        quads.filter((quad) => quad.blockId === REPEATER && quad.kind === 'repeater'),
+        'xPos',
+        0,
+        9,
+      )).toStrictEqual([])
+    }),
+  )
+
+  it.effect('keeps an exposed locked-repeater marker beside a perpendicular locked repeater', () =>
+    Effect.sync(() => {
+      const eastFacingLock = encodeState(REPEATER, { facing: 'east', delay: 1, locked: true })
+      const northLock = encodeState(REPEATER, { facing: 'north', delay: 1, locked: true })
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[8, 64, 8, REPEATER], [8, 64, 9, REPEATER]],
+          [[8, 64, 8, eastFacingLock], [8, 64, 9, northLock]],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+
+      expect(geometryFaceKeysOnPlane(
+        quads.filter((quad) => quad.blockId === REPEATER && quad.kind === 'repeater'),
+        'zPos',
+        2,
+        9,
+      )).toStrictEqual([
+        geometryFaceKey('zPos', [[8 + 7 / 16, 64 + 1 / 8, 9], [8 + 9 / 16, 64 + 1 / 8, 9], [8 + 9 / 16, 64 + 1 / 4, 9], [8 + 7 / 16, 64 + 1 / 4, 9]]),
+      ])
+    }),
+  )
+
+  it.effect('clips matching stairs across the positive x chunk seam using translated geometry coordinates', () =>
+    Effect.sync(() => {
+      const state = encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })
+      const current = {
+        ...chunkWithStates([[15, 64, 0, STAIRS]], [[15, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      }
+      const xPos = {
+        ...chunkWithStates([[0, 64, 0, STAIRS]], [[0, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(1), chunkAxis(0)),
+      }
+      const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, current, { xPos }, CHUNK_HEIGHT))
+
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stairs'), 'xPos', 0, 16)).toStrictEqual([
+        geometryFaceKey('xPos', [[16, 64.5, 0], [16, 64.5, 0.5], [16, 65, 0.5], [16, 65, 0]]),
+        geometryFaceKey('xPos', [[16, 64.5, 0.5], [16, 64.5, 1], [16, 65, 1], [16, 65, 0.5]]),
+      ].sort())
+    }),
+  )
+
+  it.effect('clips matching stairs across the negative x chunk seam using translated geometry coordinates', () =>
+    Effect.sync(() => {
+      const state = encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })
+      const current = {
+        ...chunkWithStates([[0, 64, 0, STAIRS]], [[0, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(1), chunkAxis(0)),
+      }
+      const xNeg = {
+        ...chunkWithStates([[15, 64, 0, STAIRS]], [[15, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      }
+      const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, current, { xNeg }, CHUNK_HEIGHT))
+
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stairs'), 'xNeg', 0, 0)).toStrictEqual([])
+    }),
+  )
+
+  it.effect('clips matching stairs across the positive z chunk seam using translated geometry coordinates', () =>
+    Effect.sync(() => {
+      const state = encodeState(STAIRS, { facing: 'south', half: 'bottom', shape: 'straight' })
+      const current = {
+        ...chunkWithStates([[0, 64, 15, STAIRS]], [[0, 64, 15, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      }
+      const zPos = {
+        ...chunkWithStates([[0, 64, 0, STAIRS]], [[0, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(1)),
+      }
+      const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, current, { zPos }, CHUNK_HEIGHT))
+
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stairs'), 'zPos', 2, 16)).toStrictEqual([
+        geometryFaceKey('zPos', [[0, 64.5, 16], [0.5, 64.5, 16], [0.5, 65, 16], [0, 65, 16]]),
+        geometryFaceKey('zPos', [[0.5, 64.5, 16], [1, 64.5, 16], [1, 65, 16], [0.5, 65, 16]]),
+      ].sort())
+    }),
+  )
+
+  it.effect('clips matching stairs across the negative z chunk seam using translated geometry coordinates', () =>
+    Effect.sync(() => {
+      const state = encodeState(STAIRS, { facing: 'south', half: 'bottom', shape: 'straight' })
+      const current = {
+        ...chunkWithStates([[0, 64, 0, STAIRS]], [[0, 64, 0, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(1)),
+      }
+      const zNeg = {
+        ...chunkWithStates([[0, 64, 15, STAIRS]], [[0, 64, 15, state]]),
+        coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      }
+      const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, current, { zNeg }, CHUNK_HEIGHT))
+
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stairs'), 'zNeg', 2, 0)).toStrictEqual([])
+    }),
+  )
+
+  it.effect('keeps slab faces beside configured unknown ids only for configured non-opaque neighbor kinds', () =>
+    Effect.sync(() => {
+      const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
+      const chunk = chunkWithStates(
+        [[0, 64, 0, SLAB], [1, 64, 0, customBlockId]],
+        [[0, 64, 0, encodeState(SLAB, { type: 'bottom' })]],
+      )
+      const expectedFace = [
+        geometryFaceKey('xPos', [[1, 64, 0], [1, 64, 1], [1, 64.5, 1], [1, 64.5, 0]]),
+      ]
+      const cases = [
+        {
+          id: 'cross-plant configuration keeps the face',
+          config: { ...MESH_CONFIG, crossPlantBlockIds: new Set([customBlockId]) },
+          expected: expectedFace,
+        },
+        {
+          id: 'transparent-solid configuration keeps the face',
+          config: { ...MESH_CONFIG, transparentSolidBlockIds: new Set([customBlockId]) },
+          expected: expectedFace,
+        },
+        {
+          id: 'water configuration keeps the face',
+          config: { ...MESH_CONFIG, waterBlockIds: new Set([customBlockId]) },
+          expected: expectedFace,
+        },
+        {
+          id: 'fluid-only configuration culls the face',
+          config: { ...MESH_CONFIG, fluidMaxLevels: new Map([[customBlockId, 8]]) },
+          expected: [],
+        },
+      ] as const
+
+      for (const testCase of cases) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(
+          SPECIAL_LOOKUP,
+          chunk,
+          {},
+          CHUNK_HEIGHT,
+          { min: [0, 0, 0], max: [16, CHUNK_HEIGHT, 16] },
+          testCase.config,
+        ))
+        expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'slab'), 'xPos', 0, 1), testCase.id)
+          .toStrictEqual(testCase.expected)
+      }
+    }),
+  )
+
+  it.effect('propagates an invalid encoded state from an adjacent stair as a typed failure', () =>
+    Effect.sync(() => {
+      const anchorState = encodeState(STAIRS, { facing: 'east', half: 'bottom', shape: 'straight' })
+      const invalidEncodedState = 0xFFFFFFFF
+      const chunk = chunkWithStates(
+        [[0, 64, 0, STAIRS], [1, 64, 0, STAIRS]],
+        [[0, 64, 0, anchorState], [1, 64, 0, invalidEncodedState]],
+      )
+
+      expect(meshSpecialBlocks(SPECIAL_LOOKUP, chunk, {}, CHUNK_HEIGHT)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: STAIRS,
+        encoded: invalidEncodedState,
+        index: blockIndex(1, 64, 0, CHUNK_HEIGHT),
+        reason: 'reserved-code',
+      }))
+    }),
+  )
+
+  it.effect('clips adjacent ladders with each valid neighbor facing', () =>
+    Effect.sync(() => {
+      // Constructed chunk-input pair; attachment support blocks are omitted.
+      const fullFace = geometryFaceKey('xPos', [[1, 64, 0], [1, 64, 1], [1, 65, 1], [1, 65, 0]])
+      const cases = [
+        { id: 'west-facing neighbor covers the face', facing: 'west', expected: [] },
+        { id: 'east-facing neighbor misses the face', facing: 'east', expected: [fullFace] },
+        {
+          id: 'north-facing neighbor covers its north strip',
+          facing: 'north',
+          expected: [geometryFaceKey('xPos', [[1, 64, 1 / 16], [1, 64, 1], [1, 65, 1], [1, 65, 1 / 16]])],
+        },
+        {
+          id: 'south-facing neighbor covers its south strip',
+          facing: 'south',
+          expected: [geometryFaceKey('xPos', [[1, 64, 0], [1, 64, 15 / 16], [1, 65, 15 / 16], [1, 65, 0]])],
+        },
+      ] as const
+
+      for (const testCase of cases) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(
+          SPECIAL_LOOKUP,
+          chunkWithStates(
+            [[0, 64, 0, LADDER], [1, 64, 0, LADDER]],
+            [
+              [0, 64, 0, encodeState(LADDER, { facing: 'east' })],
+              [1, 64, 0, encodeState(LADDER, { facing: testCase.facing })],
+            ],
+          ),
+          {},
+          CHUNK_HEIGHT,
+        ))
+        expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'ladder'), 'xPos', 0, 1), testCase.id)
+          .toStrictEqual(testCase.expected)
+      }
+    }),
+  )
+
+  it.effect('uses neighboring button geometry for all mount faces and wall facings', () =>
+    Effect.sync(() => {
+      // Constructed chunk-input pair; attachment support blocks are omitted.
+      const fullFace = geometryFaceKey('xPos', [
+        [1, 64 + 6 / 16, 6 / 16], [1, 64 + 10 / 16, 6 / 16],
+        [1, 64 + 10 / 16, 10 / 16], [1, 64 + 6 / 16, 10 / 16],
+      ])
+      const cases = [
+        { id: 'west wall button covers the interface', neighbor: { facing: 'west', face: 'wall', powered: false }, expected: [] },
+        { id: 'pressed west wall button covers the interface', neighbor: { facing: 'west', face: 'wall', powered: true }, expected: [] },
+        { id: 'east wall button misses the interface', neighbor: { facing: 'east', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'north wall button misses the interface', neighbor: { facing: 'north', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'south wall button misses the interface', neighbor: { facing: 'south', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'floor button misses the interface', neighbor: { facing: 'west', face: 'floor', powered: false }, expected: [fullFace] },
+        { id: 'ceiling button misses the interface', neighbor: { facing: 'east', face: 'ceiling', powered: true }, expected: [fullFace] },
+      ] as const
+
+      for (const testCase of cases) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(
+          SPECIAL_LOOKUP,
+          chunkWithStates(
+            [[0, 64, 0, STONE_BUTTON], [1, 64, 0, STONE_BUTTON]],
+            [
+              [0, 64, 0, encodeState(STONE_BUTTON, { facing: 'east', face: 'wall', powered: false })],
+              [1, 64, 0, encodeState(STONE_BUTTON, testCase.neighbor)],
+            ],
+          ),
+          {},
+          CHUNK_HEIGHT,
+        ))
+        expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stoneButton'), 'xPos', 0, 1), testCase.id)
+          .toStrictEqual(testCase.expected)
+      }
+    }),
+  )
+
+  it.effect('uses neighboring lever geometry for all mount faces and horizontal facings', () =>
+    Effect.sync(() => {
+      // Constructed chunk-input pair; attachment support blocks are omitted.
+      const fullFace = geometryFaceKey('xPos', [
+        [1, 64 + 6 / 16, 6 / 16], [1, 64 + 6 / 16, 10 / 16],
+        [1, 64 + 10 / 16, 10 / 16], [1, 64 + 10 / 16, 6 / 16],
+      ])
+      const cases = [
+        { id: 'west wall lever covers the interface', neighbor: { facing: 'west', face: 'wall', powered: false }, expected: [] },
+        { id: 'powered west wall lever covers the interface', neighbor: { facing: 'west', face: 'wall', powered: true }, expected: [] },
+        { id: 'east wall lever misses the interface', neighbor: { facing: 'east', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'north wall lever misses the interface', neighbor: { facing: 'north', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'south wall lever misses the interface', neighbor: { facing: 'south', face: 'wall', powered: false }, expected: [fullFace] },
+        { id: 'west floor lever misses the interface', neighbor: { facing: 'west', face: 'floor', powered: false }, expected: [fullFace] },
+        { id: 'east floor lever misses the interface', neighbor: { facing: 'east', face: 'floor', powered: true }, expected: [fullFace] },
+        { id: 'north floor lever misses the interface', neighbor: { facing: 'north', face: 'floor', powered: false }, expected: [fullFace] },
+        { id: 'south floor lever misses the interface', neighbor: { facing: 'south', face: 'floor', powered: true }, expected: [fullFace] },
+        { id: 'west ceiling lever misses the interface', neighbor: { facing: 'west', face: 'ceiling', powered: false }, expected: [fullFace] },
+        { id: 'east ceiling lever misses the interface', neighbor: { facing: 'east', face: 'ceiling', powered: true }, expected: [fullFace] },
+        { id: 'north ceiling lever misses the interface', neighbor: { facing: 'north', face: 'ceiling', powered: false }, expected: [fullFace] },
+        { id: 'south ceiling lever misses the interface', neighbor: { facing: 'south', face: 'ceiling', powered: true }, expected: [fullFace] },
+      ] as const
+
+      for (const testCase of cases) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(
+          SPECIAL_LOOKUP,
+          chunkWithStates(
+            [[0, 64, 0, LEVER], [1, 64, 0, LEVER]],
+            [
+              [0, 64, 0, encodeState(LEVER, { facing: 'east', face: 'wall', powered: false })],
+              [1, 64, 0, encodeState(LEVER, testCase.neighbor)],
+            ],
+          ),
+          {},
+          CHUNK_HEIGHT,
+        ))
+        expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'lever'), 'xPos', 0, 1), testCase.id)
+          .toStrictEqual(testCase.expected)
+      }
+    }),
+  )
+
+  it.effect('keeps only the non-overlapping halves between adjacent bottom and top slabs', () =>
+    Effect.sync(() => {
+      const matchingSlabs = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[0, 64, 0, SLAB], [1, 64, 0, SLAB]],
+          [
+            [0, 64, 0, encodeState(SLAB, { type: 'bottom' })],
+            [1, 64, 0, encodeState(SLAB, { type: 'bottom' })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const matchingSlabQuads = matchingSlabs.filter((quad) => quad.kind === 'slab')
+      expect(geometryFaceKeysOnPlane(matchingSlabQuads, 'xPos', 0, 1)).toStrictEqual([])
+      expect(geometryFaceKeysOnPlane(matchingSlabQuads, 'xNeg', 0, 1)).toStrictEqual([])
+
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[0, 64, 0, SLAB], [1, 64, 0, SLAB]],
+          [
+            [0, 64, 0, encodeState(SLAB, { type: 'bottom' })],
+            [1, 64, 0, encodeState(SLAB, { type: 'top' })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const slabQuads = quads.filter((quad) => quad.kind === 'slab')
+
+      expect(geometryFaceKeysOnPlane(slabQuads, 'xPos', 0, 1)).toStrictEqual([
+        geometryFaceKey('xPos', [[1, 64, 0], [1, 64, 1], [1, 64.5, 1], [1, 64.5, 0]]),
+      ])
+      expect(geometryFaceKeysOnPlane(slabQuads, 'xNeg', 0, 1)).toStrictEqual([
+        geometryFaceKey('xNeg', [[1, 64.5, 0], [1, 64.5, 1], [1, 65, 1], [1, 65, 0]]),
+      ])
+    }),
+  )
+
+  it.effect('preserves the exposed part of perpendicular closed-door panels', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [[0, 64, 0, DOOR], [0, 64, 1, DOOR]],
+          [
+            [0, 64, 0, encodeState(DOOR, { facing: 'north', hinge: 'left', half: 'lower', open: false })],
+            [0, 64, 1, encodeState(DOOR, { facing: 'west', hinge: 'left', half: 'lower', open: false })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const doorQuads = quads.filter((quad) => quad.kind === 'door')
+
+      expect(geometryFaceKeysOnPlane(doorQuads, 'zPos', 2, 1)).toStrictEqual([
+        geometryFaceKey('zPos', [[0, 64, 1], [13 / 16, 64, 1], [13 / 16, 65, 1], [0, 65, 1]]),
+      ])
+    }),
+  )
+
+  it.effect('keeps the inset side faces of adjacent cacti in constructed chunk input', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWith([[0, 64, 0, CACTUS], [1, 64, 0, CACTUS]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const cactusQuads = quads.filter((quad) => quad.kind === 'cactus')
+
+      expect(geometryFaceKeysOnPlane(cactusQuads, 'xPos', 0, 15 / 16)).toStrictEqual([
+        geometryFaceKey('xPos', [[15 / 16, 64, 1 / 16], [15 / 16, 64, 15 / 16], [15 / 16, 65, 15 / 16], [15 / 16, 65, 1 / 16]]),
+      ])
+      expect(geometryFaceKeysOnPlane(cactusQuads, 'xNeg', 0, 17 / 16)).toStrictEqual([
+        geometryFaceKey('xNeg', [[17 / 16, 64, 1 / 16], [17 / 16, 64, 15 / 16], [17 / 16, 65, 15 / 16], [17 / 16, 65, 1 / 16]]),
+      ])
+    }),
+  )
+
+  it.effect('uses neighboring attachment geometry for ladders, buttons, and levers', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [
+            [0, 64, 1, LADDER], [1, 64, 1, LADDER],
+            [2, 64, 1, STONE_BUTTON], [3, 64, 1, STONE_BUTTON],
+            [4, 64, 1, LEVER], [5, 64, 1, LEVER],
+          ],
+          [
+            [0, 64, 1, encodeState(LADDER, { facing: 'west' })],
+            [1, 64, 1, encodeState(LADDER, { facing: 'north' })],
+            [2, 64, 1, encodeState(STONE_BUTTON, { facing: 'west', face: 'floor', powered: false })],
+            [3, 64, 1, encodeState(STONE_BUTTON, { facing: 'west', face: 'wall', powered: false })],
+            [4, 64, 1, encodeState(LEVER, { facing: 'west', face: 'floor', powered: false })],
+            [5, 64, 1, encodeState(LEVER, { facing: 'west', face: 'wall', powered: false })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'ladder'), 'xNeg', 0, 1)).toStrictEqual([
+        geometryFaceKey('xNeg', [[1, 64, 1], [1, 64, 1 + 1 / 16], [1, 65, 1 + 1 / 16], [1, 65, 1]]),
+      ])
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'stoneButton'), 'xNeg', 0, 3)).toStrictEqual([
+        geometryFaceKey('xNeg', [[3, 64 + 6 / 16, 1 + 6 / 16], [3, 64 + 6 / 16, 1 + 10 / 16], [3, 64 + 10 / 16, 1 + 10 / 16], [3, 64 + 10 / 16, 1 + 6 / 16]]),
+      ])
+      expect(geometryFaceKeysOnPlane(quads.filter((quad) => quad.kind === 'lever'), 'xNeg', 0, 5)).toStrictEqual([
+        geometryFaceKey('xNeg', [[5, 64 + 6 / 16, 1 + 6 / 16], [5, 64 + 6 / 16, 1 + 10 / 16], [5, 64 + 10 / 16, 1 + 10 / 16], [5, 64 + 10 / 16, 1 + 6 / 16]]),
+      ])
+    }),
+  )
+
+  it.effect('keeps exposed vertical bases and interior rail and lily-pad planes', () =>
+    Effect.sync(() => {
+      const quads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates(
+          [
+            [1, 64, 1, PRESSURE_PLATE], [1, 65, 1, PRESSURE_PLATE],
+            [3, 64, 1, REPEATER], [3, 65, 1, REPEATER],
+            [5, 64, 1, RAIL], [5, 65, 1, RAIL],
+            [7, 64, 1, LILY_PAD], [7, 65, 1, LILY_PAD],
+          ],
+          [
+            [1, 64, 1, encodeState(PRESSURE_PLATE, { powered: false })],
+            [1, 65, 1, encodeState(PRESSURE_PLATE, { powered: false })],
+            [3, 64, 1, encodeState(REPEATER, { facing: 'north', delay: 1, locked: false })],
+            [3, 65, 1, encodeState(REPEATER, { facing: 'north', delay: 1, locked: false })],
+            [5, 64, 1, encodeState(RAIL, { shape: 'north_south' })],
+            [5, 65, 1, encodeState(RAIL, { shape: 'north_south' })],
+          ],
+        ),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const pressurePlateQuads = quads.filter((quad) => quad.kind === 'pressurePlate')
+      const repeaterQuads = quads.filter((quad) => quad.kind === 'repeater')
+      const lowerRailTop = quads.filter((quad) => quad.kind === 'rail' && quad.role === 'top' && quad.vertices.every(([, y]) => y === 64 + 1 / 16))
+      const lowerLilyPadTop = quads.filter((quad) => quad.kind === 'lilyPad' && quad.vertices.every(([, y]) => y === 64 + 1 / 64))
+
+      expect(geometryFaceKeysOnPlane(pressurePlateQuads, 'yNeg', 1, 65)).toStrictEqual([
+        geometryFaceKey('yNeg', [[1 + 1 / 16, 65, 1 + 1 / 16], [2 - 1 / 16, 65, 1 + 1 / 16], [2 - 1 / 16, 65, 2 - 1 / 16], [1 + 1 / 16, 65, 2 - 1 / 16]]),
+      ])
+      expect(geometryFaceKeysOnPlane(repeaterQuads, 'yNeg', 1, 65)).toStrictEqual([
+        geometryFaceKey('yNeg', [[3, 65, 1], [4, 65, 1], [4, 65, 2], [3, 65, 2]]),
+      ])
+      expect(lowerRailTop).toHaveLength(1)
+      expect(lowerLilyPadTop).toHaveLength(1)
+      expect(lowerLilyPadTop.map((quad) => geometryFaceKey('yPos', quad.vertices))).toStrictEqual([
+        geometryFaceKey('yPos', [[7 + 1 / 16, 64 + 1 / 64, 2 - 1 / 16], [8 - 1 / 16, 64 + 1 / 64, 2 - 1 / 16], [8 - 1 / 16, 64 + 1 / 64, 1 + 1 / 16], [7 + 1 / 16, 64 + 1 / 64, 1 + 1 / 16]]),
+      ])
+    }),
+  )
 })

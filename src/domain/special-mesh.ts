@@ -15,7 +15,7 @@ import {
   type ChunkView,
   blockIndex,
   blockStateAt,
-  getBlockAcrossBoundary,
+  getBlock,
 } from './chunk-view.js'
 import { FACES, type Face, type FaceDirection, type FaceFor, faceOf } from './faces.js'
 import { type RailFaceDirection, railVerticesOf } from './rail-geometry.js'
@@ -148,6 +148,7 @@ export type SpecialMeshFailure =
   | ChunkViewFailure
   | RailShapeFailure
   | { readonly _tag: 'MissingSpecialBlockLookupEntry'; readonly blockId: BlockId }
+  | { readonly _tag: 'MissingSpecialBlockNeighbourView'; readonly blockId: BlockId; readonly direction: FaceDirection }
   | { readonly _tag: 'InvalidBlockStateModelProperty'; readonly blockId: BlockId; readonly property: InvalidBlockStateModelProperty }
 
 const lightPropertiesOf = (light?: QuadLight): { light?: QuadLight } => {
@@ -228,7 +229,7 @@ const buildSpecialBlockLookup = (): Result.Result<SpecialBlockLookup, SpecialBlo
 
 export const SPECIAL_BLOCK_LOOKUP: Result.Result<SpecialBlockLookup, SpecialBlockLookupFailure> = buildSpecialBlockLookup()
 
-type BoxRenderKind = Exclude<SpecialRenderKind, 'lilyPad' | 'rail'>
+type BoxRenderKind = Exclude<SpecialRenderKind, 'lilyPad' | 'rail' | 'redstoneWire'>
 type FixedBoxRenderKind = Extract<SpecialRenderKind, 'cactus' | 'pressurePlate'>
 
 const specialKindOf = (lookup: SpecialBlockLookup, blockId: BlockId): SpecialRenderKind | null => {
@@ -314,6 +315,19 @@ type BoxBounds = {
 
 type BlockPosition = readonly [lx: number, y: number, lz: number]
 
+type SpecialGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+) => Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure>
+
+type SpecialGeometryBoundsResolver = Readonly<Record<BoxRenderKind, SpecialGeometryBoundsOf>>
+
+type SpecialShapeGeometry = {
+  readonly config: MeshConfig
+  readonly boundsOf: SpecialGeometryBoundsResolver
+}
+
 type SpecialShapeContext = {
   readonly result: Array<SpecialBlockQuad>
   readonly lookup: SpecialBlockLookup
@@ -324,6 +338,7 @@ type SpecialShapeContext = {
   readonly position: BlockPosition
   readonly blockState: EffectiveBlockStateValues | null
   readonly config: MeshConfig
+  readonly geometryBoundsOf: SpecialGeometryBoundsResolver
 }
 
 type BoxVertexFactory = (
@@ -436,37 +451,224 @@ const requiredStateProperty = <Value>(
     ? Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property })
     : Result.succeed(value)
 
-const isOpenToSpecial = (
+const BLOCK_BOUNDARY_TESTS: Readonly<Record<FaceDirection, (bounds: BoxBounds, position: BlockPosition) => boolean>> = {
+  xNeg: (bounds, [lx]) => bounds.minX === lx,
+  xPos: (bounds, [lx]) => bounds.maxX === lx + UNIT_SIZE,
+  yNeg: (bounds, [, y]) => bounds.minY === y,
+  yPos: (bounds, [, y]) => bounds.maxY === y + UNIT_SIZE,
+  zNeg: (bounds, [, , lz]) => bounds.minZ === lz,
+  zPos: (bounds, [, , lz]) => bounds.maxZ === lz + UNIT_SIZE,
+}
+
+const boxFaceTouchesBlockBoundary = (bounds: BoxBounds, position: BlockPosition, direction: FaceDirection): boolean =>
+  BLOCK_BOUNDARY_TESTS[direction](bounds, position)
+
+type CoordinateAxis = 'x' | 'y' | 'z'
+type FaceRectangleAxes = readonly [CoordinateAxis, CoordinateAxis]
+type AxisBoundsUpdater = (bounds: BoxBounds, min: number, max: number) => BoxBounds
+
+const AXIS_BOUNDS_UPDATERS: Readonly<Record<CoordinateAxis, AxisBoundsUpdater>> = {
+  x: (bounds, minX, maxX) => ({ ...bounds, minX, maxX }),
+  y: (bounds, minY, maxY) => ({ ...bounds, minY, maxY }),
+  z: (bounds, minZ, maxZ) => ({ ...bounds, minZ, maxZ }),
+}
+
+const FACE_RECTANGLE_AXES: Readonly<Record<FaceDirection, FaceRectangleAxes>> = {
+  xNeg: ['y', 'z'],
+  xPos: ['y', 'z'],
+  yNeg: ['x', 'z'],
+  yPos: ['x', 'z'],
+  zNeg: ['x', 'y'],
+  zPos: ['x', 'y'],
+}
+
+const OPPOSITE_FACE: Readonly<Record<FaceDirection, FaceDirection>> = {
+  xNeg: 'xPos',
+  xPos: 'xNeg',
+  yNeg: 'yPos',
+  yPos: 'yNeg',
+  zNeg: 'zPos',
+  zPos: 'zNeg',
+}
+
+const boundsOnAxis = (bounds: BoxBounds, axis: CoordinateAxis): readonly [number, number] => {
+  if (axis === 'x') return [bounds.minX, bounds.maxX]
+  if (axis === 'y') return [bounds.minY, bounds.maxY]
+  return [bounds.minZ, bounds.maxZ]
+}
+
+type FaceCoverage = {
+  readonly minU: number
+  readonly maxU: number
+  readonly minV: number
+  readonly maxV: number
+}
+
+const boundsWithFaceCoverage = (
+  bounds: BoxBounds,
+  axes: FaceRectangleAxes,
+  { minU, maxU, minV, maxV }: FaceCoverage,
+): BoxBounds => {
+  const afterU = AXIS_BOUNDS_UPDATERS[axes[0]](bounds, minU, maxU)
+  return AXIS_BOUNDS_UPDATERS[axes[1]](afterU, minV, maxV)
+}
+
+const adjacentIntervals = (values: ReadonlyArray<number>): ReadonlyArray<readonly [number, number]> =>
+  values.flatMap((min, index) => {
+    const max = values[index + 1]
+    return typeof max === 'undefined' ? [] : [[min, max] as const]
+  })
+
+const subtractCoveredFace = (
+  bounds: BoxBounds,
+  direction: FaceDirection,
+  neighbourPosition: BlockPosition,
+  neighbourBounds: ReadonlyArray<BoxBounds>,
+): ReadonlyArray<BoxBounds> => {
+  const opposite = OPPOSITE_FACE[direction]
+  const axes = FACE_RECTANGLE_AXES[direction]
+  const [minU, maxU] = boundsOnAxis(bounds, axes[0])
+  const [minV, maxV] = boundsOnAxis(bounds, axes[1])
+  const coverages: Array<FaceCoverage> = []
+  for (const candidate of neighbourBounds) {
+    if (!boxFaceTouchesBlockBoundary(candidate, neighbourPosition, opposite)) {
+      continue
+    }
+    const [candidateMinU, candidateMaxU] = boundsOnAxis(candidate, axes[0])
+    const [candidateMinV, candidateMaxV] = boundsOnAxis(candidate, axes[1])
+    const coverMinU = Math.max(minU, candidateMinU)
+    const coverMaxU = Math.min(maxU, candidateMaxU)
+    const coverMinV = Math.max(minV, candidateMinV)
+    const coverMaxV = Math.min(maxV, candidateMaxV)
+    if (coverMinU < coverMaxU && coverMinV < coverMaxV) {
+      coverages.push({ minU: coverMinU, maxU: coverMaxU, minV: coverMinV, maxV: coverMaxV })
+    }
+  }
+  if (coverages.length === 0) {
+    return [bounds]
+  }
+
+  const uCoordinates = [...new Set([minU, maxU, ...coverages.flatMap(({ minU: low, maxU: high }) => [low, high])])]
+    .sort((left, right) => left - right)
+  const vCoordinates = [...new Set([minV, maxV, ...coverages.flatMap(({ minV: low, maxV: high }) => [low, high])])]
+    .sort((left, right) => left - right)
+  const visible: Array<BoxBounds> = []
+  for (const [tileMinU, tileMaxU] of adjacentIntervals(uCoordinates)) {
+    for (const [tileMinV, tileMaxV] of adjacentIntervals(vCoordinates)) {
+      const centerU = (tileMinU + tileMaxU) / 2
+      const centerV = (tileMinV + tileMaxV) / 2
+      const covered = coverages.some((coverage) =>
+        centerU > coverage.minU && centerU < coverage.maxU &&
+        centerV > coverage.minV && centerV < coverage.maxV,
+      )
+      if (!covered) {
+        visible.push(boundsWithFaceCoverage(bounds, axes, {
+          minU: tileMinU,
+          maxU: tileMaxU,
+          minV: tileMinV,
+          maxV: tileMaxV,
+        }))
+      }
+    }
+  }
+  return visible
+}
+
+type SpecialNeighbourLocation = {
+  readonly chunk: ChunkView
+  readonly position: BlockPosition
+  readonly geometryPosition: BlockPosition
+}
+
+const specialNeighbourAtFace = (
+  chunk: ChunkView,
+  neighbours: ChunkNeighbours,
+  position: BlockPosition,
+  face: Face,
+): Option.Option<SpecialNeighbourLocation> => {
+  const [lx, y, lz] = position
+  let neighbourChunk: ChunkView | undefined = chunk
+  let neighbourX = lx + face.nx
+  const neighbourY = y + face.ny
+  let neighbourZ = lz + face.nz
+  let geometryOffsetX = 0
+  let geometryOffsetZ = 0
+  if (neighbourX < 0) {
+    neighbourChunk = neighbours.xNeg
+    neighbourX = CHUNK_SIZE - 1
+    geometryOffsetX = -CHUNK_SIZE
+  } else if (neighbourX >= CHUNK_SIZE) {
+    neighbourChunk = neighbours.xPos
+    neighbourX = 0
+    geometryOffsetX = CHUNK_SIZE
+  } else if (neighbourZ < 0) {
+    neighbourChunk = neighbours.zNeg
+    neighbourZ = CHUNK_SIZE - 1
+    geometryOffsetZ = -CHUNK_SIZE
+  } else if (neighbourZ >= CHUNK_SIZE) {
+    neighbourChunk = neighbours.zPos
+    neighbourZ = 0
+    geometryOffsetZ = CHUNK_SIZE
+  }
+  if (typeof neighbourChunk === 'undefined' || neighbourY < 0 || neighbourY >= chunk.height) {
+    return Option.none()
+  }
+  return Option.some({
+    chunk: neighbourChunk,
+    position: [neighbourX, neighbourY, neighbourZ],
+    geometryPosition: [neighbourX + geometryOffsetX, neighbourY, neighbourZ + geometryOffsetZ],
+  })
+}
+
+function isOpenToSpecial(
   lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
-  kind: SpecialRenderKind,
+  kind: BoxRenderKind,
   position: BlockPosition,
   face: Face,
-  config: MeshConfig,
-): boolean | SpecialMeshFailure => {
-  const [lx, y, lz] = position
-  const neighbourId = getBlockAcrossBoundary(
-    chunk,
-    neighbours,
-    lx + face.nx,
-    y + face.ny,
-    lz + face.nz,
-  )
+  bounds: BoxBounds,
+  geometry: SpecialShapeGeometry,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> {
+  if (!boxFaceTouchesBlockBoundary(bounds, position, face.direction)) {
+    return Result.succeed([bounds])
+  }
+  const neighbour = specialNeighbourAtFace(chunk, neighbours, position, face)
+  if (Option.isNone(neighbour)) {
+    return Result.succeed([bounds])
+  }
+  const neighbourId = getBlock(neighbour.value.chunk, ...neighbour.value.position)
   if (neighbourId === AIR) {
-    return true
+    return Result.succeed([bounds])
   }
   const opacityCode = lookup.opacityCodes[neighbourId]
   if (typeof opacityCode === 'undefined' || opacityCode === UNKNOWN_OPACITY_CODE) {
-    if (isConfiguredBlock(config, neighbourId)) {
-      return isConfiguredNonOpaqueBlock(config, neighbourId)
+    if (isConfiguredBlock(geometry.config, neighbourId)) {
+      return isConfiguredNonOpaqueBlock(geometry.config, neighbourId)
+        ? Result.succeed([bounds])
+        : Result.succeed([])
     }
-    return missingSpecialBlockLookupEntry(neighbourId)
+    return Result.fail(missingSpecialBlockLookupEntry(neighbourId))
   }
-  if (opacityCode === OPAQUE_OPACITY_CODE) {
-    return false
+  if (specialKindOf(lookup, neighbourId) !== kind) {
+    return opacityCode === OPAQUE_OPACITY_CODE
+      ? Result.succeed([])
+      : Result.succeed([bounds])
   }
-  return specialKindOf(lookup, neighbourId) !== kind
+  const neighbourState = blockStateAt(
+    neighbour.value.chunk,
+    blockIndex(...neighbour.value.position, neighbour.value.chunk.height),
+  )
+  if (Result.isFailure(neighbourState)) {
+    return Result.fail(neighbourState.failure)
+  }
+  return Result.map(
+    geometry.boundsOf[kind](neighbourId, neighbour.value.geometryPosition, neighbourState.success),
+    (neighbourBounds) => {
+      const visibleBounds = subtractCoveredFace(bounds, face.direction, neighbour.value.geometryPosition, neighbourBounds)
+      return kind === 'snowLayer' && visibleBounds.length > 0 ? [bounds] : visibleBounds
+    },
+  )
 }
 
 const lilyPadQuad = (
@@ -553,33 +755,21 @@ const railShapeFromState = (
   return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'shape' })
 }
 
-const BLOCK_BOUNDARY_TESTS: Readonly<Record<FaceDirection, (bounds: BoxBounds, position: BlockPosition) => boolean>> = {
-  xNeg: (bounds, [lx]) => bounds.minX === lx,
-  xPos: (bounds, [lx]) => bounds.maxX === lx + UNIT_SIZE,
-  yNeg: (bounds, [, y]) => bounds.minY === y,
-  yPos: (bounds, [, y]) => bounds.maxY === y + UNIT_SIZE,
-  zNeg: (bounds, [, , lz]) => bounds.minZ === lz,
-  zPos: (bounds, [, , lz]) => bounds.maxZ === lz + UNIT_SIZE,
-}
-
-const boxFaceTouchesBlockBoundary = (bounds: BoxBounds, position: BlockPosition, direction: FaceDirection): boolean =>
-  BLOCK_BOUNDARY_TESTS[direction](bounds, position)
-
-const boxFaceVisible = (context: SpecialShapeContext, bounds: BoxBounds, face: Face): Result.Result<boolean, SpecialMeshFailure> => {
-  if (!boxFaceTouchesBlockBoundary(bounds, context.position, face.direction) && context.kind !== 'cactus') {
-    return Result.succeed(true)
-  }
-  const open = isOpenToSpecial(
+const boxFaceVisible = (
+  context: SpecialShapeContext,
+  bounds: BoxBounds,
+  face: Face,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> =>
+  isOpenToSpecial(
     context.lookup,
     context.chunk,
     context.neighbours,
     context.kind,
     context.position,
     face,
-    context.config,
+    bounds,
+    { config: context.config, boundsOf: context.geometryBoundsOf },
   )
-  return typeof open === 'boolean' ? Result.succeed(open) : Result.fail(open)
-}
 
 const meshBoxCell = (
   context: SpecialShapeContext,
@@ -591,70 +781,20 @@ const meshBoxCell = (
     if (Result.isFailure(visible)) {
       return Result.fail(visible.failure)
     }
-    if (!visible.success) {
-      continue
+    for (const faceBounds of visible.success) {
+      context.result.push(
+        makeBoxQuad(
+          context.blockId,
+          context.kind,
+          face,
+          faceBounds,
+          quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
+          context.blockState,
+        ),
+      )
     }
-    context.result.push(
-      makeBoxQuad(
-        context.blockId,
-        context.kind,
-        face,
-        bounds,
-        quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
-        context.blockState,
-      ),
-    )
   }
   return Result.void
-}
-
-type RepeaterBoundaryVisibility = Readonly<Record<FaceDirection, boolean>>
-
-const repeaterBoundaryVisibilityOf = (
-  context: SpecialShapeContext,
-  bounds: BoxBounds,
-): Result.Result<RepeaterBoundaryVisibility, SpecialMeshFailure> => {
-  const xNeg = boxFaceVisible(context, bounds, faceOf('xNeg'))
-  if (Result.isFailure(xNeg)) return Result.fail(xNeg.failure)
-  const xPos = boxFaceVisible(context, bounds, faceOf('xPos'))
-  if (Result.isFailure(xPos)) return Result.fail(xPos.failure)
-  const yNeg = boxFaceVisible(context, bounds, faceOf('yNeg'))
-  if (Result.isFailure(yNeg)) return Result.fail(yNeg.failure)
-  const zNeg = boxFaceVisible(context, bounds, faceOf('zNeg'))
-  if (Result.isFailure(zNeg)) return Result.fail(zNeg.failure)
-  const zPos = boxFaceVisible(context, bounds, faceOf('zPos'))
-  if (Result.isFailure(zPos)) return Result.fail(zPos.failure)
-  return Result.succeed({
-    xNeg: xNeg.success,
-    xPos: xPos.success,
-    yNeg: yNeg.success,
-    yPos: true,
-    zNeg: zNeg.success,
-    zPos: zPos.success,
-  })
-}
-
-const meshRepeaterBoxCell = (
-  context: SpecialShapeContext,
-  bounds: BoxBounds,
-  boundaryVisibility: RepeaterBoundaryVisibility,
-): void => {
-  const [lx, y, lz] = context.position
-  for (const face of FACES) {
-    if (boxFaceTouchesBlockBoundary(bounds, context.position, face.direction) && !boundaryVisibility[face.direction]) {
-      continue
-    }
-    context.result.push(
-      makeBoxQuad(
-        context.blockId,
-        context.kind,
-        face,
-        bounds,
-        quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
-        context.blockState,
-      ),
-    )
-  }
 }
 
 type HorizontalFacing = Exclude<NonNullable<EffectiveBlockStateValues['facing']>, 'up' | 'down'>
@@ -681,6 +821,25 @@ const stairShapeOf = (
   return shape === 'straight' || shape === 'inner_left' || shape === 'inner_right' || shape === 'outer_left' || shape === 'outer_right'
     ? Result.succeed(shape)
     : Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'shape' })
+}
+
+type StairModelState = {
+  readonly facing: HorizontalFacing
+  readonly half: StairHalf
+  readonly shape: StairShape
+}
+
+const stairModelStateOf = (
+  state: EffectiveBlockStateValues,
+  blockId: BlockId,
+): Result.Result<StairModelState, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const half = state.half
+  if (half !== 'bottom' && half !== 'top') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'half' })
+  }
+  return Result.map(stairShapeOf(state, blockId), (shape) => ({ facing: facing.success, half, shape }))
 }
 
 const fullBlockBounds = (lx: number, y: number, lz: number): BoxBounds => ({
@@ -813,15 +972,24 @@ const voxelFaceVisible = (
   gridY: number,
   gridZ: number,
   face: Face,
-): Result.Result<boolean, SpecialMeshFailure> => {
+  bounds: BoxBounds,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> => {
   if (voxelFaceIsInternal(occupied, gridX, gridY, gridZ, face)) {
-    return Result.succeed(false)
+    return Result.succeed([])
   }
   if (!GRID_FACE_BOUNDARIES[face.direction](gridX, gridY, gridZ)) {
-    return Result.succeed(true)
+    return Result.succeed([bounds])
   }
-  const open = isOpenToSpecial(context.lookup, context.chunk, context.neighbours, context.kind, context.position, face, context.config)
-  return typeof open === 'boolean' ? Result.succeed(open) : Result.fail(open)
+  return isOpenToSpecial(
+    context.lookup,
+    context.chunk,
+    context.neighbours,
+    context.kind,
+    context.position,
+    face,
+    bounds,
+    { config: context.config, boundsOf: context.geometryBoundsOf },
+  )
 }
 
 const meshVoxelShapeCell = (
@@ -837,23 +1005,22 @@ const meshVoxelShapeCell = (
         }
         const bounds = boundsAtGridCell(lx, y, lz, gridX, gridY, gridZ)
         for (const face of FACES) {
-          const visible = voxelFaceVisible(context, occupied, gridX, gridY, gridZ, face)
+          const visible = voxelFaceVisible(context, occupied, gridX, gridY, gridZ, face, bounds)
           if (Result.isFailure(visible)) {
             return Result.fail(visible.failure)
           }
-          if (!visible.success) {
-            continue
+          for (const faceBounds of visible.success) {
+            context.result.push(
+              makeBoxQuad(
+                context.blockId,
+                context.kind,
+                face,
+                faceBounds,
+                quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
+                context.blockState,
+              ),
+            )
           }
-          context.result.push(
-            makeBoxQuad(
-              context.blockId,
-              context.kind,
-              face,
-              bounds,
-              quadLightAt(context.chunk, context.neighbours, face.direction, lx, y, lz),
-              context.blockState,
-            ),
-          )
         }
       }
     }
@@ -869,23 +1036,14 @@ const meshStairsCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const facing = horizontalFacingOf(blockState, blockId)
-  if (Result.isFailure(facing)) {
-    return Result.fail(facing.failure)
-  }
-  const half = blockState.half
-  if (half !== 'bottom' && half !== 'top') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'half' })
-  }
-  const shape = stairShapeOf(blockState, blockId)
-  if (Result.isFailure(shape)) {
-    return Result.fail(shape.failure)
-  }
-  return meshVoxelShapeCell(
-    { result, lookup, chunk, neighbours, blockId, kind: 'stairs', position, blockState, config },
-    stairOccupiedCells(facing.success, half, shape.success),
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(stairModelStateOf(blockState, blockId), ({ facing, half, shape }) =>
+    meshVoxelShapeCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'stairs', position, blockState, config, geometryBoundsOf },
+      stairOccupiedCells(facing, half, shape),
+    ),
   )
 }
 
@@ -910,6 +1068,37 @@ const CLOSED_DOOR_PANEL_SIDE: Readonly<Record<HorizontalFacing, HorizontalFacing
 }
 
 const doorClosedPanelSide = (facing: HorizontalFacing): HorizontalFacing => CLOSED_DOOR_PANEL_SIDE[facing]
+
+type DoorModelState = {
+  readonly normal: HorizontalFacing
+}
+
+const doorModelStateOf = (
+  state: EffectiveBlockStateValues,
+  blockId: BlockId,
+): Result.Result<DoorModelState, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const hinge = requiredStateProperty(state.hinge, blockId, 'hinge')
+  if (Result.isFailure(hinge)) return Result.fail(hinge.failure)
+  if (hinge.success !== 'left' && hinge.success !== 'right') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'hinge' })
+  }
+  const half = state.half
+  if (half !== 'lower' && half !== 'upper') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'half' })
+  }
+  const open = requiredStateProperty(state.open, blockId, 'open')
+  if (Result.isFailure(open)) return Result.fail(open.failure)
+  if (typeof open.success !== 'boolean') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'open' })
+  }
+  return Result.succeed({
+    normal: open.success
+      ? doorHingeDirection(facing.success, hinge.success)
+      : doorClosedPanelSide(facing.success),
+  })
+}
 
 const doorBoundsOf = (
   position: BlockPosition,
@@ -936,34 +1125,57 @@ const meshDoorCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const facing = horizontalFacingOf(blockState, blockId)
-  if (Result.isFailure(facing)) {
-    return Result.fail(facing.failure)
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(doorModelStateOf(blockState, blockId), ({ normal }) =>
+    meshBoxCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'door', position, blockState, config, geometryBoundsOf },
+      doorBoundsOf(position, normal),
+    ),
+  )
+}
+
+type SlabType = 'bottom' | 'top' | 'double'
+
+const slabTypeOf = (
+  state: EffectiveBlockStateValues,
+  blockId: BlockId,
+): Result.Result<SlabType, SpecialMeshFailure> => {
+  const slabType = requiredStateProperty(state.type, blockId, 'type')
+  if (Result.isFailure(slabType)) return Result.fail(slabType.failure)
+  if (slabType.success === 'bottom' || slabType.success === 'top' || slabType.success === 'double') {
+    return Result.succeed(slabType.success)
   }
-  const hinge = requiredStateProperty(blockState.hinge, blockId, 'hinge')
-  if (Result.isFailure(hinge)) {
-    return Result.fail(hinge.failure)
+  return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
+}
+
+const slabBoundsOf = (position: BlockPosition, slabType: SlabType): BoxBounds => {
+  const [lx, y, lz] = position
+  if (slabType === 'bottom') {
+    return { ...fullBlockBounds(lx, y, lz), maxY: y + SLAB_HEIGHT }
   }
-  if (hinge.success !== 'left' && hinge.success !== 'right') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'hinge' })
+  if (slabType === 'top') {
+    return { ...fullBlockBounds(lx, y, lz), minY: y + SLAB_HEIGHT }
   }
-  const half = blockState.half
-  if (half !== 'lower' && half !== 'upper') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'half' })
-  }
-  const open = requiredStateProperty(blockState.open, blockId, 'open')
-  if (Result.isFailure(open)) {
-    return Result.fail(open.failure)
-  }
-  if (typeof open.success !== 'boolean') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'open' })
-  }
-  const normal = open.success
-    ? doorHingeDirection(facing.success, hinge.success)
-    : doorClosedPanelSide(facing.success)
-  return meshBoxCell({ result, lookup, chunk, neighbours, blockId, kind: 'door', position, blockState, config }, doorBoundsOf(position, normal))
+  return fullBlockBounds(lx, y, lz)
+}
+
+const pressurePlatePoweredOf = (
+  state: EffectiveBlockStateValues,
+  blockId: BlockId,
+): Result.Result<boolean, SpecialMeshFailure> => {
+  const powered = requiredStateProperty(state.powered, blockId, 'powered')
+  if (Result.isFailure(powered)) return Result.fail(powered.failure)
+  return typeof powered.success === 'boolean'
+    ? Result.succeed(powered.success)
+    : Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'powered' })
+}
+
+const pressurePlateBoundsOf = (position: BlockPosition, powered: boolean): BoxBounds => {
+  const [lx, y, lz] = position
+  const bounds = boxBoundsFor('pressurePlate', lx, y, lz)
+  return powered ? { ...bounds, maxY: y + PRESSURE_PLATE_HEIGHT / 2 } : bounds
 }
 
 const meshSlabCell = (
@@ -974,24 +1186,15 @@ const meshSlabCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const slabType = requiredStateProperty(blockState.type, blockId, 'type')
-  if (Result.isFailure(slabType)) {
-    return Result.fail(slabType.failure)
-  }
-  const [lx, y, lz] = position
-  let bounds: BoxBounds
-  if (slabType.success === 'bottom') {
-    bounds = { ...fullBlockBounds(lx, y, lz), maxY: y + SLAB_HEIGHT }
-  } else if (slabType.success === 'top') {
-    bounds = { ...fullBlockBounds(lx, y, lz), minY: y + SLAB_HEIGHT }
-  } else if (slabType.success === 'double') {
-    bounds = fullBlockBounds(lx, y, lz)
-  } else {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
-  }
-  return meshBoxCell({ result, lookup, chunk, neighbours, blockId, kind: 'slab', position, blockState, config }, bounds)
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(slabTypeOf(blockState, blockId), (slabType) =>
+    meshBoxCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'slab', position, blockState, config, geometryBoundsOf },
+      slabBoundsOf(position, slabType),
+    ),
+  )
 }
 
 const meshPressurePlateCell = (
@@ -1002,22 +1205,31 @@ const meshPressurePlateCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const powered = requiredStateProperty(blockState.powered, blockId, 'powered')
-  if (Result.isFailure(powered)) {
-    return Result.fail(powered.failure)
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(pressurePlatePoweredOf(blockState, blockId), (powered) =>
+    meshBoxCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'pressurePlate', position, blockState, config, geometryBoundsOf },
+      pressurePlateBoundsOf(position, powered),
+    ),
+  )
+}
+
+const snowLayerBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<BoxBounds, SpecialMeshFailure> => {
+  const layers = requiredStateProperty(state.layers, blockId, 'layers')
+  if (Result.isFailure(layers)) {
+    return Result.fail(layers.failure)
   }
-  if (typeof powered.success !== 'boolean') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'powered' })
+  if (layers.success < 1 || layers.success > SNOW_LAYER_DIVISOR) {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'layers' })
   }
   const [lx, y, lz] = position
-  const bounds = boxBoundsFor('pressurePlate', lx, y, lz)
-  const pressedHeight = PRESSURE_PLATE_HEIGHT / 2
-  return meshBoxCell(
-    { result, lookup, chunk, neighbours, blockId, kind: 'pressurePlate', position, blockState, config },
-    powered.success ? { ...bounds, maxY: y + pressedHeight } : bounds,
-  )
+  return Result.succeed({ ...fullBlockBounds(lx, y, lz), maxY: y + layers.success / SNOW_LAYER_DIVISOR })
 }
 
 const meshSnowLayerCell = (
@@ -1028,19 +1240,14 @@ const meshSnowLayerCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const layers = requiredStateProperty(blockState.layers, blockId, 'layers')
-  if (Result.isFailure(layers)) {
-    return Result.fail(layers.failure)
-  }
-  if (layers.success < 1 || layers.success > SNOW_LAYER_DIVISOR) {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'layers' })
-  }
-  const [lx, y, lz] = position
-  return meshBoxCell(
-    { result, lookup, chunk, neighbours, blockId, kind: 'snowLayer', position, blockState, config },
-    { ...fullBlockBounds(lx, y, lz), maxY: y + layers.success / SNOW_LAYER_DIVISOR },
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(snowLayerBoundsOf(blockId, position, blockState), (bounds) =>
+    meshBoxCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'snowLayer', position, blockState, config, geometryBoundsOf },
+      bounds,
+    ),
   )
 }
 
@@ -1070,16 +1277,42 @@ const meshLadderCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
+  const { config, boundsOf: geometryBoundsOf } = geometry
   const facing = horizontalFacingOf(blockState, blockId)
   if (Result.isFailure(facing)) {
     return Result.fail(facing.failure)
   }
   return meshBoxCell(
-    { result, lookup, chunk, neighbours, blockId, kind: 'ladder', position, blockState, config },
+    { result, lookup, chunk, neighbours, blockId, kind: 'ladder', position, blockState, config, geometryBoundsOf },
     directionalThinBounds(position, facing.success, LADDER_THICKNESS),
   )
+}
+
+type AttachedModelState = {
+  readonly facing: HorizontalFacing
+  readonly face: 'floor' | 'wall' | 'ceiling'
+  readonly powered: boolean
+}
+
+const attachedGeometryStateOf = (
+  blockId: BlockId,
+  state: EffectiveBlockStateValues,
+): Result.Result<AttachedModelState, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const face = requiredStateProperty(state.face, blockId, 'face')
+  if (Result.isFailure(face)) return Result.fail(face.failure)
+  if (face.success !== 'floor' && face.success !== 'wall' && face.success !== 'ceiling') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'face' })
+  }
+  const powered = requiredStateProperty(state.powered, blockId, 'powered')
+  if (Result.isFailure(powered)) return Result.fail(powered.failure)
+  if (typeof powered.success !== 'boolean') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'powered' })
+  }
+  return Result.succeed({ facing: facing.success, face: face.success, powered: powered.success })
 }
 
 const poweredDepthOf = (powered: boolean): number =>
@@ -1144,29 +1377,14 @@ const meshStoneButtonCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const facing = horizontalFacingOf(blockState, blockId)
-  if (Result.isFailure(facing)) {
-    return Result.fail(facing.failure)
-  }
-  const face = requiredStateProperty(blockState.face, blockId, 'face')
-  if (Result.isFailure(face)) {
-    return Result.fail(face.failure)
-  }
-  if (face.success !== 'floor' && face.success !== 'wall' && face.success !== 'ceiling') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'face' })
-  }
-  const powered = requiredStateProperty(blockState.powered, blockId, 'powered')
-  if (Result.isFailure(powered)) {
-    return Result.fail(powered.failure)
-  }
-  if (typeof powered.success !== 'boolean') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'powered' })
-  }
-  return meshBoxCell(
-    { result, lookup, chunk, neighbours, blockId, kind: 'stoneButton', position, blockState, config },
-    buttonBoundsOf(position, facing.success, face.success, poweredDepthOf(powered.success)),
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(attachedGeometryStateOf(blockId, blockState), ({ facing, face, powered }) =>
+    meshBoxCell(
+      { result, lookup, chunk, neighbours, blockId, kind: 'stoneButton', position, blockState, config, geometryBoundsOf },
+      buttonBoundsOf(position, facing, face, poweredDepthOf(powered)),
+    ),
   )
 }
 
@@ -1272,32 +1490,146 @@ const meshLeverCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const facing = horizontalFacingOf(blockState, blockId)
-  if (Result.isFailure(facing)) {
-    return Result.fail(facing.failure)
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(attachedGeometryStateOf(blockId, blockState), ({ facing, face, powered }) => {
+    const context: SpecialShapeContext = { result, lookup, chunk, neighbours, blockId, kind: 'lever', position, blockState, config, geometryBoundsOf }
+    return Result.flatMap(meshBoxCell(context, leverBaseBoundsOf(position, facing, face)), () =>
+      meshBoxCell(context, leverHandleBoundsOf(position, facing, face, powered)),
+    )
+  })
+}
+
+const repeaterBaseBoundsOf = (position: BlockPosition): BoxBounds => {
+  const [lx, y, lz] = position
+  return { ...fullBlockBounds(lx, y, lz), maxY: y + REPEATER_BASE_HEIGHT }
+}
+
+const repeaterLockBoundsOf = (position: BlockPosition, facing: HorizontalFacing): ReadonlyArray<BoxBounds> => {
+  const [lx, y, lz] = position
+  const lockOnX = facing === 'north' || facing === 'south'
+  return [GRID_COORD_MIN, GRID_COORD_MAX].map((side) => {
+    const markerMin = side === GRID_COORD_MIN ? UNIT_ORIGIN : UNIT_SIZE - REPEATER_TORCH_SIZE
+    const markerMax = side === GRID_COORD_MIN ? REPEATER_TORCH_SIZE : UNIT_SIZE
+    return {
+      minX: lx + (lockOnX ? markerMin : UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2),
+      maxX: lx + (lockOnX ? markerMax : UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2),
+      minY: y + REPEATER_BASE_HEIGHT,
+      maxY: y + REPEATER_BASE_HEIGHT + REPEATER_TORCH_HEIGHT / 2,
+      minZ: lz + (lockOnX ? UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2 : markerMin),
+      maxZ: lz + (lockOnX ? UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2 : markerMax),
+    }
+  })
+}
+
+const stairBoundsOf = (
+  blockId: BlockId,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> => {
+  return Result.map(stairModelStateOf(state, blockId), ({ facing, half, shape }) => {
+    const occupied = stairOccupiedCells(facing, half, shape)
+    return [...occupied].map((cell) => {
+      const gridX = cell % GRID_SIZE
+      const gridZ = Math.floor(cell / GRID_SIZE) % GRID_SIZE
+      const gridY = Math.floor(cell / (GRID_SIZE * GRID_SIZE))
+      return boundsAtGridCell(0, 0, 0, gridX, gridY, gridZ)
+    })
+  })
+}
+
+const doorGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> => {
+  return Result.map(doorModelStateOf(state, blockId), ({ normal }) => [doorBoundsOf(position, normal)])
+}
+
+const buttonGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> =>
+  Result.map(attachedGeometryStateOf(blockId, state), ({ facing, face, powered }) => [
+    buttonBoundsOf(position, facing, face, poweredDepthOf(powered)),
+  ])
+
+const leverGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> =>
+  Result.map(attachedGeometryStateOf(blockId, state), ({ facing, face, powered }) => [
+    leverBaseBoundsOf(position, facing, face),
+    leverHandleBoundsOf(position, facing, face, powered),
+  ])
+
+type RepeaterModelState = {
+  readonly facing: HorizontalFacing
+  readonly delay: number
+  readonly locked: boolean
+}
+
+const repeaterModelStateOf = (
+  state: EffectiveBlockStateValues,
+  blockId: BlockId,
+): Result.Result<RepeaterModelState, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const delay = requiredStateProperty(state.delay, blockId, 'delay')
+  if (Result.isFailure(delay)) return Result.fail(delay.failure)
+  if (delay.success < 1 || delay.success > 4) {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'delay' })
   }
-  const face = requiredStateProperty(blockState.face, blockId, 'face')
-  if (Result.isFailure(face)) {
-    return Result.fail(face.failure)
+  const locked = requiredStateProperty(state.locked, blockId, 'locked')
+  if (Result.isFailure(locked)) return Result.fail(locked.failure)
+  if (typeof locked.success !== 'boolean') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'locked' })
   }
-  if (face.success !== 'floor' && face.success !== 'wall' && face.success !== 'ceiling') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'face' })
-  }
-  const powered = requiredStateProperty(blockState.powered, blockId, 'powered')
-  if (Result.isFailure(powered)) {
-    return Result.fail(powered.failure)
-  }
-  if (typeof powered.success !== 'boolean') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'powered' })
-  }
-  const context: SpecialShapeContext = { result, lookup, chunk, neighbours, blockId, kind: 'lever', position, blockState, config }
-  const base = meshBoxCell(context, leverBaseBoundsOf(position, facing.success, face.success))
-  if (Result.isFailure(base)) {
-    return Result.fail(base.failure)
-  }
-  return meshBoxCell(context, leverHandleBoundsOf(position, facing.success, face.success, powered.success))
+  return Result.succeed({ facing: facing.success, delay: delay.success, locked: locked.success })
+}
+
+const repeaterGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> => {
+  return Result.map(repeaterModelStateOf(state, blockId), ({ facing, locked }) => [
+    repeaterBaseBoundsOf(position),
+    ...(locked ? repeaterLockBoundsOf(position, facing) : []),
+  ])
+}
+
+const stairGeometryBoundsOf = (
+  blockId: BlockId,
+  position: BlockPosition,
+  state: EffectiveBlockStateValues,
+): Result.Result<ReadonlyArray<BoxBounds>, SpecialMeshFailure> => {
+  const [lx, y, lz] = position
+  return Result.map(stairBoundsOf(blockId, state), (bounds) => bounds.map((cell) => ({
+    minX: cell.minX + lx,
+    maxX: cell.maxX + lx,
+    minY: cell.minY + y,
+    maxY: cell.maxY + y,
+    minZ: cell.minZ + lz,
+    maxZ: cell.maxZ + lz,
+  })))
+}
+
+const SPECIAL_GEOMETRY_BOUNDS: SpecialGeometryBoundsResolver = {
+  cactus: (_blockId, [lx, y, lz]) => Result.succeed([boxBoundsFor('cactus', lx, y, lz)]),
+  slab: (blockId, position, state) => Result.map(slabTypeOf(state, blockId), (type) => [slabBoundsOf(position, type)]),
+  pressurePlate: (blockId, position, state) =>
+    Result.map(pressurePlatePoweredOf(state, blockId), (powered) => [pressurePlateBoundsOf(position, powered)]),
+  door: doorGeometryBoundsOf,
+  stairs: stairGeometryBoundsOf,
+  ladder: (blockId, position, state) =>
+    Result.map(horizontalFacingOf(state, blockId), (facing) => [directionalThinBounds(position, facing, LADDER_THICKNESS)]),
+  stoneButton: buttonGeometryBoundsOf,
+  lever: leverGeometryBoundsOf,
+  repeater: repeaterGeometryBoundsOf,
+  snowLayer: (blockId, position, state) => Result.map(snowLayerBoundsOf(blockId, position, state), (bounds) => [bounds]),
 }
 
 const meshRepeaterTorchCells = (
@@ -1339,25 +1671,17 @@ const meshRepeaterLockMarkers = (
   context: SpecialShapeContext,
   facing: HorizontalFacing,
   locked: boolean,
-  boundaryVisibility: RepeaterBoundaryVisibility,
-): void => {
+): Result.Result<void, SpecialMeshFailure> => {
   if (!locked) {
-    return
+    return Result.void
   }
-  const [lx, y, lz] = context.position
-  const lockOnX = facing === 'north' || facing === 'south'
-  for (const side of [GRID_COORD_MIN, GRID_COORD_MAX]) {
-    const markerMin = side === GRID_COORD_MIN ? UNIT_ORIGIN : UNIT_SIZE - REPEATER_TORCH_SIZE
-    const markerMax = side === GRID_COORD_MIN ? REPEATER_TORCH_SIZE : UNIT_SIZE
-    meshRepeaterBoxCell(context, {
-      minX: lx + (lockOnX ? markerMin : UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2),
-      maxX: lx + (lockOnX ? markerMax : UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2),
-      minY: y + REPEATER_BASE_HEIGHT,
-      maxY: y + REPEATER_BASE_HEIGHT + REPEATER_TORCH_HEIGHT / 2,
-      minZ: lz + (lockOnX ? UNIT_SIZE / 2 - REPEATER_TORCH_SIZE / 2 : markerMin),
-      maxZ: lz + (lockOnX ? UNIT_SIZE / 2 + REPEATER_TORCH_SIZE / 2 : markerMax),
-    }, boundaryVisibility)
+  for (const bounds of repeaterLockBoundsOf(context.position, facing)) {
+    const meshed = meshBoxCell(context, bounds)
+    if (Result.isFailure(meshed)) {
+      return Result.fail(meshed.failure)
+    }
   }
+  return Result.void
 }
 
 const meshRepeaterCell = (
@@ -1368,37 +1692,21 @@ const meshRepeaterCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
-  const facing = horizontalFacingOf(blockState, blockId)
-  if (Result.isFailure(facing)) {
-    return Result.fail(facing.failure)
-  }
-  const delay = requiredStateProperty(blockState.delay, blockId, 'delay')
-  if (Result.isFailure(delay)) {
-    return Result.fail(delay.failure)
-  }
-  if (delay.success < 1 || delay.success > 4) {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'delay' })
-  }
-  const locked = requiredStateProperty(blockState.locked, blockId, 'locked')
-  if (Result.isFailure(locked)) {
-    return Result.fail(locked.failure)
-  }
-  if (typeof locked.success !== 'boolean') {
-    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'locked' })
-  }
-  const [lx, y, lz] = position
-  const context: SpecialShapeContext = { result, lookup, chunk, neighbours, blockId, kind: 'repeater', position, blockState, config }
-  const baseBounds = { ...fullBlockBounds(lx, y, lz), maxY: y + REPEATER_BASE_HEIGHT }
-  const boundaryVisibility = repeaterBoundaryVisibilityOf(context, baseBounds)
-  if (Result.isFailure(boundaryVisibility)) {
-    return Result.fail(boundaryVisibility.failure)
-  }
-  meshRepeaterBoxCell(context, baseBounds, boundaryVisibility.success)
-  meshRepeaterTorchCells(context, facing.success, delay.success)
-  meshRepeaterLockMarkers(context, facing.success, locked.success, boundaryVisibility.success)
-  return Result.void
+  const { config, boundsOf: geometryBoundsOf } = geometry
+  return Result.flatMap(repeaterModelStateOf(blockState, blockId), ({ facing, delay, locked }) => {
+    const context: SpecialShapeContext = { result, lookup, chunk, neighbours, blockId, kind: 'repeater', position, blockState, config, geometryBoundsOf }
+    const lockMarkerQuads: Array<SpecialBlockQuad> = []
+    const lockMarkerContext = { ...context, result: lockMarkerQuads }
+    return Result.flatMap(meshRepeaterLockMarkers(lockMarkerContext, facing, locked), () =>
+      Result.flatMap(meshBoxCell(context, repeaterBaseBoundsOf(position)), () => {
+        meshRepeaterTorchCells(context, facing, delay)
+        context.result.push(...lockMarkerQuads)
+        return Result.void
+      }),
+    )
+  })
 }
 
 const meshRailCell = (
@@ -1409,16 +1717,8 @@ const meshRailCell = (
   blockId: BlockId,
   position: BlockPosition,
   blockState: EffectiveBlockStateValues,
-  config: MeshConfig,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
-  const open = isOpenToSpecial(lookup, chunk, neighbours, 'rail', position, TOP_FACE, config)
-  if (typeof open !== 'boolean') {
-    return Result.fail(open)
-  }
-  if (!open) {
-    return Result.void
-  }
   const stateShape = railShapeFromState(blockState.shape, blockId)
   if (Result.isFailure(stateShape)) {
     return Result.fail(stateShape.failure)
@@ -1577,22 +1877,12 @@ const meshRedstoneWireCell = (
 
 const meshPlanarCell = (
   result: Array<SpecialBlockQuad>,
-  lookup: SpecialBlockLookup,
   chunk: ChunkView,
   neighbours: ChunkNeighbours,
   blockId: BlockId,
-  kind: 'lilyPad',
   position: BlockPosition,
-  config: MeshConfig,
 ): Result.Result<void, SpecialMeshFailure> => {
   const [lx, y, lz] = position
-  const open = isOpenToSpecial(lookup, chunk, neighbours, kind, position, TOP_FACE, config)
-  if (typeof open !== 'boolean') {
-    return Result.fail(open)
-  }
-  if (!open) {
-    return Result.void
-  }
   result.push(
     lilyPadQuad(
       blockId,
@@ -1615,7 +1905,7 @@ type StatefulSpecialCellContext = {
   readonly blockId: BlockId
   readonly position: BlockPosition
   readonly blockState: EffectiveBlockStateValues
-  readonly config: MeshConfig
+  readonly geometry: SpecialShapeGeometry
 }
 
 type StatefulSpecialMesher = (context: StatefulSpecialCellContext) => Result.Result<void, SpecialMeshFailure>
@@ -1629,7 +1919,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   ladder: (context) => meshLadderCell(
     context.result,
@@ -1639,7 +1929,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   lever: (context) => meshLeverCell(
     context.result,
@@ -1649,7 +1939,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   pressurePlate: (context) => meshPressurePlateCell(
     context.result,
@@ -1659,7 +1949,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   rail: (context) => meshRailCell(
     context.result,
@@ -1669,7 +1959,6 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
   ),
   redstoneWire: (context) => meshRedstoneWireCell(
     context.result,
@@ -1687,7 +1976,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   slab: (context) => meshSlabCell(
     context.result,
@@ -1697,7 +1986,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   stairs: (context) => meshStairsCell(
     context.result,
@@ -1707,7 +1996,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   stoneButton: (context) => meshStoneButtonCell(
     context.result,
@@ -1717,7 +2006,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
   snowLayer: (context) => meshSnowLayerCell(
     context.result,
@@ -1727,7 +2016,7 @@ const STATEFUL_SPECIAL_MESHERS: Readonly<Record<StatefulSpecialRenderKind, State
     context.blockId,
     context.position,
     context.blockState,
-    context.config,
+    context.geometry,
   ),
 }
 
@@ -1739,23 +2028,23 @@ const meshSpecialCell = (
   blockId: BlockId,
   kind: SpecialRenderKind,
   position: BlockPosition,
-  config: MeshConfig,
+  geometry: SpecialShapeGeometry,
 ): Result.Result<void, SpecialMeshFailure> => {
   if (kind === 'cactus') {
     const [lx, y, lz] = position
     return meshBoxCell(
-      { result, lookup, chunk, neighbours, blockId, kind, position, blockState: null, config },
+      { result, lookup, chunk, neighbours, blockId, kind, position, blockState: null, config: geometry.config, geometryBoundsOf: geometry.boundsOf },
       boxBoundsFor(kind, lx, y, lz),
     )
   }
   if (kind === 'lilyPad') {
-    return meshPlanarCell(result, lookup, chunk, neighbours, blockId, kind, position, config)
+    return meshPlanarCell(result, chunk, neighbours, blockId, position)
   }
   const state = blockStateAt(chunk, blockIndex(...position, chunk.height))
   if (Result.isFailure(state)) {
     return Result.fail(state.failure)
   }
-  return STATEFUL_SPECIAL_MESHERS[kind]({ result, lookup, chunk, neighbours, blockId, position, blockState: state.success, config })
+  return STATEFUL_SPECIAL_MESHERS[kind]({ result, lookup, chunk, neighbours, blockId, position, blockState: state.success, geometry })
 }
 
 /** Meshes every special shape described by mc-kernel's registry. */
@@ -1791,6 +2080,7 @@ export const meshSpecialBlocks = (
 ): Result.Result<ReadonlyArray<SpecialBlockQuad>, SpecialMeshFailure> => {
   const { minLx, minY, minLz, maxLx, maxY, maxLz } = specialMeshBoundsOf(region, yLimit)
   const result: Array<SpecialBlockQuad> = []
+  const geometry: SpecialShapeGeometry = { config, boundsOf: SPECIAL_GEOMETRY_BOUNDS }
 
   for (let lx = minLx; lx < maxLx; lx += UNIT_SIZE) {
     for (
@@ -1815,7 +2105,7 @@ export const meshSpecialBlocks = (
             blockId,
             kind,
             [lx, y, lz],
-            config,
+            geometry,
           )
           if (Result.isFailure(meshed)) {
             return Result.fail(meshed.failure)

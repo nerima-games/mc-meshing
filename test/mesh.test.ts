@@ -1337,14 +1337,14 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('accepts custom block IDs configured for each mesh shape and layer', () =>
     Effect.sync(() => {
       const wideId = expectSuccess(KernelBlockId.result(300))
-      const variants: ReadonlyArray<{ readonly config: MeshConfig; readonly nonOpaque: boolean }> = [
-        { config: { ...EMPTY_MESH_CONFIG, crossPlantBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, transparentSolidBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, waterBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, fluidMaxLevels: new Map([[wideId, 7]]) }, nonOpaque: false },
+      const variants: ReadonlyArray<MeshConfig> = [
+        { ...EMPTY_MESH_CONFIG, crossPlantBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, transparentSolidBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, waterBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, fluidMaxLevels: new Map([[wideId, 7]]) },
       ]
 
-      for (const { config, nonOpaque } of variants) {
+      for (const config of variants) {
         const layers = meshChunk(
           chunkWith([
             [8, 64, 8, CACTUS],
@@ -1362,7 +1362,7 @@ describe('the greedy merge against the naive oracle', () => {
         ]
 
         expect(configuredQuads.some((quad) => quad.blockId === wideId)).toBe(true)
-        expect(layers.specialBlocks.some((quad) => quad.blockId === CACTUS && quad.direction === 'xPos')).toBe(nonOpaque)
+        expect(layers.specialBlocks.some((quad) => quad.blockId === CACTUS && quad.direction === 'xPos')).toBe(true)
       }
     }),
   )
