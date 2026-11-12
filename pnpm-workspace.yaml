@@ -2,8 +2,9 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   # Kernel 0.9.0 was published immediately before this downstream follow-up; exclude it so the pinned install remains reproducible during the migration.
-  # Kernel 0.14.0 and 0.15.0 are also within the configured minimum release age, so pnpm excludes them for the exact pins.
-  - '@nerima-games/mc-kernel@0.4.0 || 0.7.0 || 0.8.0 || 0.9.0 || 0.14.0 || 0.15.0'
+  # Kernel 0.14.0, 0.15.0, and 0.17.0 are within the minimum release age.
+  # Exclude these exact pins so pnpm can resolve them reproducibly.
+  - '@nerima-games/mc-kernel@0.4.0 || 0.7.0 || 0.8.0 || 0.9.0 || 0.14.0 || 0.15.0 || 0.17.0'
 overrides:
   # GHSA-2v37-7h3g-55p8: nanoid's custom generator loops indefinitely when
   # size is 0. Transitive via vitest/@vitest/coverage-v8 -> vite -> postcss ->
