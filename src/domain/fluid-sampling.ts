@@ -320,13 +320,6 @@ const keepFirstStateFailure = (space: FluidSpace, failure: FluidSamplingFailure)
   }
 }
 
-const rememberUnknownBlockStateFailure = (space: FluidSpace, view: ChunkView, index: ChunkBlockIndex): void => {
-  const state = blockStateAt(view, index)
-  if (Result.isFailure(state)) {
-    keepFirstStateFailure(space, state.failure)
-  }
-}
-
 const rememberNoFluidSample = (
   viewSamples: Map<ChunkBlockIndex, FluidBlockStateSample | null> | undefined,
   index: ChunkBlockIndex,
@@ -354,7 +347,6 @@ const stateSampleFor = (
 
   const blockType = blockTypeOfId(blockId)
   if (Result.isFailure(blockType) || typeof blockType.success !== 'string') {
-    rememberUnknownBlockStateFailure(space, view, index)
     return rememberNoFluidSample(viewSamples, index)
   }
   if (!isFluidBlockType(blockType.success)) {
