@@ -31,6 +31,7 @@ describe('public API surface', () => {
         'CHUNK_HEIGHT',
         'BLOCKS_PER_CHUNK',
         'blockIndex',
+        'blockStateAt',
         'emptyChunk',
         'getBlock',
         'getBlockAcrossBoundary',
@@ -77,6 +78,8 @@ describe('public API surface', () => {
         'occludes',
         // Plant, fluid, and kernel-special geometry
         'PLANT_INSET',
+        'PlantTextureStageSchema',
+        'plantTextureStageAt',
         'buildCrossPlantLookup',
         'isCrossPlant',
         'meshCrossPlants',
@@ -113,11 +116,31 @@ describe('public API surface', () => {
         'parseResourcePackAssetsJson',
         'meshBlockModel',
         'meshBlockState',
+        'meshEffectiveBlockState',
+        'blockStatePropertiesOf',
       ]
       const actual = new Set(Object.keys(meshing))
       for (const name of expected) {
         expect(actual.has(name)).toBe(true)
       }
+    }),
+  )
+
+  it.effect('exports the encoded chunk state and plant-stage types for consumers', () =>
+    Effect.sync(() => {
+      const empty = Result.getOrThrow(meshing.emptyChunk())
+      const chunk: meshing.ChunkView = {
+        ...empty,
+        blockStates: new Uint32Array(empty.blocks.length),
+      }
+      const index: meshing.ChunkBlockIndex = meshing.blockIndex(0, 0, 0, chunk.height)
+      const count: meshing.ChunkBlockCount = Result.getOrThrow(meshing.blockCount(chunk.height))
+      const stage: meshing.PlantTextureStage = { blockType: 'sapling', stage: 1 }
+
+      expect(chunk.blockStates).toHaveLength(chunk.blocks.length)
+      expect(count).toBe(chunk.blocks.length)
+      expect(Result.isSuccess(meshing.blockStateAt(chunk, index))).toBe(true)
+      expect(stage).toStrictEqual({ blockType: 'sapling', stage: 1 })
     }),
   )
 

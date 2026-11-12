@@ -11,9 +11,19 @@
  *   meshing-cross-plants-occlude-nothing
  */
 import { describe, expect, it } from './effect-test.js'
-import { Effect, Option, Result } from 'effect'
+import { Effect, Option, Result, SchemaParser } from 'effect'
+import { vi } from 'vitest'
 import * as FastCheck from 'fast-check'
-import { BlockId as KernelBlockId, ChunkAxis as chunkAxis, chunkCoord, type BlockId } from '@nerima-games/mc-kernel'
+import {
+  BlockId as KernelBlockId,
+  ChunkAxis as chunkAxis,
+  blockIdOf,
+  blockTypeOfId,
+  chunkCoord,
+  encodeBlockState,
+  type BlockId,
+  type EffectiveBlockStateValues,
+} from '@nerima-games/mc-kernel'
 import {
   BLOCKS_PER_CHUNK,
   CHUNK_HEIGHT,
@@ -27,23 +37,28 @@ import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 import {
   type CrossPlantQuad,
+  PlantTextureStageSchema,
   PLANT_INSET,
   buildCrossPlantLookup,
   isCrossPlant,
   meshCrossPlants,
+  plantTextureStageAt,
+  type PlantTextureStage,
 } from '../src/domain/plant-mesh'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
 
 const blockId = (value: number): BlockId => Result.getOrThrow(KernelBlockId.result(value))
+const invalidFixture = <T,>(value: any): T => value
 
 const STONE = blockId(1)
 const GLASS = blockId(2)
 const WATER = blockId(3)
-const FLOWER = blockId(7)
+const FLOWER = Option.getOrThrow(blockIdOf('oak_log'))
 const GRASS_TUFT = blockId(8)
+const TALL_GRASS = Option.getOrThrow(blockIdOf('tall_grass'))
 
 const CONFIG: MeshConfig = {
-  crossPlantBlockIds: new Set<BlockId>([FLOWER, GRASS_TUFT]),
+  crossPlantBlockIds: new Set<BlockId>([FLOWER, GRASS_TUFT, TALL_GRASS]),
   fluidMaxLevels: new Map(),
   transparentSolidBlockIds: new Set<BlockId>([GLASS]),
   waterBlockIds: new Set<BlockId>([WATER]),
@@ -63,20 +78,83 @@ const mesh = (chunk: ChunkView, config: MeshConfig = CONFIG) =>
 const meshNaive = (chunk: ChunkView, config: MeshConfig = CONFIG) =>
   Result.getOrThrow(meshChunkNaive(chunk, {}, config))
 
+type CropBlockType = Exclude<PlantTextureStage['blockType'], 'sapling'>
+
+const cropChunk = (blockType: CropBlockType, age: number | null = null, includeStateStorage = true) => {
+  const id = Option.getOrThrow(blockIdOf(blockType))
+  const index = blockIndex(4, 30, 5)
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  blocks[index] = id
+  const base = { blocks, coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT }
+  if (!includeStateStorage) {
+    return { chunk: base, index }
+  }
+  const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+  if (age !== null) {
+    blockStates[index] = Result.getOrThrow(encodeBlockState(id, { age }))
+  }
+  return { chunk: { ...base, blockStates }, index }
+}
+
 const cornersOf = (plate: CrossPlantQuad): ReadonlyArray<string> =>
   plate.vertices.map((vertex) => vertex.join(','))
 
 describe('the two plates', () => {
   it.effect('defaults absent neighbours for direct plant meshing', () =>
     Effect.sync(() => {
-      const plates = meshCrossPlants({
+      const plates = Result.getOrThrow(meshCrossPlants({
         chunk: chunkWith([[8, 64, 8, FLOWER]]),
+        plantLookup: Result.getOrThrow(buildCrossPlantLookup(CONFIG)),
+        yLimit: CHUNK_HEIGHT,
+      }))
+
+      expect(plates).toHaveLength(2)
+      expect(plates.every((plate) => !plate.light)).toBe(true)
+    }),
+  )
+
+  it.effect('carries tall grass half state to both plant plates', () =>
+    Effect.sync(() => {
+      const index = blockIndex(8, 64, 8)
+      const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+      blocks[index] = TALL_GRASS
+      const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+      blockStates[index] = Result.getOrThrow(encodeBlockState(TALL_GRASS, { half: 'upper' }))
+      const plates = Result.getOrThrow(meshCrossPlants({
+        chunk: {
+          blockStates,
+          blocks,
+          coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+          height: CHUNK_HEIGHT,
+        },
+        plantLookup: Result.getOrThrow(buildCrossPlantLookup(CONFIG)),
+        yLimit: CHUNK_HEIGHT,
+      }))
+
+      expect(plates).toHaveLength(2)
+      expect(plates.map((plate) => plate.blockState?.half)).toStrictEqual(['upper', 'upper'])
+    }),
+  )
+
+  it.effect('propagates a malformed tall grass state instead of emitting default-state plates', () =>
+    Effect.sync(() => {
+      const index = blockIndex(8, 64, 8)
+      const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+      blocks[index] = TALL_GRASS
+      const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+      blockStates[index] = 0xffffffff
+      const result = meshCrossPlants({
+        chunk: {
+          blockStates,
+          blocks,
+          coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+          height: CHUNK_HEIGHT,
+        },
         plantLookup: Result.getOrThrow(buildCrossPlantLookup(CONFIG)),
         yLimit: CHUNK_HEIGHT,
       })
 
-      expect(plates).toHaveLength(2)
-      expect(plates.every((plate) => !plate.light)).toBe(true)
+      expect(Result.isFailure(result)).toBe(true)
     }),
   )
 
@@ -425,4 +503,179 @@ describe('the injected set', () => {
       expect(totalQuadCount(layers)).toBe(0)
     }),
   )
+})
+
+describe('crop texture stages', () => {
+  it.effect('selects each crop age as its texture stage and validates the public result', () =>
+    Effect.sync(() => {
+      const cropAndAge = FastCheck.oneof(
+        FastCheck.tuple(FastCheck.constant('wheat_crop' as const), FastCheck.integer({ min: 0, max: 7 })),
+        FastCheck.tuple(FastCheck.constant('potato_crop' as const), FastCheck.integer({ min: 0, max: 7 })),
+        FastCheck.tuple(FastCheck.constant('nether_wart_crop' as const), FastCheck.integer({ min: 0, max: 3 })),
+      )
+      FastCheck.assert(
+        FastCheck.property(cropAndAge, ([blockType, age]) => {
+          const { chunk, index } = cropChunk(blockType, age)
+          const selected = plantTextureStageAt(chunk, index)
+          if (Result.isFailure(selected) || Option.isNone(selected.success)) {
+            return false
+          }
+          const stage = selected.success.value
+          const schemaResult = SchemaParser.decodeUnknownResult(PlantTextureStageSchema)(stage)
+          return (
+            Result.isSuccess(schemaResult) &&
+            stage.blockType === blockType &&
+            stage.stage === age
+          )
+        }),
+        { numRuns: 120 },
+      )
+    }),
+    PROPERTY_TIMEOUT_MS,
+  )
+
+  it.effect('selects representative wheat, potato, and nether wart textures', () =>
+    Effect.sync(() => {
+      for (const [blockType, age] of [
+        ['wheat_crop', 6],
+        ['potato_crop', 4],
+        ['nether_wart_crop', 3],
+      ] as const) {
+        const { chunk, index } = cropChunk(blockType, age)
+        const stage = Option.getOrThrow(Result.getOrThrow(plantTextureStageAt(chunk, index)))
+        expect(stage).toStrictEqual({ blockType, stage: age })
+      }
+    }),
+  )
+
+  it.effect('uses kernel default crop state when the state storage is omitted', () =>
+    Effect.sync(() => {
+      const { chunk, index } = cropChunk('wheat_crop', null, false)
+      const stage = Option.getOrThrow(Result.getOrThrow(plantTextureStageAt(chunk, index)))
+      expect(stage).toStrictEqual({ blockType: 'wheat_crop', stage: 0 })
+    }),
+  )
+
+  it.effect('returns each sapling growth stage for resource-pack model selection', () =>
+    Effect.sync(() => {
+      const saplingId = Option.getOrThrow(blockIdOf('sapling'))
+      const index = blockIndex(4, 30, 5)
+      for (const stage of [0, 1] as const) {
+        const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+        blocks[index] = saplingId
+        const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+        blockStates[index] = Result.getOrThrow(encodeBlockState(saplingId, { stage }))
+        const chunk: ChunkView = {
+          blockStates,
+          blocks,
+          coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+          height: CHUNK_HEIGHT,
+        }
+
+        expect(plantTextureStageAt(chunk, index)).toStrictEqual(
+          Result.succeed(Option.some({ blockType: 'sapling', stage })),
+        )
+      }
+
+      const defaultBlocks = new Uint16Array(BLOCKS_PER_CHUNK)
+      defaultBlocks[index] = saplingId
+      const defaultChunk: ChunkView = {
+        blocks: defaultBlocks,
+        coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+        height: CHUNK_HEIGHT,
+      }
+      expect(plantTextureStageAt(defaultChunk, index)).toStrictEqual(
+        Result.succeed(Option.some({ blockType: 'sapling', stage: 0 })),
+      )
+    }),
+  )
+
+  it.effect('returns a typed failure for an invalid chunk index', () =>
+    Effect.sync(() => {
+      const chunk = Result.getOrThrow(emptyChunk(CHUNK_HEIGHT))
+      const invalidIndex = blockIndex(0, -1, 0, chunk.height)
+
+      expect(plantTextureStageAt(chunk, invalidIndex)).toMatchObject({
+        failure: { _tag: 'ChunkBlockStateIndexOutOfRange', expected: BLOCKS_PER_CHUNK, index: -1 },
+      })
+    }),
+  )
+
+  it.effect('returns no texture stage for non-plants and rejects explicit state for unknown ids', () =>
+    Effect.sync(() => {
+      const index = blockIndex(4, 30, 5)
+      const stone = Option.getOrThrow(blockIdOf('stone'))
+      expect(plantTextureStageAt(chunkWith([[4, 30, 5, stone]]), index)).toStrictEqual(Result.succeed(Option.none()))
+
+      const unknownId = blockId(300)
+      const unknownType = blockTypeOfId(unknownId)
+      expect(unknownType).toStrictEqual(Result.succeed(Reflect.get({}, 'missing')))
+      expect(plantTextureStageAt(chunkWith([[4, 30, 5, unknownId]]), index)).toStrictEqual(Result.succeed(Option.none()))
+
+      const encodedStates = new Uint32Array(BLOCKS_PER_CHUNK)
+      const unknownWithStates: ChunkView = {
+        ...chunkWith([[4, 30, 5, unknownId]]),
+        blockStates: encodedStates,
+      }
+      expect(plantTextureStageAt(unknownWithStates, index)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: unknownId,
+        encoded: 0,
+        index,
+        reason: 'unknown-block-id',
+      }))
+    }),
+  )
+
+  it('returns a typed failure if a kernel crop state has no texture stage', async () => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        effectiveBlockStateOf: invalidFixture<typeof kernel.effectiveBlockStateOf>(
+          () => Result.succeed(invalidFixture<EffectiveBlockStateValues>({ age: 8 })),
+        ),
+      }
+    })
+    try {
+      const { plantTextureStageAt: selectStage } = await import('../src/domain/plant-mesh.js')
+      const { chunk, index } = cropChunk('wheat_crop', 0)
+      expect(selectStage(chunk, index)).toMatchObject({
+        failure: {
+          _tag: 'InvalidPlantTextureStage',
+          blockType: 'wheat_crop',
+          blockId: Option.getOrThrow(blockIdOf('wheat_crop')),
+          stage: 8,
+        },
+      })
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
+  it('propagates kernel block-type lookup failures when selecting a plant stage', async () => {
+    vi.resetModules()
+    const failure = { _tag: 'InjectedBlockTypeFailure' }
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        blockTypeOfId: (candidateId: BlockId) => candidateId === Option.getOrThrow(blockIdOf('sapling'))
+          ? invalidFixture(Result.fail(failure))
+          : kernel.blockTypeOfId(candidateId),
+      }
+    })
+    try {
+      const { plantTextureStageAt: selectStage } = await import('../src/domain/plant-mesh.js')
+      const { chunk, index } = cropChunk('wheat_crop', null, false)
+      const blocks = new Uint16Array(chunk.blocks)
+      blocks[index] = Option.getOrThrow(blockIdOf('sapling'))
+      expect(selectStage({ ...chunk, blocks }, index)).toStrictEqual(Result.fail(failure))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
 })

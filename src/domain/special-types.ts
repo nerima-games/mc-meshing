@@ -2,10 +2,23 @@ import { Result } from 'effect'
 import type { BlockId } from './block-data.js'
 import type { Face } from './faces.js'
 import type { QuadLight } from './light-types.js'
-import type { RailKind } from '@nerima-games/mc-kernel'
+import type { EffectiveBlockStateValues, RailKind } from '@nerima-games/mc-kernel'
 import type { RailShape } from './rail-types.js'
 
-export type SpecialRenderKind = 'cactus' | 'lilyPad' | 'pressurePlate' | 'rail' | 'slab'
+export type SpecialRenderKind =
+  | 'cactus'
+  | 'door'
+  | 'ladder'
+  | 'lever'
+  | 'lilyPad'
+  | 'pressurePlate'
+  | 'rail'
+  | 'redstoneWire'
+  | 'repeater'
+  | 'slab'
+  | 'stairs'
+  | 'stoneButton'
+  | 'snowLayer'
 
 export type SpecialVertex = readonly [x: number, y: number, z: number]
 
@@ -13,6 +26,8 @@ type SpecialQuadGeometry = Face & {
   readonly blockId: BlockId
   readonly vertices: readonly [SpecialVertex, SpecialVertex, SpecialVertex, SpecialVertex]
   readonly light?: QuadLight
+  /** Effective kernel state used to select this block's model or texture. */
+  readonly blockState?: EffectiveBlockStateValues
 }
 
 export type NonRailSpecialBlockQuad = SpecialQuadGeometry & {

@@ -31,11 +31,12 @@
  * What simplification actually does
  * ---------------------------------------------------------------------------
  *
- * Snap each quad's horizontal extents outward onto a coarser grid — 2 blocks at
- * LOD 1, 4 at LOD 2 — and then drop any quad that lands on a cell some earlier
- * quad already covers. The dropping is where the reduction comes from; the
- * snapping only makes quads collide. Removing an exactly-coincident quad cannot
- * open a hole, because the survivor covers the same area.
+ * Snap each stateless quad's horizontal extents outward onto a coarser grid — 2
+ * blocks at LOD 1, 4 at LOD 2 — and then drop any quad that lands on a cell some
+ * earlier quad already covers. State-bearing quads keep their extents. The
+ * dropping is where the reduction comes from; the snapping only makes quads
+ * collide. Removing an exactly-coincident quad cannot open a hole, because the
+ * survivor covers the same area.
  *
  * Y IS NEVER SNAPPED, on any face. A hill's silhouette is its vertical extent,
  * and a silhouette that jumps when a chunk crosses a LOD threshold is the one
@@ -351,6 +352,10 @@ const simplifyOpaqueQuads = (quads: ReadonlyArray<Quad>, step: number): Array<Qu
   const opaque: Array<Quad> = []
   const seen = new Set<number>()
   for (const quad of quads) {
+    if (typeof quad.blockState !== 'undefined') {
+      opaque.push(quad)
+      continue
+    }
     const snapped = snapQuad(quad, step)
     const key = keyOf(snapped)
     if (!seen.has(key)) {
@@ -393,14 +398,12 @@ const simplifyOpaqueQuads = (quads: ReadonlyArray<Quad>, step: number): Array<Qu
  * simplification, and a golden hash may be taken over a simplified mesh
  * exactly as over a full one.
  *
- * What DOES change is which block a surviving quad reports. The key is the
- * plane and the box; it does not include `blockId`. Two quads of different
- * blocks that snap onto one cell collapse to the one that came first, so a
- * distant hillside can shift from grass to stone at a LOD boundary. That is the
- * reference's behaviour and it is the point of the exercise — a LOD that
- * preserved every texture boundary would have nothing to remove — but it is a
- * VISIBLE change, not merely a cheaper one, and it is why mc-render must not
- * apply this to a chunk the player can see in detail.
+ * State-bearing quads keep their original extents. Snapping them could put two
+ * different model selectors on the same coarse face or discard one, so they
+ * bypass simplification. Stateless quads retain the reference's behavior: the
+ * key is independent of `blockId`, so a distant hillside can shift from grass
+ * to stone at a LOD boundary. That is why mc-render must not apply this to a
+ * chunk the player can see in detail.
  */
 export const simplifyMesh = (layers: MeshLayers, level: LodLevel): MeshLayers => {
   const step = STEP_FOR_LOD[level]

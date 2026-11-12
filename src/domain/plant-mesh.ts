@@ -77,15 +77,85 @@
  *    Recorded as a deviation in docs/design-notes.md M-11 and pinned by
  *    `test/plant-mesh.test.ts`.
  */
-import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
-import { Result } from 'effect'
-import { type BlockId, MAX_BLOCK_ID } from './block-data.js'
-import { CHUNK_SIZE, type ChunkNeighbours, type ChunkView, getBlock } from './chunk-view.js'
-import type { CrossPlantQuad } from './plant-types.js'
+import {
+  BlockId as KernelBlockId,
+  blockIdOf,
+  blockTypeOfId,
+  type BlockType,
+} from '@nerima-games/mc-kernel'
+import type { BlockRegistryResolutionFailure } from '@nerima-games/mc-kernel/domain/block-registry'
+import { Option, Result, SchemaIssue, SchemaParser } from 'effect'
+import { blockIdAt, type BlockId, MAX_BLOCK_ID } from './block-data.js'
+import {
+  CHUNK_SIZE,
+  type ChunkBlockIndex,
+  type ChunkNeighbours,
+  type ChunkView,
+  blockIndex,
+  blockStateAt,
+  getBlock,
+  type ChunkViewFailure,
+} from './chunk-view.js'
+import { PlantTextureStageSchema, type CrossPlantQuad, type PlantTextureStage } from './plant-types.js'
 import { type MeshConfig } from './opacity.js'
 import { quadLightAt } from './light-sampling.js'
 
-export type { CrossPlantQuad, PlantVertex } from './plant-types.js'
+export { PlantTextureStageSchema } from './plant-types.js'
+export type { CrossPlantQuad, PlantTextureStage, PlantVertex } from './plant-types.js'
+
+type PlantTextureBlockType = Extract<BlockType, 'sapling' | 'wheat_crop' | 'potato_crop' | 'nether_wart_crop'>
+const TALL_GRASS_BLOCK_ID = blockIdOf('tall_grass')
+
+export type PlantTextureStageFailure =
+  | BlockRegistryResolutionFailure
+  | ChunkViewFailure
+  | {
+      readonly _tag: 'InvalidPlantTextureStage'
+      readonly stage: unknown
+      readonly blockId: BlockId
+      readonly blockType: PlantTextureBlockType
+      readonly issue: SchemaIssue.Issue
+    }
+
+const plantTextureStageOf = (
+  blockId: BlockId,
+  blockType: PlantTextureBlockType,
+  stage: number | undefined,
+): Result.Result<PlantTextureStage, PlantTextureStageFailure> =>
+  Result.mapError(
+    SchemaParser.decodeUnknownResult(PlantTextureStageSchema)({ blockType, stage }),
+    (issue) => ({ _tag: 'InvalidPlantTextureStage', stage, blockId, blockType, issue }),
+  )
+
+/** Select the texture stage for a crop or sapling at a chunk storage index. */
+export const plantTextureStageAt = (
+  chunk: ChunkView,
+  index: ChunkBlockIndex,
+): Result.Result<Option.Option<PlantTextureStage>, PlantTextureStageFailure> => {
+  const state = blockStateAt(chunk, index)
+  if (Result.isFailure(state)) {
+    return Result.fail(state.failure)
+  }
+  const blockId = blockIdAt(chunk.blocks, index)
+  const blockType = blockTypeOfId(blockId)
+  if (Result.isFailure(blockType)) {
+    return Result.fail(blockType.failure)
+  }
+  switch (blockType.success) {
+    case 'sapling':
+      return Result.map(plantTextureStageOf(blockId, blockType.success, state.success.stage), Option.some)
+    case 'wheat_crop':
+    case 'potato_crop':
+    case 'nether_wart_crop': {
+      return Result.map(
+        plantTextureStageOf(blockId, blockType.success, state.success.age),
+        Option.some,
+      )
+    }
+    default:
+      return Result.succeed(Option.none())
+  }
+}
 
 /**
  * How far each plate is pulled in from the cell's four vertical walls.
@@ -223,6 +293,7 @@ type CrossPlantOptions = {
 }
 
 type PlantPlateInput = {
+  readonly blockState: CrossPlantQuad['blockState']
   readonly blockId: BlockId
   readonly lx: number
   readonly y: number
@@ -272,7 +343,14 @@ const lightPropertiesOf = (light: CrossPlantQuad['light']): Pick<CrossPlantQuad,
   return {}
 }
 
-const platesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
+const blockStatePropertiesOf = (blockState: CrossPlantQuad['blockState']): Pick<CrossPlantQuad, 'blockState'> => {
+  if (typeof blockState !== 'undefined') {
+    return { blockState }
+  }
+  return {}
+}
+
+const platesFor = ({ blockState, blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
   const x0 = lx + PLANT_INSET
   const x1 = lx + CELL_SIZE - PLANT_INSET
   const z0 = lz + PLANT_INSET
@@ -283,6 +361,7 @@ const platesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArra
     {
       ao: 0,
       blockId,
+      ...blockStatePropertiesOf(blockState),
       nx: 0,
       ny: 0,
       nz: 1,
@@ -298,6 +377,7 @@ const platesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArra
     {
       ao: 0,
       blockId,
+      ...blockStatePropertiesOf(blockState),
       nx: 1,
       ny: 0,
       nz: 0,
@@ -313,7 +393,9 @@ const platesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArra
   ]
 }
 
-export const meshCrossPlants = (options: CrossPlantOptions): ReadonlyArray<CrossPlantQuad> => {
+export const meshCrossPlants = (
+  options: CrossPlantOptions,
+): Result.Result<ReadonlyArray<CrossPlantQuad>, ChunkViewFailure> => {
   const { chunk, maxX, maxY, maxZ, minX, minY, minZ, neighbours, plantLookup } = crossPlantContextOf(options)
   const plates: Array<CrossPlantQuad> = []
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
@@ -321,12 +403,27 @@ export const meshCrossPlants = (options: CrossPlantOptions): ReadonlyArray<Cross
       for (let y = minY; y < maxY; y += LOOP_STEP) {
         const blockId = getBlock(chunk, lx, y, lz)
         if (isCrossPlant(plantLookup, blockId)) {
+          let blockState: CrossPlantQuad['blockState']
+          if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
+            const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
+            if (Result.isFailure(state)) {
+              return Result.fail(state.failure)
+            }
+            blockState = state.success
+          }
           plates.push(
-            ...platesFor({ blockId, light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz), lx, lz, y }),
+            ...platesFor({
+              blockId,
+              blockState,
+              light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
+              lx,
+              lz,
+              y,
+            }),
           )
         }
       }
     }
   }
-  return plates
+  return Result.succeed(plates)
 }

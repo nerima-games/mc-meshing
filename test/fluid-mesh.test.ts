@@ -15,8 +15,9 @@
  */
 import { describe, expect, it } from './effect-test.js'
 import { Effect, Option, Result } from 'effect'
+import { vi } from 'vitest'
 import * as FastCheck from 'fast-check'
-import { BlockId as KernelBlockId, ChunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { BlockId as KernelBlockId, ChunkAxis, FLUID_LEVEL_MAX, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { MAX_BLOCK_ID, type BlockId } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
@@ -34,7 +35,6 @@ import {
   isFluidBlock,
   meshFluidSurfaces as meshFluidSurfacesResult,
 } from '../src/domain/fluid-mesh'
-import { maxLevelOf } from '../src/domain/fluid-sampling'
 import { type MeshLayers, type Quad, meshChunk as meshChunkResult, meshChunkNaive as meshChunkNaiveResult, meshChunkRegion as meshChunkRegionResult, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { MESH_LAYERS, type MeshConfig } from '../src/domain/opacity'
 import { PROPERTY_TIMEOUT_MS } from './property-timeout'
@@ -47,6 +47,7 @@ const expectSuccess = <Value, Failure>(result: Result.Result<Value, Failure>): V
 }
 
 const makeBlockId = (value: number): BlockId => expectSuccess(KernelBlockId.result(value))
+const invalidFixture = <T,>(value: any): T => value
 const ORIGIN_AXIS = Result.getOrThrow(ChunkAxis.result(0))
 
 const meshChunk = (...args: Parameters<typeof meshChunkResult>) => expectSuccess(meshChunkResult(...args))
@@ -111,6 +112,15 @@ const chunkWith = (cells: ReadonlyArray<BlockCell>, fluidCells: ReadonlyArray<Fl
     falling[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = isFalling
   }
   return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+}
+
+const chunkWithBlockState = (blockId: BlockId, state: unknown): ChunkView => {
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+  const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+  blocks[index] = blockId
+  blockStates[index] = expectSuccess(encodeBlockState(blockId, state))
+  return { blockStates, blocks, coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT }
 }
 
 /** The one quad facing `direction`, or `undefined`. Fails loudly if there are two. */
@@ -189,6 +199,40 @@ describe('the height of one cell', () => {
       expect(heightOf(LAVA, 0)).toBe(1)
       expect(heightOf(LAVA, 1)).toBe(3 / 4)
       expect(heightOf(LAVA, 3)).toBe(1 / 4)
+    }),
+  )
+
+  it.effect('uses encoded water and lava levels when no fluid sidecar is present', () =>
+    Effect.sync(() => {
+      const heightOfState = (blockId: BlockId, level: number): number => {
+        const chunk = chunkWithBlockState(blockId, { level })
+        const top = faceOfDirection(meshChunk(chunk, {}, CONFIG).fluids, 'yPos')
+        return expectDefined(top, 'Expected a visible fluid surface').vertices[0][1] - 64
+      }
+
+      expect(heightOfState(WATER, 0)).toBe(SOURCE_SURFACE_HEIGHT)
+      expect(heightOfState(WATER, 7)).toBe(1 / 8)
+      expect(heightOfState(WATER, 8)).toBe(1)
+      expect(heightOfState(WATER, FLUID_LEVEL_MAX)).toBe(1)
+      expect(heightOfState(LAVA, 0)).toBe(SOURCE_SURFACE_HEIGHT)
+      expect(heightOfState(LAVA, 6)).toBe(1 / 4)
+
+      const waterTop = faceOfDirection(meshChunk(chunkWithBlockState(WATER, { level: 6 }), {}, CONFIG).fluids, 'yPos')
+      expect(waterTop?.blockState?.level).toBe(6)
+    }),
+  )
+
+  it.effect('returns a typed codec failure for malformed fluid block state during meshing', () =>
+    Effect.sync(() => {
+      const chunk = chunkWithBlockState(WATER, { level: 0 })
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const blockStates = new Uint32Array(expectDefined(chunk.blockStates, 'expected encoded block states'))
+      blockStates[index] = 0xffff_ffff
+      const malformed: ChunkView = { ...chunk, blockStates }
+
+      expect(meshChunkResult(malformed, {}, CONFIG)).toMatchObject({
+        failure: { _tag: 'ChunkBlockStateCodecFailure', blockId: WATER, index },
+      })
     }),
   )
 
@@ -318,16 +362,14 @@ describe('the height of one cell', () => {
     }),
   )
 
-  it.effect('a missing FluidView reads as full, non-source cells rather than as no fluid', () =>
+  it.effect('a missing FluidView uses the kernel default fluid state rather than hiding the fluid', () =>
     Effect.sync(() => {
-      // A caller holding block ids but no simulation state yet gets flat
-      // Full-height fluid. The alternative — treating absent state as absent
-      // Fluid — makes every lake INVISIBLE, because the cube passes have already
-      // Skipped it. Same instinct as `getBlock` returning AIR for an absent
-      // Neighbour: degrade to the answer that still shows the player a world.
+      // Kernel's default level 0 is a source, so its surface sits at 14/16.
+      // The fallback still emits the fluid instead of treating absent sidecars
+      // as absent fluid, because the cube passes have already skipped it.
       const layers = meshChunk(chunkWith([[8, 64, 8, WATER]]), {}, CONFIG)
       const top = faceOfDirection(layers.fluids, 'yPos')
-      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([65, 65, 65, 65])
+      expect(ysOf(expectDefined(top, 'expected a fluid quad'))).toStrictEqual([64.875, 64.875, 64.875, 64.875])
     }),
   )
 
@@ -984,11 +1026,135 @@ describe('the injected fluid table', () => {
           expect(result.failure).toMatchObject({ _tag: 'InvalidFluidMaxLevel', blockId: WATER, maxLevel })
         }
       }
-      expect(maxLevelOf(new Uint16Array(MAX_BLOCK_ID), WATER)).toStrictEqual(
-        Result.fail({ _tag: 'InvalidFluidLookupLength', actual: MAX_BLOCK_ID, expected: MAX_BLOCK_ID + 1 }),
-      )
     }),
   )
+
+  it.effect('returns the first invalid encoded water state when later fluid samples also fail', () =>
+    Effect.sync(() => {
+      const firstIndex = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const secondIndex = blockIndex(9, 64, 8, CHUNK_HEIGHT)
+      const source = chunkWith(
+        [
+          [8, 64, 8, WATER],
+          [9, 64, 8, WATER],
+        ],
+        [
+          [8, 64, 8, 0, 1],
+          [9, 64, 8, 0, 1],
+        ],
+      )
+      const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+      blockStates[firstIndex] = 0xFFFF_FFFF
+      blockStates[secondIndex] = 0xFFFF_FFFF
+      const expectedFailure = Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: WATER,
+        encoded: 0xFFFF_FFFF,
+        index: firstIndex,
+        reason: 'reserved-code',
+      })
+
+      expect(meshChunkResult({ ...source, blockStates }, {}, CONFIG)).toStrictEqual(expectedFailure)
+    }),
+  )
+
+  it.effect('returns a typed failure for explicit state storage on an unknown fluid id', () =>
+    Effect.sync(() => {
+      const unknownFluid = makeBlockId(300)
+      const source = chunkWith([[8, 64, 8, unknownFluid]])
+      const chunk = { ...source, blockStates: new Uint32Array(BLOCKS_PER_CHUNK) }
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const config: MeshConfig = {
+        ...CONFIG,
+        fluidMaxLevels: new Map([[unknownFluid, WATER_MAX_LEVEL]]),
+        waterBlockIds: new Set([unknownFluid]),
+      }
+
+      expect(meshChunkResult(chunk, {}, config)).toStrictEqual(Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: unknownFluid,
+        encoded: 0,
+        index,
+        reason: 'unknown-block-id',
+      }))
+    }),
+  )
+
+  it.effect('meshes a custom fluid id without kernel state only when state storage is omitted', () =>
+    Effect.sync(() => {
+      const customFluid = makeBlockId(300)
+      const chunk = chunkWith([[8, 64, 8, customFluid]])
+      const config: MeshConfig = {
+        ...CONFIG,
+        fluidMaxLevels: new Map([[customFluid, WATER_MAX_LEVEL]]),
+        waterBlockIds: new Set([customFluid]),
+      }
+
+      const result = meshChunkResult(chunk, {}, config)
+      expect(Result.isSuccess(result)).toBe(true)
+      if (Result.isSuccess(result)) {
+        expect(result.success.fluids.filter((quad) => quad.direction === 'yPos')).toHaveLength(1)
+        expect(result.success.fluids.every((quad) => quad.blockId === customFluid && typeof quad.blockState === 'undefined')).toBe(true)
+      }
+    }),
+  )
+
+  it.effect('uses configured fluid geometry for a known block type without fluid state', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([[8, 64, 8, STONE]])
+      const config: MeshConfig = {
+        ...CONFIG,
+        fluidMaxLevels: new Map([[STONE, WATER_MAX_LEVEL]]),
+        waterBlockIds: new Set([STONE]),
+      }
+
+      const fluids = meshChunk(chunk, {}, config).fluids
+      expect(fluids.filter((quad) => quad.direction === 'yPos')).toHaveLength(1)
+      expect(fluids.every((quad) => quad.blockId === STONE && typeof quad.blockState === 'undefined')).toBe(true)
+    }),
+  )
+
+  it.each([
+    ['no level', Reflect.get({}, 'level')],
+    ['a fractional level', 0.5],
+    ['a level below the kernel range', -1],
+    ['a level above the kernel range', FLUID_LEVEL_MAX + 1],
+  ])('returns a typed failure when the kernel yields %s', async (_description, level) => {
+    vi.resetModules()
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      const effectiveBlockStateOf: typeof kernel.effectiveBlockStateOf = (blockId, encoded) =>
+        blockId === WATER
+          ? invalidFixture(Result.succeed(typeof level === 'undefined' ? {} : { level }))
+          : kernel.effectiveBlockStateOf(blockId, encoded)
+      return { ...kernel, effectiveBlockStateOf }
+    })
+    try {
+      const { meshFluidSurfaces: meshFluids, buildFluidLookup: buildLookup } =
+        await import('../src/domain/fluid-mesh.js')
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const source = chunkWith([[8, 64, 8, WATER]])
+      const chunk = { ...source, blockStates: new Uint32Array(BLOCKS_PER_CHUNK) }
+      const result = meshFluids(
+        chunk,
+        {},
+        Result.getOrThrow(buildLookup(CONFIG)),
+        new Uint8Array(MAX_BLOCK_ID + 1),
+        new Uint8Array(MAX_BLOCK_ID + 1),
+        CHUNK_HEIGHT,
+      )
+
+      expect(result).toStrictEqual(Result.fail({
+        _tag: 'InvalidFluidBlockStateLevel',
+        blockId: WATER,
+        index,
+        level,
+      }))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
 })
 
 /**

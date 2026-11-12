@@ -1,4 +1,5 @@
 import { MESH_LAYERS, type MeshLayer } from './opacity.js'
+import type { EffectiveBlockStateValues } from '@nerima-games/mc-kernel'
 import type { BlockId } from './block-data.js'
 import type { CrossPlantQuad } from './plant-types.js'
 import type { FacePlacement } from './faces.js'
@@ -8,6 +9,7 @@ import type { SpecialBlockQuad } from './special-types.js'
 
 type CubeQuadGeometry = {
   readonly blockId: BlockId
+  readonly blockState?: EffectiveBlockStateValues
   readonly lx: number
   readonly y: number
   readonly lz: number

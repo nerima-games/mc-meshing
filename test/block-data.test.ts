@@ -1,19 +1,38 @@
+import * as FastCheck from 'fast-check'
 import { Option, Result } from 'effect'
-import { BlockId as KernelBlockId, BLOCK_ID_MAX } from '@nerima-games/mc-kernel'
+import {
+  BlockId as KernelBlockId,
+  BLOCK_ID_MAX,
+  FLOWING_FLUID_LEVEL,
+  FLUID_LEVEL_STEP,
+  propertyOfBlockId,
+} from '@nerima-games/mc-kernel'
 import { describe, expect, it, vi } from 'vitest'
-import { AIR, blockIdAt } from '../src/domain/block-data.js'
+import { AIR, blockIdAt, MINECRAFT_FLUID_MAX_LEVELS } from '../src/domain/block-data.js'
+
+const OVERWORLD_LAVA_LEVEL_INCREMENT = 2
+const flowingLevelOffsets = Array.from(
+  { length: Math.floor(FLOWING_FLUID_LEVEL / FLUID_LEVEL_STEP) + 1 },
+  (_, index) => index * FLUID_LEVEL_STEP,
+)
+const expectedWaterMaxLevel = flowingLevelOffsets.length - 1
+const expectedLavaMaxLevel = flowingLevelOffsets.filter(
+  (offset) => offset % (OVERWORLD_LAVA_LEVEL_INCREMENT * FLUID_LEVEL_STEP) === 0,
+).length - 1
 
 const importBlockDataWithRegistry = async (
   blockIds: ReadonlyArray<number>,
-  propertyOfBlockId: (blockId: number, property: string) => unknown,
+  resolveProperty: (blockId: number, property: string) => unknown,
 ) => {
   vi.resetModules()
   vi.doMock('@nerima-games/mc-kernel', () => ({
     AIR_BLOCK_ID: 0,
     BLOCK_ID_MAX: 0xffff,
     BLOCK_IDS: blockIds,
+    FLOWING_FLUID_LEVEL,
+    FLUID_LEVEL_STEP,
     blockIdsWithOpacity: () => Result.succeed(Option.some(new Set())),
-    propertyOfBlockId,
+    propertyOfBlockId: resolveProperty,
   }))
   try {
     return await import('../src/domain/block-data.js')
@@ -36,6 +55,33 @@ describe('block data ids', () => {
     expect(blockIdAt(new Uint16Array(), 0)).toBe(AIR)
   })
 
+  it('derives every public fluid ceiling from the kernel flow levels', () => {
+    const result = MINECRAFT_FLUID_MAX_LEVELS
+    expect(Result.isFailure(result)).toBe(false)
+    if (Result.isFailure(result)) {
+      return
+    }
+
+    const fluidBlockIds = [...result.success.keys()]
+    expect(fluidBlockIds.length).toBeGreaterThan(0)
+
+    FastCheck.assert(
+      FastCheck.property(FastCheck.constantFrom(...fluidBlockIds), (blockId) => {
+        const fluidKind = propertyOfBlockId(blockId, 'fluid')
+        if (Result.isFailure(fluidKind)) {
+          return false
+        }
+        if (fluidKind.success === 'water') {
+          return result.success.get(blockId) === expectedWaterMaxLevel
+        }
+        if (fluidKind.success === 'lava') {
+          return result.success.get(blockId) === expectedLavaMaxLevel
+        }
+        return false
+      }),
+    )
+  })
+
   it('maps registered fluid kinds to their propagation ceilings', async () => {
     const blockData = await importBlockDataWithRegistry([1, 2, 3], (blockId, property) => {
       if (property === 'renderKind') {
@@ -45,7 +91,7 @@ describe('block data ids', () => {
     })
 
     expect(blockData.MINECRAFT_FLUID_MAX_LEVELS).toStrictEqual(
-      Result.succeed(new Map([[1, 7], [2, 3]])),
+      Result.succeed(new Map([[1, expectedWaterMaxLevel], [2, expectedLavaMaxLevel]])),
     )
     expect(blockData.MINECRAFT_WATER_BLOCK_IDS).toStrictEqual(Result.succeed(new Set([1])))
   })

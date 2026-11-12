@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { Result } from 'effect'
+import { Option, Result } from 'effect'
+import {
+  ChunkAxis as chunkAxis,
+  blockIdOf,
+  chunkCoord,
+  encodeBlockState,
+  effectiveBlockStateOf,
+  type EffectiveBlockStateValues,
+} from '@nerima-games/mc-kernel'
+import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, blockIndex, type ChunkView } from '../src/domain/chunk-view.js'
+import { meshChunk as meshChunkResult } from '../src/domain/mesh.js'
+import { EMPTY_MESH_CONFIG } from '../src/domain/opacity.js'
 import {
   meshBlockModel as meshBlockModelResult,
   meshBlockState as meshBlockStateResult,
+  meshEffectiveBlockState as meshEffectiveBlockStateResult,
 } from '../src/domain/resource-pack-mesh.js'
 import {
+  blockStatePropertiesOf,
   normalizeResourceName as normalizeResourceNameResult,
   resolveBlockModel as resolveBlockModelResult,
   resolveBlockStateModels as resolveBlockStateModelsResult,
@@ -56,6 +69,8 @@ const meshBlockModel = (...args: Parameters<typeof meshBlockModelResult>) =>
   successOf(meshBlockModelResult(...args))
 const meshBlockState = (...args: Parameters<typeof meshBlockStateResult>) =>
   successOf(meshBlockStateResult(...args))
+const meshEffectiveBlockState = (...args: Parameters<typeof meshEffectiveBlockStateResult>) =>
+  successOf(meshEffectiveBlockStateResult(...args))
 const modelName = (name: string): ModelName => successOf(normalizeResourceNameResult(name, 'model'))
 const resourceName = (name: string): ResourceName => successOf(normalizeResourceNameResult(name, 'blockstate'))
 
@@ -139,6 +154,7 @@ const assets: ResourcePackAssets = {
     'minecraft:demo': {
       variants: {
         'facing=north,open=false': { model: 'block/child', y: 90, uvlock: true },
+        'axis=x': { model: 'block/bare' },
         'facing=south|east': [
           { model: 'block/weighted-a', weight: 1 },
           { model: 'block/weighted-b' },
@@ -205,6 +221,32 @@ const assets: ResourcePackAssets = {
 }
 
 describe('resource-pack resolver', () => {
+  it('maps kernel state values and connections to resource-pack property strings', () => {
+    const state = {
+      connections: { east: 'up', north: 'side', south: 'none', west: false },
+      eye: true,
+      facing: 'north',
+      level: 7,
+      open: false,
+    } satisfies EffectiveBlockStateValues
+
+    expect(blockStatePropertiesOf(state)).toStrictEqual({
+      east: 'up',
+      eye: 'true',
+      facing: 'north',
+      level: '7',
+      north: 'side',
+      open: 'false',
+      south: 'none',
+      west: 'false',
+    })
+  })
+
+  it('omits connection entries whose optional value is absent', () => {
+    const state = invalidFixture<EffectiveBlockStateValues>({ connections: { east: Reflect.get({}, 'east') } })
+    expect(blockStatePropertiesOf(state)).toStrictEqual({})
+  })
+
   it('normalizes names and rejects empty paths', () => {
     expect(normalizeResourceName(' models/demo.json ', 'model')).toBe('minecraft:demo')
     expect(normalizeResourceName('blockstates/demo.json', 'blockstate')).toBe('minecraft:demo')
@@ -254,6 +296,33 @@ describe('resource-pack resolver', () => {
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'true', open: 'true' }, assets)).toHaveLength(3)
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'east' }, assets)).toHaveLength(2)
     expect(resolveBlockStateModels(resourceName('multi'), { powered: 'false', facing: 'north', open: 'false' }, assets)).toHaveLength(1)
+  })
+
+  it('selects a namespaced custom block variant from caller-supplied state properties', () => {
+    const customAssets: ResourcePackAssets = {
+      blockstates: {
+        'mod:crystal': {
+          variants: {
+            'charge=charged': { model: 'mod:block/crystal-charged' },
+            'charge=empty': { model: 'mod:block/crystal-empty' },
+          },
+        },
+      },
+      models: {
+        'mod:block/crystal-charged': {
+          textures: { side: 'mod:block/crystal-charged' },
+          elements: [modelElement({ up: face('#side') })],
+        },
+        'mod:block/crystal-empty': {
+          textures: { side: 'mod:block/crystal-empty' },
+          elements: [modelElement({ up: face('#side') })],
+        },
+      },
+    }
+
+    const selected = meshBlockState(resourceName('mod:crystal'), { charge: 'charged' }, customAssets)
+    expect(selected).toHaveLength(1)
+    expect(selected[0]?.model).toBe('mod:block/crystal-charged')
   })
 
   it('rejects non-finite blockstate resolver seeds', () => {
@@ -565,12 +634,140 @@ describe('resource-pack mesh', () => {
     expect(stateQuads.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
     expect(stateQuads.every((quad) => quad.ambientOcclusion)).toBe(true)
 
+    const effectiveStateQuads = meshEffectiveBlockState(resourceName('demo'), { facing: 'north', open: false }, assets, { seed: 3 })
+    expect(effectiveStateQuads).toHaveLength(2)
+    expect(effectiveStateQuads.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
+
     const multipartQuads = meshBlockState(resourceName('multi'), { powered: 'true', open: 'true' }, assets)
     expect(multipartQuads).toHaveLength(9)
   })
 
   it('meshes models without elements as an empty result', () => {
     expect(meshBlockModel(modelName('builtin/generated'), assets)).toEqual([])
+  })
+
+  it('selects a resource-pack model from block state emitted by chunk meshing', () => {
+    const doorId = Option.getOrThrow(blockIdOf('door'))
+    const logId = Option.getOrThrow(blockIdOf('oak_log'))
+    const doorIndex = blockIndex(4, 30, 5)
+    const logIndex = blockIndex(5, 30, 5)
+    const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+    blocks[doorIndex] = doorId
+    blocks[logIndex] = logId
+    const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+    blockStates[doorIndex] = successOf(
+      encodeBlockState(doorId, {
+        facing: 'north',
+        half: 'lower',
+        hinge: 'left',
+        open: false,
+        powered: false,
+      }),
+    )
+    blockStates[logIndex] = successOf(encodeBlockState(logId, { axis: 'x' }))
+    const chunk: ChunkView = {
+      blockStates,
+      blocks,
+      coord: chunkCoord(chunkAxis(0), chunkAxis(0)),
+      height: CHUNK_HEIGHT,
+    }
+    const layers = successOf(meshChunkResult(chunk, {}, EMPTY_MESH_CONFIG))
+    const doorQuad = layers.specialBlocks.find((quad) => quad.kind === 'door')
+    if (typeof doorQuad?.blockState === 'undefined') {
+      throw new Error('Chunk meshing did not preserve the door state.')
+    }
+
+    const selected = meshEffectiveBlockState(resourceName('demo'), doorQuad.blockState, assets, { seed: 3 })
+    expect(selected).toHaveLength(2)
+    expect(selected.every((quad) => quad.model === 'minecraft:block/child')).toBe(true)
+
+    const logQuad = layers.opaque.find((quad) => quad.blockId === logId)
+    if (typeof logQuad?.blockState === 'undefined') {
+      throw new Error('Chunk meshing did not preserve the generic block state.')
+    }
+    const logModel = meshEffectiveBlockState(resourceName('demo'), logQuad.blockState, assets)
+    expect(logQuad.blockState.axis).toBe('x')
+    expect(logModel.length).toBeGreaterThan(0)
+    expect(logModel.every((quad) => quad.model === 'minecraft:block/bare')).toBe(true)
+  })
+
+  it('selects 0.17 piston and wall-torch models from kernel-encoded states', () => {
+    const stickyPistonId = Option.getOrThrow(blockIdOf('sticky_piston'))
+    const redstoneWallTorchId = Option.getOrThrow(blockIdOf('redstone_wall_torch'))
+    const models: Record<string, ResourcePackAssets['models'][string]> = {}
+    const stickyPistonVariants: Record<string, { readonly model: string }> = {}
+    const wallTorchVariants: Record<string, { readonly model: string }> = {}
+    const addModelVariant = (
+      variants: Record<string, { readonly model: string }>,
+      key: string,
+      path: string,
+    ): void => {
+      variants[key] = { model: path }
+      models[`minecraft:${path}`] = {
+        textures: { side: `block/${path.replaceAll('/', '-')}` },
+        elements: [modelElement({ up: face('#side') })],
+      }
+    }
+    const effectiveStateOf = (blockId: typeof stickyPistonId, values: unknown): EffectiveBlockStateValues =>
+      successOf(effectiveBlockStateOf(blockId, successOf(encodeBlockState(blockId, values))))
+    const stickyPistonFacings = ['north', 'east', 'south', 'west', 'up', 'down'] as const
+    for (const facing of stickyPistonFacings) {
+      for (const extended of [false, true]) {
+        const path = `block/sticky-piston-${facing}-${extended ? 'extended' : 'retracted'}`
+        addModelVariant(
+          stickyPistonVariants,
+          `facing=${facing},extended=${extended}`,
+          path,
+        )
+      }
+    }
+    const wallTorchFacings = ['north', 'east', 'south', 'west'] as const
+    for (const facing of wallTorchFacings) {
+      for (const lit of [false, true]) {
+        const path = `block/redstone-wall-torch-${facing}-${lit ? 'lit' : 'unlit'}`
+        addModelVariant(
+          wallTorchVariants,
+          `facing=${facing},lit=${lit}`,
+          path,
+        )
+      }
+    }
+    const stateAssets: ResourcePackAssets = {
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:sticky_piston': { variants: stickyPistonVariants },
+        'minecraft:redstone_wall_torch': { variants: wallTorchVariants },
+      },
+      models: { ...assets.models, ...models },
+    }
+
+    const selectedStickyPistonModels = new Set<string>()
+    for (const facing of stickyPistonFacings) {
+      for (const extended of [false, true]) {
+        const expectedModel = `minecraft:block/sticky-piston-${facing}-${extended ? 'extended' : 'retracted'}`
+        const state = effectiveStateOf(stickyPistonId, { facing, extended })
+        const selected = meshEffectiveBlockState(resourceName('sticky_piston'), state, stateAssets)
+        expect(selected).toHaveLength(1)
+        const selectedModel = selected[0]?.model ?? ''
+        expect(selectedModel).toBe(expectedModel)
+        selectedStickyPistonModels.add(selectedModel)
+      }
+    }
+    expect(selectedStickyPistonModels.size).toBe(12)
+
+    const selectedWallTorchModels = new Set<string>()
+    for (const facing of wallTorchFacings) {
+      for (const lit of [false, true]) {
+        const expectedModel = `minecraft:block/redstone-wall-torch-${facing}-${lit ? 'lit' : 'unlit'}`
+        const state = effectiveStateOf(redstoneWallTorchId, { facing, lit })
+        const selected = meshEffectiveBlockState(resourceName('redstone_wall_torch'), state, stateAssets)
+        expect(selected).toHaveLength(1)
+        const selectedModel = selected[0]?.model ?? ''
+        expect(selectedModel).toBe(expectedModel)
+        selectedWallTorchModels.add(selectedModel)
+      }
+    }
+    expect(selectedWallTorchModels.size).toBe(8)
   })
 
   it('rejects non-axis-aligned runtime block rotations', () => {

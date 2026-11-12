@@ -21,7 +21,7 @@ import { describe, expect, it } from './effect-test.js'
 import { vi } from 'vitest'
 import { Effect, Option, Result } from 'effect'
 import * as FastCheck from 'fast-check'
-import { BlockId as KernelBlockId, BLOCK_IDS, ChunkAxis as chunkAxis, blockIdOf, chunkCoord } from '@nerima-games/mc-kernel'
+import { BlockId as KernelBlockId, BLOCK_IDS, ChunkAxis as chunkAxis, FLOWING_FLUID_LEVEL, FLUID_LEVEL_STEP, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { AIR, MAX_BLOCK_ID, type BlockId } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
@@ -72,6 +72,7 @@ const WATER = Option.getOrThrow(blockIdOf('water'))
 const GLASS = Option.getOrThrow(blockIdOf('glass'))
 const DIRT = Option.getOrThrow(blockIdOf('dirt'))
 const CACTUS = Option.getOrThrow(blockIdOf('cactus'))
+const OAK_LOG = Option.getOrThrow(blockIdOf('oak_log'))
 
 const integerArbitrary = (minimum: number, maximum: number) => FastCheck.integer({ min: minimum, max: maximum })
 
@@ -117,7 +118,8 @@ const unitFacesOf = (quad: Quad): ReadonlyArray<string> => {
     for (let alongHeight = 0; alongHeight < quad.height; alongHeight += 1) {
       faces.push(
         `${quad.direction}:${at('x', alongWidth, alongHeight)},` +
-          `${at('y', alongWidth, alongHeight)},${at('z', alongWidth, alongHeight)}:${quad.blockId}:${quad.ao}`,
+          `${at('y', alongWidth, alongHeight)},${at('z', alongWidth, alongHeight)}:${quad.blockId}:${quad.ao}:` +
+          `${JSON.stringify(quad.blockState ?? null)}`,
       )
     }
   }
@@ -143,6 +145,19 @@ const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number
   return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
 }
 
+const chunkWithBlockStates = (
+  cells: ReadonlyArray<readonly [number, number, number, BlockId, unknown]>,
+): ChunkView & { readonly blockStates: Uint32Array } => {
+  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  const blockStates = new Uint32Array(BLOCKS_PER_CHUNK)
+  for (const [lx, y, lz, blockId, state] of cells) {
+    const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
+    blocks[index] = blockId
+    blockStates[index] = expectSuccess(encodeBlockState(blockId, state))
+  }
+  return { blockStates, blocks, coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT }
+}
+
 const CONFIG: MeshConfig = {
   crossPlantBlockIds: new Set(),
   fluidMaxLevels: new Map(),
@@ -151,6 +166,99 @@ const CONFIG: MeshConfig = {
 }
 
 const positionOf = (quad: Quad): string => `${quad.lx},${quad.y},${quad.lz}`
+
+describe('block state in cube output', () => {
+  it.effect('selects the effective default model state when the chunk omits the state array', () =>
+    Effect.sync(() => {
+      const quads = everyQuad(meshChunk(chunkWith([[8, 64, 8, OAK_LOG]]), {}, EMPTY_MESH_CONFIG))
+      expect(quads).toHaveLength(6)
+      expect(quads.every((quad) => quad.blockState?.axis === 'y')).toBe(true)
+    }),
+  )
+
+  it.effect('keeps adjacent faces with different encoded model states separate and preserves both selectors', () =>
+    Effect.sync(() =>
+      FastCheck.assert(
+        FastCheck.property(
+          FastCheck.tuple(FastCheck.constantFrom('x', 'y', 'z'), FastCheck.constantFrom('x', 'y', 'z')).filter(
+            ([left, right]) => left !== right,
+          ),
+          ([left, right]) => {
+            const chunk = chunkWithBlockStates([
+              [8, 64, 8, OAK_LOG, { axis: left }],
+              [9, 64, 8, OAK_LOG, { axis: right }],
+            ])
+            const front = meshChunk(chunk, {}, EMPTY_MESH_CONFIG).opaque.filter((quad) => quad.direction === 'zPos')
+            expect(front).toHaveLength(2)
+            expect(
+              front
+                .map((quad) => [quad.lx, quad.blockState?.axis] as const)
+                .sort(([leftX], [rightX]) => leftX - rightX),
+            ).toStrictEqual([
+              [8, left],
+              [9, right],
+            ])
+          },
+        ),
+        { numRuns: 12, interruptAfterTimeLimit: PROPERTY_TIMEOUT_MS },
+      ),
+    ),
+  )
+
+  it.effect('merges adjacent faces when their encoded model states match', () =>
+    Effect.sync(() => {
+      const chunk = chunkWithBlockStates([
+        [8, 64, 8, OAK_LOG, { axis: 'x' }],
+        [9, 64, 8, OAK_LOG, { axis: 'x' }],
+      ])
+      const front = meshChunk(chunk, {}, EMPTY_MESH_CONFIG).opaque.filter((quad) => quad.direction === 'zPos')
+      expect(front).toHaveLength(1)
+      expect(front[0]).toMatchObject({ blockState: { axis: 'x' }, lx: 8, width: 2 })
+    }),
+  )
+
+  it.effect('propagates malformed encoded states through merged and per-cell cube meshing', () =>
+    Effect.sync(() => {
+      const valid = chunkWithBlockStates([[8, 64, 8, OAK_LOG, { axis: 'x' }]])
+      const blockStates = new Uint32Array(valid.blockStates)
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      blockStates[index] = 0xFFFF_FFFF
+      const malformed = { ...valid, blockStates }
+      const failure = Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: OAK_LOG,
+        encoded: 0xFFFF_FFFF,
+        index,
+        reason: 'reserved-code',
+      })
+
+      expect(meshChunkResult(malformed, {}, EMPTY_MESH_CONFIG)).toStrictEqual(failure)
+      expect(meshChunkNaiveResult(malformed, {}, EMPTY_MESH_CONFIG)).toStrictEqual(failure)
+    }),
+  )
+
+  it.effect('rejects explicit states for unregistered IDs before cube faces are emitted', () =>
+    Effect.sync(() => {
+      const source = chunkWith([[8, 64, 8, UNREGISTERED_BLOCK_ID]])
+      const chunk = { ...source, blockStates: new Uint32Array(BLOCKS_PER_CHUNK) }
+      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
+      const config: MeshConfig = {
+        ...EMPTY_MESH_CONFIG,
+        transparentSolidBlockIds: new Set([UNREGISTERED_BLOCK_ID]),
+      }
+      const failure = Result.fail({
+        _tag: 'ChunkBlockStateCodecFailure',
+        blockId: UNREGISTERED_BLOCK_ID,
+        encoded: 0,
+        index,
+        reason: 'unknown-block-id',
+      })
+
+      expect(meshChunkResult(chunk, {}, config)).toStrictEqual(failure)
+      expect(meshChunkNaiveResult(chunk, {}, config)).toStrictEqual(failure)
+    }),
+  )
+})
 
 /**
  * Six ISOLATED blocks — no two face-adjacent, so nothing merges and each of the
@@ -410,6 +518,24 @@ describe('face ordering', () => {
       expect(render(first.transparentSolid)).toBe(render(second.transparentSolid))
     }),
   )
+
+  it.effect('merges adjacent faces that share the same encoded model state', () =>
+    Effect.sync(() =>
+      FastCheck.assert(
+        FastCheck.property(FastCheck.constantFrom('x', 'y', 'z'), (axis) => {
+          const chunk = chunkWithBlockStates([
+            [8, 64, 8, OAK_LOG, { axis }],
+            [9, 64, 8, OAK_LOG, { axis }],
+          ])
+          const front = meshChunk(chunk, {}, EMPTY_MESH_CONFIG).opaque.filter((quad) => quad.direction === 'zPos')
+          expect(front).toHaveLength(1)
+          expect(front[0]?.width).toBe(2)
+          expect(front[0]?.blockState?.axis).toBe(axis)
+        }),
+        { numRuns: 3, interruptAfterTimeLimit: PROPERTY_TIMEOUT_MS },
+      ),
+    ),
+  )
 })
 
 describe('quad extent and role', () => {
@@ -527,6 +653,8 @@ describe('layer routing', () => {
       BLOCK_ID_MAX: 0xffff,
       BLOCK_IDS: [1],
       BlockId: KernelBlockId,
+      FLOWING_FLUID_LEVEL,
+      FLUID_LEVEL_STEP,
       blockIdsWithOpacity: () => Result.succeed(Option.none()),
       propertyOfBlockId: (_blockId: number, property: string) =>
         Result.succeed(property === 'renderKind' ? 'cube' : new Map<string, unknown>().get('missing')),
@@ -1209,14 +1337,14 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect('accepts custom block IDs configured for each mesh shape and layer', () =>
     Effect.sync(() => {
       const wideId = expectSuccess(KernelBlockId.result(300))
-      const variants: ReadonlyArray<{ readonly config: MeshConfig; readonly nonOpaque: boolean }> = [
-        { config: { ...EMPTY_MESH_CONFIG, crossPlantBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, transparentSolidBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, waterBlockIds: new Set([wideId]) }, nonOpaque: true },
-        { config: { ...EMPTY_MESH_CONFIG, fluidMaxLevels: new Map([[wideId, 7]]) }, nonOpaque: false },
+      const variants: ReadonlyArray<MeshConfig> = [
+        { ...EMPTY_MESH_CONFIG, crossPlantBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, transparentSolidBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, waterBlockIds: new Set([wideId]) },
+        { ...EMPTY_MESH_CONFIG, fluidMaxLevels: new Map([[wideId, 7]]) },
       ]
 
-      for (const { config, nonOpaque } of variants) {
+      for (const config of variants) {
         const layers = meshChunk(
           chunkWith([
             [8, 64, 8, CACTUS],
@@ -1234,7 +1362,7 @@ describe('the greedy merge against the naive oracle', () => {
         ]
 
         expect(configuredQuads.some((quad) => quad.blockId === wideId)).toBe(true)
-        expect(layers.specialBlocks.some((quad) => quad.blockId === CACTUS && quad.direction === 'xPos')).toBe(nonOpaque)
+        expect(layers.specialBlocks.some((quad) => quad.blockId === CACTUS && quad.direction === 'xPos')).toBe(true)
       }
     }),
   )

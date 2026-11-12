@@ -17,6 +17,7 @@ import type {
   ResourcePackAssets,
   TextureName,
 } from './resource-pack-types.js'
+import type { EffectiveBlockStateValues } from '@nerima-games/mc-kernel'
 import { Brand, Option, Result } from 'effect'
 
 export type ResourceAssetKind = 'blockstate' | 'model'
@@ -56,6 +57,22 @@ const failResolution = (
   message: string,
 ): Result.Result<never, ResourcePackResolutionFailure> =>
   Result.fail(resolutionFailure(code, message))
+
+/** Convert kernel state values to the property strings used by blockstate assets. */
+export const blockStatePropertiesOf = (state: EffectiveBlockStateValues): BlockStateProperties => {
+  const properties: Record<string, string> = {}
+  for (const [key, value] of Object.entries(state)) {
+    if (typeof value !== 'undefined' && key !== 'connections') {
+      properties[key] = String(value)
+    }
+  }
+  for (const [direction, value] of Object.entries(state.connections ?? {})) {
+    if (typeof value !== 'undefined') {
+      properties[direction] = String(value)
+    }
+  }
+  return properties
+}
 
 const JSON_SUFFIX = '.json'
 const JSON_SUFFIX_LENGTH = JSON_SUFFIX.length
