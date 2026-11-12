@@ -5,6 +5,7 @@ import {
   blockIdOf,
   chunkCoord,
   encodeBlockState,
+  effectiveBlockStateOf,
   type EffectiveBlockStateValues,
 } from '@nerima-games/mc-kernel'
 import { BLOCKS_PER_CHUNK, CHUNK_HEIGHT, blockIndex, type ChunkView } from '../src/domain/chunk-view.js'
@@ -661,6 +662,85 @@ describe('resource-pack mesh', () => {
     expect(logQuad.blockState.axis).toBe('x')
     expect(logModel.length).toBeGreaterThan(0)
     expect(logModel.every((quad) => quad.model === 'minecraft:block/bare')).toBe(true)
+  })
+
+  it('selects 0.17 piston and wall-torch models from kernel-encoded states', () => {
+    const stickyPistonId = Option.getOrThrow(blockIdOf('sticky_piston'))
+    const redstoneWallTorchId = Option.getOrThrow(blockIdOf('redstone_wall_torch'))
+    const models: Record<string, ResourcePackAssets['models'][string]> = {}
+    const stickyPistonVariants: Record<string, { readonly model: string }> = {}
+    const wallTorchVariants: Record<string, { readonly model: string }> = {}
+    const addModelVariant = (
+      variants: Record<string, { readonly model: string }>,
+      key: string,
+      path: string,
+    ): void => {
+      variants[key] = { model: path }
+      models[`minecraft:${path}`] = {
+        textures: { side: `block/${path.replaceAll('/', '-')}` },
+        elements: [modelElement({ up: face('#side') })],
+      }
+    }
+    const effectiveStateOf = (blockId: typeof stickyPistonId, values: unknown): EffectiveBlockStateValues =>
+      successOf(effectiveBlockStateOf(blockId, successOf(encodeBlockState(blockId, values))))
+    const stickyPistonFacings = ['north', 'east', 'south', 'west', 'up', 'down'] as const
+    for (const facing of stickyPistonFacings) {
+      for (const extended of [false, true]) {
+        const path = `block/sticky-piston-${facing}-${extended ? 'extended' : 'retracted'}`
+        addModelVariant(
+          stickyPistonVariants,
+          `facing=${facing},extended=${extended}`,
+          path,
+        )
+      }
+    }
+    const wallTorchFacings = ['north', 'east', 'south', 'west'] as const
+    for (const facing of wallTorchFacings) {
+      for (const lit of [false, true]) {
+        const path = `block/redstone-wall-torch-${facing}-${lit ? 'lit' : 'unlit'}`
+        addModelVariant(
+          wallTorchVariants,
+          `facing=${facing},lit=${lit}`,
+          path,
+        )
+      }
+    }
+    const stateAssets: ResourcePackAssets = {
+      blockstates: {
+        ...assets.blockstates,
+        'minecraft:sticky_piston': { variants: stickyPistonVariants },
+        'minecraft:redstone_wall_torch': { variants: wallTorchVariants },
+      },
+      models: { ...assets.models, ...models },
+    }
+
+    const selectedStickyPistonModels = new Set<string>()
+    for (const facing of stickyPistonFacings) {
+      for (const extended of [false, true]) {
+        const expectedModel = `minecraft:block/sticky-piston-${facing}-${extended ? 'extended' : 'retracted'}`
+        const state = effectiveStateOf(stickyPistonId, { facing, extended })
+        const selected = meshEffectiveBlockState(resourceName('sticky_piston'), state, stateAssets)
+        expect(selected).toHaveLength(1)
+        const selectedModel = selected[0]?.model ?? ''
+        expect(selectedModel).toBe(expectedModel)
+        selectedStickyPistonModels.add(selectedModel)
+      }
+    }
+    expect(selectedStickyPistonModels.size).toBe(12)
+
+    const selectedWallTorchModels = new Set<string>()
+    for (const facing of wallTorchFacings) {
+      for (const lit of [false, true]) {
+        const expectedModel = `minecraft:block/redstone-wall-torch-${facing}-${lit ? 'lit' : 'unlit'}`
+        const state = effectiveStateOf(redstoneWallTorchId, { facing, lit })
+        const selected = meshEffectiveBlockState(resourceName('redstone_wall_torch'), state, stateAssets)
+        expect(selected).toHaveLength(1)
+        const selectedModel = selected[0]?.model ?? ''
+        expect(selectedModel).toBe(expectedModel)
+        selectedWallTorchModels.add(selectedModel)
+      }
+    }
+    expect(selectedWallTorchModels.size).toBe(8)
   })
 
   it('rejects non-axis-aligned runtime block rotations', () => {

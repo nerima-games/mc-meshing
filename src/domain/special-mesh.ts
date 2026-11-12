@@ -902,6 +902,15 @@ const doorHingeDirection = (facing: HorizontalFacing, hinge: DoorHinge): Horizon
   return hinge === 'left' ? 'south' : 'north'
 }
 
+const CLOSED_DOOR_PANEL_SIDE: Readonly<Record<HorizontalFacing, HorizontalFacing>> = {
+  north: 'south',
+  east: 'west',
+  south: 'north',
+  west: 'east',
+}
+
+const doorClosedPanelSide = (facing: HorizontalFacing): HorizontalFacing => CLOSED_DOOR_PANEL_SIDE[facing]
+
 const doorBoundsOf = (
   position: BlockPosition,
   normal: HorizontalFacing,
@@ -951,7 +960,9 @@ const meshDoorCell = (
   if (typeof open.success !== 'boolean') {
     return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'open' })
   }
-  const normal = open.success ? doorHingeDirection(facing.success, hinge.success) : facing.success
+  const normal = open.success
+    ? doorHingeDirection(facing.success, hinge.success)
+    : doorClosedPanelSide(facing.success)
   return meshBoxCell({ result, lookup, chunk, neighbours, blockId, kind: 'door', position, blockState, config }, doorBoundsOf(position, normal))
 }
 

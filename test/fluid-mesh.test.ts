@@ -1058,10 +1058,9 @@ describe('the injected fluid table', () => {
     }),
   )
 
-  it.effect('rejects an unknown fluid id when explicit block-state storage is present', () =>
+  it.effect('keeps an unknown fluid id on the neutral state path when explicit storage is present', () =>
     Effect.sync(() => {
       const unknownFluid = makeBlockId(300)
-      const index = blockIndex(8, 64, 8, CHUNK_HEIGHT)
       const source = chunkWith([[8, 64, 8, unknownFluid]])
       const chunk = { ...source, blockStates: new Uint32Array(BLOCKS_PER_CHUNK) }
       const config: MeshConfig = {
@@ -1070,14 +1069,12 @@ describe('the injected fluid table', () => {
         waterBlockIds: new Set([unknownFluid]),
       }
 
-      expect(meshChunkResult(chunk, {}, config)).toMatchObject({
-        failure: {
-          _tag: 'ChunkBlockStateCodecFailure',
-          blockId: unknownFluid,
-          index,
-          reason: 'unknown-block-id',
-        },
-      })
+      const result = meshChunkResult(chunk, {}, config)
+      expect(Result.isSuccess(result)).toBe(true)
+      if (Result.isSuccess(result)) {
+        expect(result.success.fluids.length).toBeGreaterThan(0)
+        expect(result.success.fluids.every((quad) => quad.blockId === unknownFluid)).toBe(true)
+      }
     }),
   )
 

@@ -617,9 +617,7 @@ describe('crop texture stages', () => {
         ...chunkWith([[4, 30, 5, unknownId]]),
         blockStates: encodedStates,
       }
-      expect(plantTextureStageAt(unknownWithStates, index)).toMatchObject({
-        failure: { _tag: 'ChunkBlockStateCodecFailure', blockId: unknownId, index, reason: 'unknown-block-id' },
-      })
+      expect(plantTextureStageAt(unknownWithStates, index)).toStrictEqual(Result.succeed(Option.none()))
     }),
   )
 

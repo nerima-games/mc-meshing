@@ -1,5 +1,4 @@
 import { describe, expect, it } from './effect-test.js'
-import * as FastCheck from 'fast-check'
 import { Effect, Option, Result, Schema } from 'effect'
 import { vi } from 'vitest'
 import {
@@ -115,6 +114,172 @@ const vertexBounds = (quads: ReadonlyArray<{ readonly vertices: ReadonlyArray<re
   }
 }
 
+type GeometryVertex = readonly [x: number, y: number, z: number]
+type StairFacingValue = 'north' | 'east' | 'south' | 'west'
+type StairShapeValue = 'straight' | 'inner_left' | 'inner_right' | 'outer_left' | 'outer_right'
+type StairHalfValue = 'bottom' | 'top'
+type StairQuadrantName = 'NW' | 'NE' | 'SW' | 'SE'
+
+const STAIR_QUADRANT_CELLS: Readonly<Record<StairQuadrantName, readonly [x: number, z: number]>> = {
+  NW: [0, 0],
+  NE: [1, 0],
+  SW: [0, 1],
+  SE: [1, 1],
+}
+
+const STAIR_UPPER_QUADRANTS: Readonly<Record<
+  StairFacingValue,
+  Readonly<Record<StairShapeValue, ReadonlyArray<StairQuadrantName>>>
+>> = {
+  north: {
+    straight: ['NW', 'NE'],
+    inner_left: ['NW', 'NE', 'SW'],
+    inner_right: ['NW', 'NE', 'SE'],
+    outer_left: ['NW'],
+    outer_right: ['NE'],
+  },
+  east: {
+    straight: ['NE', 'SE'],
+    inner_left: ['NW', 'NE', 'SE'],
+    inner_right: ['NE', 'SE', 'SW'],
+    outer_left: ['NE'],
+    outer_right: ['SE'],
+  },
+  south: {
+    straight: ['SW', 'SE'],
+    inner_left: ['NE', 'SW', 'SE'],
+    inner_right: ['NW', 'SW', 'SE'],
+    outer_left: ['SE'],
+    outer_right: ['SW'],
+  },
+  west: {
+    straight: ['NW', 'SW'],
+    inner_left: ['NW', 'SW', 'SE'],
+    inner_right: ['NW', 'NE', 'SW'],
+    outer_left: ['SW'],
+    outer_right: ['NW'],
+  },
+}
+
+const STAIR_FACE_OFFSETS = [
+  { direction: 'xNeg', delta: [-1, 0, 0] },
+  { direction: 'xPos', delta: [1, 0, 0] },
+  { direction: 'yNeg', delta: [0, -1, 0] },
+  { direction: 'yPos', delta: [0, 1, 0] },
+  { direction: 'zNeg', delta: [0, 0, -1] },
+  { direction: 'zPos', delta: [0, 0, 1] },
+] as const
+
+const sortedVertexKey = (vertices: ReadonlyArray<GeometryVertex>): string =>
+  vertices.map((vertex) => vertex.join(',')).sort().join(';')
+
+const geometryFaceKey = (direction: string, vertices: ReadonlyArray<GeometryVertex>): string =>
+  `${direction}|${sortedVertexKey(vertices)}`
+
+const boxGeometryFaceKeys = (bounds: {
+  readonly minX: number
+  readonly maxX: number
+  readonly minY: number
+  readonly maxY: number
+  readonly minZ: number
+  readonly maxZ: number
+}): ReadonlyArray<string> => {
+  const { minX, maxX, minY, maxY, minZ, maxZ } = bounds
+  return [
+    geometryFaceKey('xNeg', [[minX, minY, minZ], [minX, minY, maxZ], [minX, maxY, maxZ], [minX, maxY, minZ]]),
+    geometryFaceKey('xPos', [[maxX, minY, maxZ], [maxX, minY, minZ], [maxX, maxY, minZ], [maxX, maxY, maxZ]]),
+    geometryFaceKey('yNeg', [[minX, minY, minZ], [maxX, minY, minZ], [maxX, minY, maxZ], [minX, minY, maxZ]]),
+    geometryFaceKey('yPos', [[minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ], [minX, maxY, minZ]]),
+    geometryFaceKey('zNeg', [[maxX, minY, minZ], [minX, minY, minZ], [minX, maxY, minZ], [maxX, maxY, minZ]]),
+    geometryFaceKey('zPos', [[minX, minY, maxZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]]),
+  ].sort()
+}
+
+const expectedStairFaceKeys = (
+  [lx, y, lz]: readonly [number, number, number],
+  facing: StairFacingValue,
+  half: StairHalfValue,
+  shape: StairShapeValue,
+): ReadonlyArray<string> => {
+  const occupied = new Map<string, readonly [number, number, number]>()
+  const baseLayer = half === 'bottom' ? 0 : 1
+  const stepLayer = half === 'bottom' ? 1 : 0
+  const code = (x: number, layer: number, z: number): string => `${x}:${layer}:${z}`
+  const addCell = (x: number, layer: number, z: number): void => {
+    occupied.set(code(x, layer, z), [x, layer, z])
+  }
+
+  for (const x of [0, 1]) {
+    for (const z of [0, 1]) {
+      addCell(x, baseLayer, z)
+    }
+  }
+  for (const quadrant of STAIR_UPPER_QUADRANTS[facing][shape]) {
+    const [x, z] = STAIR_QUADRANT_CELLS[quadrant]
+    addCell(x, stepLayer, z)
+  }
+
+  const faces: Array<string> = []
+  for (const [x, layer, z] of occupied.values()) {
+    for (const { direction, delta } of STAIR_FACE_OFFSETS) {
+      const [dx, dy, dz] = delta
+      const adjacent = [x + dx, layer + dy, z + dz] as const
+      const inside = adjacent.every((coordinate) => coordinate >= 0 && coordinate <= 1)
+      if (inside && occupied.has(code(...adjacent))) {
+        continue
+      }
+
+      const bounds = {
+        minX: lx + x / 2,
+        maxX: lx + (x + 1) / 2,
+        minY: y + layer / 2,
+        maxY: y + (layer + 1) / 2,
+        minZ: lz + z / 2,
+        maxZ: lz + (z + 1) / 2,
+      }
+      const { minX, maxX, minY, maxY, minZ, maxZ } = bounds
+      const vertices: ReadonlyArray<GeometryVertex> = direction === 'xNeg'
+        ? [[minX, minY, minZ], [minX, minY, maxZ], [minX, maxY, maxZ], [minX, maxY, minZ]]
+        : direction === 'xPos'
+          ? [[maxX, minY, maxZ], [maxX, minY, minZ], [maxX, maxY, minZ], [maxX, maxY, maxZ]]
+          : direction === 'yNeg'
+            ? [[minX, minY, minZ], [maxX, minY, minZ], [maxX, minY, maxZ], [minX, minY, maxZ]]
+            : direction === 'yPos'
+              ? [[minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ], [minX, maxY, minZ]]
+              : direction === 'zNeg'
+                ? [[maxX, minY, minZ], [minX, minY, minZ], [minX, maxY, minZ], [maxX, maxY, minZ]]
+                : [[minX, minY, maxZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]]
+      faces.push(geometryFaceKey(direction, vertices))
+    }
+  }
+  return faces.sort()
+}
+
+type RailShapeValue =
+  | 'north_south'
+  | 'east_west'
+  | 'ascending_east'
+  | 'ascending_west'
+  | 'ascending_north'
+  | 'ascending_south'
+  | 'south_east'
+  | 'south_west'
+  | 'north_west'
+  | 'north_east'
+
+const EXPECTED_RAIL_VERTICES: Readonly<Record<RailShapeValue, ReadonlyArray<GeometryVertex>>> = {
+  north_south: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  east_west: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  ascending_east: [[0, 1 / 16, 0], [1, 17 / 16, 0], [1, 17 / 16, 1], [0, 1 / 16, 1]],
+  ascending_west: [[0, 17 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 17 / 16, 1]],
+  ascending_north: [[0, 17 / 16, 0], [1, 17 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  ascending_south: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 17 / 16, 1], [0, 17 / 16, 1]],
+  south_east: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  south_west: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  north_west: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+  north_east: [[0, 1 / 16, 0], [1, 1 / 16, 0], [1, 1 / 16, 1], [0, 1 / 16, 1]],
+}
+
 const quadsWithinBlock = (
   quads: ReadonlyArray<SpecialBlockQuad>,
   lx: number,
@@ -142,53 +307,49 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
-  it.effect('selects the opened door panel side from facing and hinge for every horizontal orientation', () =>
+  it.effect('matches independently derived closed and opened door panel geometry', () =>
     Effect.sync(() => {
-      const facingValues = ['north', 'east', 'south', 'west'] as const
-      const faceDirection = {
-        north: 'zNeg',
-        east: 'xPos',
-        south: 'zPos',
-        west: 'xNeg',
+      const facings = ['north', 'east', 'south', 'west'] as const
+      const hinges = ['left', 'right'] as const
+      const halves = ['lower', 'upper'] as const
+      const expectedEdge = {
+        north: { closed: 'south', opened: { left: 'west', right: 'east' } },
+        east: { closed: 'west', opened: { left: 'north', right: 'south' } },
+        south: { closed: 'north', opened: { left: 'east', right: 'west' } },
+        west: { closed: 'east', opened: { left: 'south', right: 'north' } },
       } as const
-      const hingeSide = {
-        north: { left: 'west', right: 'east' },
-        east: { left: 'north', right: 'south' },
-        south: { left: 'east', right: 'west' },
-        west: { left: 'south', right: 'north' },
+      const expectedBoundsByEdge = {
+        west: { minX: 8, maxX: 8 + 3 / 16, minY: 64, maxY: 65, minZ: 8, maxZ: 9 },
+        east: { minX: 8 + 13 / 16, maxX: 9, minY: 64, maxY: 65, minZ: 8, maxZ: 9 },
+        north: { minX: 8, maxX: 9, minY: 64, maxY: 65, minZ: 8, maxZ: 8 + 3 / 16 },
+        south: { minX: 8, maxX: 9, minY: 64, maxY: 65, minZ: 8 + 13 / 16, maxZ: 9 },
       } as const
 
-      FastCheck.assert(FastCheck.property(
-        FastCheck.constantFrom(...facingValues),
-        FastCheck.constantFrom('left' as const, 'right' as const),
-        FastCheck.boolean(),
-        FastCheck.constantFrom('lower' as const, 'upper' as const),
-        (facing, hinge, open, half) => {
-          const encodedState = encodeState(DOOR, { facing, hinge, open, half })
-          const quads = Result.getOrThrow(meshSpecialBlocks(
-            SPECIAL_LOOKUP,
-            chunkWithStates([[8, 64, 8, DOOR]], [[8, 64, 8, encodedState]]),
-            {},
-            CHUNK_HEIGHT,
-          ))
-          const expectedFace = open ? hingeSide[facing][hinge] : facing
-          const expectedBoundary = expectedFace === 'north'
-            ? { axis: 2, value: 8 }
-            : expectedFace === 'south'
-              ? { axis: 2, value: 9 }
-              : expectedFace === 'west'
-                ? { axis: 0, value: 8 }
-                : { axis: 0, value: 9 }
-          const panelFace = quads.find((quad) => quad.direction === faceDirection[expectedFace])
+      for (const facing of facings) {
+        for (const hinge of hinges) {
+          for (const open of [false, true]) {
+            for (const half of halves) {
+              const encodedState = encodeState(DOOR, { facing, hinge, open, half })
+              const quads = Result.getOrThrow(meshSpecialBlocks(
+                SPECIAL_LOOKUP,
+                chunkWithStates([[8, 64, 8, DOOR]], [[8, 64, 8, encodedState]]),
+                {},
+                CHUNK_HEIGHT,
+              ))
+              const edge = open ? expectedEdge[facing].opened[hinge] : expectedEdge[facing].closed
+              const expectedBounds = expectedBoundsByEdge[edge]
 
-          expect(panelFace).toBeDefined()
-          expect(panelFace?.vertices.every((vertex) => vertex[expectedBoundary.axis] === expectedBoundary.value)).toBe(true)
-          expect(vertexBounds(quads)).toMatchObject(expectedFace === 'north' || expectedFace === 'south'
-            ? { minZ: expectedFace === 'north' ? 8 : 9 - 3 / 16, maxZ: expectedFace === 'north' ? 8 + 3 / 16 : 9 }
-            : { minX: expectedFace === 'west' ? 8 : 9 - 3 / 16, maxX: expectedFace === 'west' ? 8 + 3 / 16 : 9 })
-          expect(quads.every((quad) => quad.blockState?.half === half)).toBe(true)
-        },
-      ))
+              expect(quads.map((quad) => geometryFaceKey(quad.direction, quad.vertices)).sort())
+                .toStrictEqual(boxGeometryFaceKeys(expectedBounds))
+              expect(vertexBounds(quads)).toStrictEqual(expectedBounds)
+              expect(quads.every((quad) =>
+                quad.blockState?.facing === facing && quad.blockState.hinge === hinge &&
+                quad.blockState.open === open && quad.blockState.half === half,
+              )).toBe(true)
+            }
+          }
+        }
+      }
     }),
   )
 
@@ -225,6 +386,22 @@ describe('kernel-defined special block geometry', () => {
       const fixedOpenDoor = layers.specialBlocks.find((quad) => quad.kind === 'door' && quad.blockId === FIXED_OPEN_DOOR)
       expect(closedDoor?.blockState).toMatchObject({ facing: 'north', half: 'lower', hinge: 'left', open: false })
       expect(fixedOpenDoor?.blockState).toMatchObject({ hinge: 'left', open: true })
+    }),
+  )
+
+  it.effect('keeps an unknown block id on its neutral mesh path when encoded state storage is present', () =>
+    Effect.sync(() => {
+      const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
+      const config = { ...MESH_CONFIG, transparentSolidBlockIds: new Set([customBlockId]) }
+      const layers = Result.getOrThrow(meshChunk(
+        chunkWithStates([[8, 64, 8, customBlockId]], [[8, 64, 8, 1]]),
+        {},
+        config,
+      ))
+
+      expect(layers.transparentSolid).toHaveLength(6)
+      expect(layers.transparentSolid.every((quad) => quad.blockId === customBlockId && !Object.hasOwn(quad, 'blockState'))).toBe(true)
+      expect(layers.specialBlocks.some((quad) => quad.blockId === customBlockId)).toBe(false)
     }),
   )
 
@@ -300,7 +477,7 @@ describe('kernel-defined special block geometry', () => {
         readonly position: readonly [number, number, number]
         readonly state: Readonly<Record<string, unknown>>
       }> = []
-      const railRecords: Array<{ readonly record: typeof records[number]; readonly shape: typeof railShapes[number] }> = []
+      const railRecords: Array<{ readonly record: typeof records[number]; readonly shape: RailShapeValue }> = []
       const wireRecords: Array<{
         readonly record: typeof records[number]
         readonly connection: 'none' | 'side' | 'up'
@@ -350,8 +527,11 @@ describe('kernel-defined special block geometry', () => {
         expect(railQuads).toHaveLength(2)
         expect(railQuads.every((quad) => quad.kind === 'rail' && quad.blockState?.shape === shape)).toBe(true)
         const top = railQuads.find((quad) => quad.kind === 'rail' && quad.role === 'top')
-        const expectedTop = shape.startsWith('ascending_') ? 64 + 17 / 16 : 64 + 1 / 16
-        expect(top?.vertices.some(([, y]) => y === expectedTop)).toBe(true)
+        const bottom = railQuads.find((quad) => quad.kind === 'rail' && quad.role === 'bottom')
+        const [lx, y, lz] = record.position
+        const expectedVertices = EXPECTED_RAIL_VERTICES[shape].map(([x, vertexY, z]) => [lx + x, y + vertexY, lz + z] as const)
+        expect(sortedVertexKey(top?.vertices ?? [])).toBe(sortedVertexKey(expectedVertices))
+        expect(sortedVertexKey(bottom?.vertices ?? [])).toBe(sortedVertexKey(expectedVertices))
       }
 
       const connectionQuadCounts = { none: 1, side: 2, up: 2 } as const
@@ -375,6 +555,12 @@ describe('kernel-defined special block geometry', () => {
         readonly position: readonly [number, number, number]
         readonly state: Readonly<Record<string, unknown>>
       }> = []
+      const stairRecords: Array<{
+        readonly record: typeof records[number]
+        readonly facing: StairFacingValue
+        readonly half: StairHalfValue
+        readonly shape: StairShapeValue
+      }> = []
       const place = (blockId: BlockId, state: Readonly<Record<string, unknown>>) => {
         const index = records.length
         const position = [((index % 8) * 2), 64 + Math.floor(index / 64) * 2, (Math.floor(index % 64 / 8) * 2)] as const
@@ -390,7 +576,7 @@ describe('kernel-defined special block geometry', () => {
       for (const facing of facings) {
         for (const half of ['bottom', 'top'] as const) {
           for (const shape of stairShapes) {
-            place(STAIRS, { facing, half, shape })
+            stairRecords.push({ record: place(STAIRS, { facing, half, shape }), facing, half, shape })
           }
         }
       }
@@ -437,6 +623,13 @@ describe('kernel-defined special block geometry', () => {
         .flatMap((quad) => quad.vertices.map((vertex) => vertex.join(',')))
         .sort()
         .join('|')
+
+      for (const { record, facing, half, shape } of stairRecords) {
+        const stairQuads = quadsAt(record)
+        expect(stairQuads.every((quad) => quad.kind === 'stairs')).toBe(true)
+        expect(stairQuads.map((quad) => geometryFaceKey(quad.direction, quad.vertices)).sort())
+          .toStrictEqual(expectedStairFaceKeys(record.position, facing, half, shape))
+      }
 
       for (const record of records) {
         const cellQuads = quadsAt(record)

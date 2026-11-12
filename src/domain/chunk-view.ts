@@ -336,6 +336,10 @@ const effectiveBlockStateAt = (
 ): Result.Result<EffectiveBlockStateValues, ChunkBlockStateCodecFailure> => {
   const effective = effectiveBlockStateOf(blockId, encodedBlockStateFromUint32(encoded))
   if (Result.isFailure(effective)) {
+    if (effective.failure.reason === 'unknown-block-id') {
+      // Keep custom block IDs opaque to the kernel's state codec.
+      return Result.succeed({})
+    }
     return Result.fail({
       ...chunkBlockStateCodecFailure(index, blockId, effective.failure.reason),
       encoded: encodedBlockStateFromUint32(encoded),
@@ -406,7 +410,7 @@ export const blockStateAt = (
   const defaults = defaultEffectiveBlockStateOf(blockId)
   if (Result.isFailure(defaults)) {
     if (defaults.failure.reason === 'unknown-block-id') {
-      // Custom IDs without kernel state definitions remain usable when state storage is omitted.
+      // IDs without kernel state definitions remain neutral when storage is omitted.
       return Result.succeed({})
     }
     return Result.fail(chunkBlockStateCodecFailure(index, blockId, defaults.failure.reason))

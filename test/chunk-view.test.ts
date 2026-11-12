@@ -125,7 +125,7 @@ describe('blockStateAt', () => {
     expect(doorState.open).toBe(true)
   })
 
-  it('uses empty state for custom IDs only when state storage is omitted', () => {
+  it('uses neutral state for custom IDs with or without encoded state storage', () => {
     const customBlockId = Result.getOrThrow(KernelBlockId.result(300))
     const empty = Result.getOrThrow(emptyChunk(STATE_CHUNK_HEIGHT))
     const blocks = new Uint16Array(empty.blocks)
@@ -138,15 +138,7 @@ describe('blockStateAt', () => {
     const chunkWithNeutralStates: ChunkView = { ...chunk, blockStates }
     for (const encoded of [0, 1]) {
       blockStates[STATE_INDEX] = encoded
-      expect(blockStateAt(chunkWithNeutralStates, STATE_INDEX)).toMatchObject({
-        failure: {
-          _tag: 'ChunkBlockStateCodecFailure',
-          blockId: customBlockId,
-          encoded,
-          index: STATE_INDEX,
-          reason: 'unknown-block-id',
-        },
-      })
+      expect(blockStateAt(chunkWithNeutralStates, STATE_INDEX)).toStrictEqual(Result.succeed({}))
     }
   })
 
