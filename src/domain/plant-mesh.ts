@@ -150,11 +150,6 @@ export type PlantMeshFailure =
   | ChunkViewFailure
   | UnclassifiedVanillaBlockType
   | InvalidBlockStateModelPropertyFailure
-  | {
-      readonly _tag: 'MissingPlantTextureStage'
-      readonly blockId: BlockId
-      readonly blockType: PlantTextureBlockType
-    }
 
 const plantTextureStageOf = (
   blockId: BlockId,
@@ -606,14 +601,16 @@ export const meshCrossPlants = (
           const blockType = VANILLA_BLOCK_TYPE_CACHE.get(blockId)
           if (isPlantTextureBlockType(blockType)) {
             const index = blockIndex(lx, y, lz, chunk.height)
-            const selectedStage = plantTextureStageAt(chunk, index)
+            const state = blockStateAt(chunk, index)
+            if (Result.isFailure(state)) {
+              return Result.fail(modelPropertyFailureOf(state.failure, blockType))
+            }
+            const stageValue = blockType === 'sapling' ? state.success.stage : state.success.age
+            const selectedStage = plantTextureStageOf(blockId, blockType, stageValue)
             if (Result.isFailure(selectedStage)) {
               return Result.fail(modelPropertyFailureOf(selectedStage.failure, blockType))
             }
-            if (Option.isNone(selectedStage.success)) {
-              return Result.fail({ _tag: 'MissingPlantTextureStage', blockId, blockType })
-            }
-            textureStage = selectedStage.success.value
+            textureStage = selectedStage.success
           }
           if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
             const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
