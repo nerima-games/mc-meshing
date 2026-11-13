@@ -2160,10 +2160,10 @@ const anvilPartsOf = (position: BlockPosition, facing: HorizontalFacing): Readon
 
 const cauldronPartsOf = (position: BlockPosition): ReadonlyArray<ModelPart> => [
   modelPartAt(position, [2, 0, 2], [14, 3, 14]),
-  modelPartAt(position, [2, 3, 2], [14, 16, 4]),
-  modelPartAt(position, [2, 3, 12], [14, 16, 14]),
-  modelPartAt(position, [2, 3, 4], [4, 16, 12]),
-  modelPartAt(position, [12, 3, 4], [14, 16, 12]),
+  modelPartAt(position, [0, 3, 0], [16, 16, 2]),
+  modelPartAt(position, [0, 3, 14], [16, 16, 16]),
+  modelPartAt(position, [0, 3, 2], [2, 16, 14]),
+  modelPartAt(position, [14, 3, 2], [16, 16, 14]),
 ]
 
 const hopperPartsOf = (position: BlockPosition, facing: NonNullable<EffectiveBlockStateValues['facing']>): ReadonlyArray<ModelPart> => {

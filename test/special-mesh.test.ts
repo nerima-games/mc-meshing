@@ -578,13 +578,34 @@ describe('kernel-defined special block geometry', () => {
       }
 
       expect(vertexBounds(modelAt(CAULDRON))).toStrictEqual({
-        minX: 8 + 2 / 16,
-        maxX: 8 + 14 / 16,
+        minX: 8,
+        maxX: 9,
         minY: 64,
         maxY: 65,
-        minZ: 8 + 2 / 16,
-        maxZ: 8 + 14 / 16,
+        minZ: 8,
+        maxZ: 9,
       })
+      const cauldron = modelAt(CAULDRON)
+      const wallBottom = 64 + 3 / 16
+      const wallPlaneBounds = (direction: string, axis: 0 | 2, coordinate: number) => vertexBounds(cauldron.filter((quad) =>
+        quad.direction === direction && quad.vertices.every((vertex) => vertex[axis] === coordinate && vertex[1] >= wallBottom),
+      ))
+      const wallBounds = (minX: number, maxX: number, minZ: number, maxZ: number) => ({
+        minX,
+        maxX,
+        minY: wallBottom,
+        maxY: 65,
+        minZ,
+        maxZ,
+      })
+      expect(wallPlaneBounds('zNeg', 2, 8)).toStrictEqual(wallBounds(8, 9, 8, 8))
+      expect(wallPlaneBounds('zPos', 2, 9)).toStrictEqual(wallBounds(8, 9, 9, 9))
+      expect(wallPlaneBounds('xNeg', 0, 8)).toStrictEqual(wallBounds(8, 8, 8, 9))
+      expect(wallPlaneBounds('xPos', 0, 9)).toStrictEqual(wallBounds(9, 9, 8, 9))
+      expect(wallPlaneBounds('zPos', 2, 8 + 2 / 16)).toStrictEqual(wallBounds(8, 9, 8 + 2 / 16, 8 + 2 / 16))
+      expect(wallPlaneBounds('zNeg', 2, 8 + 14 / 16)).toStrictEqual(wallBounds(8, 9, 8 + 14 / 16, 8 + 14 / 16))
+      expect(wallPlaneBounds('xPos', 0, 8 + 2 / 16)).toStrictEqual(wallBounds(8 + 2 / 16, 8 + 2 / 16, 8 + 2 / 16, 8 + 14 / 16))
+      expect(wallPlaneBounds('xNeg', 0, 8 + 14 / 16)).toStrictEqual(wallBounds(8 + 14 / 16, 8 + 14 / 16, 8 + 2 / 16, 8 + 14 / 16))
       const waterTopByLevel = { 1: 64 + 6 / 16, 2: 64 + 9 / 16, 3: 64 + 12 / 16 } as const
       for (const level of [1, 2, 3] as const) {
         const waterCauldron = modelAt(WATER_CAULDRON, { level })
