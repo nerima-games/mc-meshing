@@ -66,12 +66,15 @@ const CONFIG: MeshConfig = {
   waterBlockIds: new Set<BlockId>([WATER]),
 }
 
-const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+const chunkWith = (
+  cells: ReadonlyArray<readonly [number, number, number, number]>,
+  height = CHUNK_HEIGHT,
+): ChunkView => {
+  const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
   for (const [lx, y, lz, cellBlockId] of cells) {
-    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = cellBlockId
+    blocks[blockIndex(lx, y, lz, height)] = cellBlockId
   }
-  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height, blocks }
 }
 
 const mesh = (chunk: ChunkView, config: MeshConfig = CONFIG) =>
@@ -88,6 +91,16 @@ const crossPlants = (chunk: ChunkView, config: MeshConfig = EMPTY_MESH_CONFIG) =
   }))
 
 type CropBlockType = Exclude<PlantTextureStage['blockType'], 'sapling'>
+
+// Pixel silhouettes measured from vanilla Java 26.3-snapshot-4 textures at
+// https://mcasset.cloud/26.3-snapshot-4/assets/minecraft/textures/block/:
+// `wheat_stage*.png`, `potatoes_stage*.png`, and `nether_wart_stage*.png`.
+// These are asset-derived, not Wiki dimensions.
+const VANILLA_CROP_TEXTURE_HEIGHT_PIXELS: Record<CropBlockType, ReadonlyArray<number>> = {
+  wheat_crop: [3, 5, 7, 9, 12, 15, 15, 16],
+  potato_crop: [5, 5, 8, 8, 11, 11, 11, 16],
+  nether_wart_crop: [6, 11, 11, 14],
+}
 
 const cropChunk = (blockType: CropBlockType, age: number | null = null, includeStateStorage = true) => {
   const id = Option.getOrThrow(blockIdOf(blockType))
@@ -291,24 +304,22 @@ describe('the two plates', () => {
     }),
   )
 
-  it.effect('both meshers agree on the plates, exactly', () =>
+  it.effect('both meshers agree on the plates in randomized short chunks, exactly', () =>
     Effect.sync(() => {
-      // The oracle bounds its scan at CHUNK_HEIGHT and `meshChunk` at
-      // `solidCeiling`, so this is also where an off-by-one in the ceiling would
-      // Silently drop the topmost row of flowers.
+      const height = 8
       FastCheck.assert(
         FastCheck.property(
           FastCheck.array(
             FastCheck.tuple(
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
-              FastCheck.integer({ max: CHUNK_HEIGHT - 1, min: 0 }),
+              FastCheck.integer({ max: height - 1, min: 0 }),
               FastCheck.integer({ max: CHUNK_SIZE - 1, min: 0 }),
               FastCheck.constantFrom(STONE, GLASS, WATER, FLOWER, GRASS_TUFT),
             ),
             { maxLength: 30, minLength: 0 },
           ),
           (cells) => {
-            const chunk = chunkWith(cells)
+            const chunk = chunkWith(cells, height)
             const render = (plates: ReadonlyArray<CrossPlantQuad>): string =>
               plates.map((plate) => `${plate.blockId}:${cornersOf(plate).join('|')}`).join(';')
             return (
@@ -325,8 +336,11 @@ describe('the two plates', () => {
 
   it.effect('a plant at the very top of the chunk is still meshed', () =>
     Effect.sync(() => {
-      const layers = mesh(chunkWith([[3, CHUNK_HEIGHT - 1, 3, FLOWER]]))
+      const chunk = chunkWith([[3, CHUNK_HEIGHT - 1, 3, FLOWER]])
+      const layers = mesh(chunk)
+      const naiveLayers = meshNaive(chunk)
       expect(layers.crossPlants.length).toBe(2)
+      expect(naiveLayers.crossPlants).toStrictEqual(layers.crossPlants)
     }),
   )
 
@@ -594,6 +608,39 @@ describe('crop texture stages', () => {
       const layers = mesh(high.chunk, EMPTY_MESH_CONFIG)
       expect(layers.crossPlants).toHaveLength(4)
       expect(totalQuadCount(layers)).toBe(0)
+    }),
+  )
+
+  it.effect('selects each vanilla stage texture with its independently measured silhouette height', () =>
+    Effect.sync(() => {
+      const plantLookup = Result.getOrThrow(buildCrossPlantLookup(EMPTY_MESH_CONFIG))
+      for (const [blockType, heights] of Object.entries(VANILLA_CROP_TEXTURE_HEIGHT_PIXELS) as Array<
+        [CropBlockType, ReadonlyArray<number>]
+      >) {
+        for (const [age, expectedVisibleHeight] of heights.entries()) {
+          const { chunk } = cropChunk(blockType, age)
+          const quads = Result.getOrThrow(meshCrossPlants({ chunk, plantLookup, yLimit: chunk.height }))
+          expect(quads).toHaveLength(4)
+          expect(quads.map((quad) => quad.textureStage)).toStrictEqual(
+            Array.from({ length: 4 }, () => ({ blockType, stage: age })),
+          )
+          const selectedTextureHeights = quads.map((quad) => {
+            const stage = quad.textureStage
+            if (!stage || stage.blockType === 'sapling') {
+              return undefined
+            }
+            return VANILLA_CROP_TEXTURE_HEIGHT_PIXELS[stage.blockType][stage.stage]
+          })
+          expect(selectedTextureHeights).toStrictEqual([
+            expectedVisibleHeight,
+            expectedVisibleHeight,
+            expectedVisibleHeight,
+            expectedVisibleHeight,
+          ])
+        }
+
+        expect(heights[0]).not.toBe(heights[heights.length - 1])
+      }
     }),
   )
 
