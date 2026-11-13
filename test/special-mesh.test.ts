@@ -86,14 +86,26 @@ const FARMLAND = firstBlockIdWithType('farmland')
 const CHEST = firstBlockIdWithType('chest')
 const ENDER_CHEST = firstBlockIdWithType('ender_chest')
 const BED = firstBlockIdWithType('bed')
+const ANVIL = firstBlockIdWithType('anvil')
 const CAULDRON = firstBlockIdWithType('cauldron')
 const WATER_CAULDRON = firstBlockIdWithType('water_cauldron')
+const HOPPER = firstBlockIdWithType('hopper')
+const COMPARATOR = firstBlockIdWithType('comparator')
+const ENCHANTING_TABLE = firstBlockIdWithType('enchanting_table')
+const BREWING_STAND = firstBlockIdWithType('brewing_stand')
 const END_PORTAL_FRAME = firstBlockIdWithType('end_portal_frame')
 const END_PORTAL_FRAME_FILLED = firstBlockIdWithType('end_portal_frame_filled')
 const END_PORTAL = firstBlockIdWithType('end_portal')
 const END_GATEWAY = firstBlockIdWithType('end_gateway')
 const END_CRYSTAL = firstBlockIdWithType('end_crystal')
+const END_ROD = firstBlockIdWithType('end_rod')
+const PISTON_HEAD = firstBlockIdWithType('piston_head')
+const DRAGON_EGG = firstBlockIdWithType('dragon_egg')
 const NETHER_PORTAL = firstBlockIdWithType('nether_portal')
+const FIRE = firstBlockIdWithType('fire')
+const WITHER_SKELETON_SKULL = firstBlockIdWithType('wither_skeleton_skull')
+const CHORUS_FLOWER = firstBlockIdWithType('chorus_flower')
+const CHORUS_PLANT = firstBlockIdWithType('chorus_plant')
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
@@ -333,7 +345,7 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
-  it.effect('meshes torch, farmland, chest, bed, and end-frame bounds from model dimensions', () =>
+  it.effect('meshes selected non-cube blocks within their expected model bounds', () =>
     Effect.sync(() => {
       const torchQuads = Result.getOrThrow(meshSpecialBlocks(
         SPECIAL_LOOKUP,
@@ -381,6 +393,20 @@ describe('kernel-defined special block geometry', () => {
         minZ: 8 + 1 / 16,
         maxZ: 8 + 15 / 16,
       })
+      const chestLeft = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates([[8, 64, 8, CHEST]], [[8, 64, 8, encodeState(CHEST, { facing: 'north', type: 'left' })]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(vertexBounds(chestLeft)).toStrictEqual({
+        minX: 8 + 1 / 16,
+        maxX: 8 + 8 / 16,
+        minY: 64,
+        maxY: 64 + 14 / 16,
+        minZ: 8 + 1 / 16,
+        maxZ: 8 + 15 / 16,
+      })
 
       const bedQuads = Result.getOrThrow(meshSpecialBlocks(
         SPECIAL_LOOKUP,
@@ -415,6 +441,173 @@ describe('kernel-defined special block geometry', () => {
         blockId: END_CRYSTAL,
         blockType: 'end_crystal',
       }))
+    }),
+  )
+
+  it.effect('covers special model states and independently specified model bounds', () =>
+    Effect.sync(() => {
+      const modelAt = (blockId: BlockId, state?: Readonly<Record<string, unknown>>) => {
+        const chunk = typeof state === 'undefined'
+          ? chunkWith([[8, 64, 8, blockId]])
+          : chunkWithStates([[8, 64, 8, blockId]], [[8, 64, 8, encodeState(blockId, state)]])
+        const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, chunk, {}, CHUNK_HEIGHT))
+        expect(quads.every((quad) => quad.kind === 'blockModel' && typeof quad.blockState !== 'undefined')).toBe(true)
+        return quads
+      }
+
+      const redstoneTorch = modelAt(REDSTONE_TORCH, { lit: false })
+      expect(vertexBounds(redstoneTorch)).toStrictEqual({
+        minX: 8,
+        maxX: 9,
+        minY: 64,
+        maxY: 65,
+        minZ: 8,
+        maxZ: 9,
+      })
+      expect(redstoneTorch.every((quad) => quad.blockState?.lit === false)).toBe(true)
+
+      const wallTorch = modelAt(REDSTONE_WALL_TORCH, { facing: 'north', lit: true })
+      expect(vertexBounds(wallTorch)).toStrictEqual({
+        minX: 8 + 1 / 16,
+        maxX: 8 + 11 / 16,
+        minY: 64 + 1 / 16,
+        maxY: 64 + 13 / 16,
+        minZ: 8 + 3 / 16,
+        maxZ: 8 + 13 / 16,
+      })
+      expect(wallTorch.every((quad) => quad.blockState?.facing === 'north' && quad.blockState.lit === true)).toBe(true)
+
+      const enderChest = modelAt(ENDER_CHEST, { facing: 'south', waterlogged: false })
+      expect(vertexBounds(enderChest)).toStrictEqual({
+        minX: 8 + 1 / 16,
+        maxX: 8 + 15 / 16,
+        minY: 64,
+        maxY: 64 + 14 / 16,
+        minZ: 8 + 1 / 16,
+        maxZ: 8 + 15 / 16,
+      })
+
+      const anvilNorth = modelAt(ANVIL, { facing: 'north' })
+      const anvilEast = modelAt(ANVIL, { facing: 'east' })
+      expect(vertexBounds(anvilNorth)).toStrictEqual({
+        minX: 8,
+        maxX: 9,
+        minY: 64,
+        maxY: 65,
+        minZ: 8 + 2 / 16,
+        maxZ: 8 + 14 / 16,
+      })
+      expect(vertexBounds(anvilEast)).toStrictEqual({
+        minX: 8 + 2 / 16,
+        maxX: 8 + 14 / 16,
+        minY: 64,
+        maxY: 65,
+        minZ: 8,
+        maxZ: 9,
+      })
+
+      expect(vertexBounds(modelAt(CAULDRON))).toStrictEqual({
+        minX: 8 + 2 / 16,
+        maxX: 8 + 14 / 16,
+        minY: 64,
+        maxY: 65,
+        minZ: 8 + 2 / 16,
+        maxZ: 8 + 14 / 16,
+      })
+      for (const level of [1, 3] as const) {
+        const waterCauldron = modelAt(WATER_CAULDRON, { level })
+        const waterTop = level === 1 ? 64 + 6 / 16 : 64 + 12 / 16
+        expect(waterCauldron.some((quad) => quad.direction === 'yPos' && quad.vertices.every(([, y]) => y === waterTop))).toBe(true)
+        expect(waterCauldron.every((quad) => quad.blockState?.level === level)).toBe(true)
+      }
+
+      const hopperBottomBounds = (facing: 'down' | 'north' | 'south' | 'west' | 'east') => {
+        const bottomQuads = modelAt(HOPPER, { facing, enabled: true }).filter((quad) =>
+          quad.direction === 'yNeg' && quad.vertices.every(([, y]) => y === 64),
+        )
+        return vertexBounds(bottomQuads)
+      }
+      expect(hopperBottomBounds('down')).toStrictEqual({ minX: 8 + 6 / 16, maxX: 8 + 10 / 16, minY: 64, maxY: 64, minZ: 8 + 6 / 16, maxZ: 8 + 10 / 16 })
+      expect(hopperBottomBounds('north')).toStrictEqual({ minX: 8 + 6 / 16, maxX: 8 + 10 / 16, minY: 64, maxY: 64, minZ: 8, maxZ: 8 + 6 / 16 })
+      expect(hopperBottomBounds('south')).toStrictEqual({ minX: 8 + 6 / 16, maxX: 8 + 10 / 16, minY: 64, maxY: 64, minZ: 8 + 10 / 16, maxZ: 9 })
+      expect(hopperBottomBounds('west')).toStrictEqual({ minX: 8, maxX: 8 + 6 / 16, minY: 64, maxY: 64, minZ: 8 + 6 / 16, maxZ: 8 + 10 / 16 })
+      expect(hopperBottomBounds('east')).toStrictEqual({ minX: 8 + 10 / 16, maxX: 9, minY: 64, maxY: 64, minZ: 8 + 6 / 16, maxZ: 8 + 10 / 16 })
+
+      for (const [mode, powered] of [['compare', false], ['subtract', true]] as const) {
+        const comparator = modelAt(COMPARATOR, { facing: 'west', mode, powered })
+        expect(vertexBounds(comparator)).toStrictEqual({ minX: 8, maxX: 9, minY: 64, maxY: 64 + 7 / 16, minZ: 8, maxZ: 9 })
+        expect(comparator.every((quad) => quad.blockState?.mode === mode && quad.blockState.powered === powered)).toBe(true)
+      }
+
+      const enchantingTable = modelAt(ENCHANTING_TABLE)
+      expect(vertexBounds(enchantingTable)).toStrictEqual({ minX: 8, maxX: 9, minY: 64, maxY: 64 + 12 / 16, minZ: 8, maxZ: 9 })
+      const brewingStand = modelAt(BREWING_STAND, { has_bottle_0: true, has_bottle_1: false, has_bottle_2: true })
+      const emptyBrewingStand = modelAt(BREWING_STAND, { has_bottle_0: false, has_bottle_1: false, has_bottle_2: false })
+      expect(vertexBounds(brewingStand)).toStrictEqual({
+        minX: 8 + 2 / 16,
+        maxX: 8 + 14 / 16,
+        minY: 64,
+        maxY: 64 + 14 / 16,
+        minZ: 8 + 2 / 16,
+        maxZ: 8 + 14 / 16,
+      })
+      expect(brewingStand.length).toBeGreaterThan(emptyBrewingStand.length)
+
+      const rodBoundsByFacing = {
+        up: { minX: 8 + 7 / 16, maxX: 8 + 9 / 16, minY: 64, maxY: 65, minZ: 8 + 7 / 16, maxZ: 8 + 9 / 16 },
+        down: { minX: 8 + 7 / 16, maxX: 8 + 9 / 16, minY: 64, maxY: 65, minZ: 8 + 7 / 16, maxZ: 8 + 9 / 16 },
+        north: { minX: 8 + 7 / 16, maxX: 8 + 9 / 16, minY: 64 + 7 / 16, maxY: 64 + 9 / 16, minZ: 8, maxZ: 9 },
+        south: { minX: 8 + 7 / 16, maxX: 8 + 9 / 16, minY: 64 + 7 / 16, maxY: 64 + 9 / 16, minZ: 8, maxZ: 9 },
+        east: { minX: 8, maxX: 9, minY: 64 + 7 / 16, maxY: 64 + 9 / 16, minZ: 8 + 7 / 16, maxZ: 8 + 9 / 16 },
+        west: { minX: 8, maxX: 9, minY: 64 + 7 / 16, maxY: 64 + 9 / 16, minZ: 8 + 7 / 16, maxZ: 8 + 9 / 16 },
+      } as const
+      for (const [facing, expected] of Object.entries(rodBoundsByFacing)) {
+        expect(vertexBounds(modelAt(END_ROD, { facing }))).toStrictEqual(expected)
+      }
+
+      const pistonShortBoundsByFacing = {
+        up: { minX: 8, maxX: 9, minY: 64 + 4 / 16, maxY: 65, minZ: 8, maxZ: 9 },
+        down: { minX: 8, maxX: 9, minY: 64, maxY: 64 + 12 / 16, minZ: 8, maxZ: 9 },
+        north: { minX: 8, maxX: 9, minY: 64, maxY: 65, minZ: 8, maxZ: 8 + 12 / 16 },
+        south: { minX: 8, maxX: 9, minY: 64, maxY: 65, minZ: 8 + 4 / 16, maxZ: 9 },
+        west: { minX: 8, maxX: 8 + 12 / 16, minY: 64, maxY: 65, minZ: 8, maxZ: 9 },
+        east: { minX: 8 + 4 / 16, maxX: 9, minY: 64, maxY: 65, minZ: 8, maxZ: 9 },
+      } as const
+      for (const [facing, expected] of Object.entries(pistonShortBoundsByFacing)) {
+        const pistonHead = modelAt(PISTON_HEAD, { facing, short: true, type: 'sticky' })
+        expect(vertexBounds(pistonHead)).toStrictEqual(expected)
+        expect(pistonHead.every((quad) => quad.blockState?.facing === facing && quad.blockState.type === 'sticky' && quad.blockState.short === true)).toBe(true)
+      }
+
+      expect(vertexBounds(modelAt(DRAGON_EGG))).toStrictEqual({
+        minX: 8 + 2 / 16,
+        maxX: 8 + 14 / 16,
+        minY: 64,
+        maxY: 65,
+        minZ: 8 + 2 / 16,
+        maxZ: 8 + 14 / 16,
+      })
+      const netherX = modelAt(NETHER_PORTAL, { axis: 'x' })
+      const netherZ = modelAt(NETHER_PORTAL, { axis: 'z' })
+      expect(vertexBounds(netherX)).toStrictEqual({ minX: 8, maxX: 9, minY: 64, maxY: 65, minZ: 8 + 8 / 16, maxZ: 8 + 8 / 16 })
+      expect(vertexBounds(netherZ)).toStrictEqual({ minX: 8 + 8 / 16, maxX: 8 + 8 / 16, minY: 64, maxY: 65, minZ: 8, maxZ: 9 })
+
+      const fireDisconnected = modelAt(FIRE, { age: 0, connections: { north: false, east: false, south: false, west: false, up: false } })
+      const fireConnected = modelAt(FIRE, { age: 15, connections: { north: false, east: false, south: false, west: false, up: true } })
+      const fireAgainstNorthWall = modelAt(FIRE, { age: 0, connections: { north: true, east: false, south: false, west: false, up: false } })
+      expect(fireDisconnected).toHaveLength(4)
+      expect(fireConnected).toHaveLength(6)
+      expect(fireAgainstNorthWall).toHaveLength(5)
+      expect(fireConnected.every((quad) => quad.blockState?.age === 15)).toBe(true)
+
+      const skull = modelAt(WITHER_SKELETON_SKULL, { powered: true, rotation: 15 })
+      expect(vertexBounds(skull)).toStrictEqual({ minX: 8 + 4 / 16, maxX: 8 + 12 / 16, minY: 64 + 4 / 16, maxY: 64 + 12 / 16, minZ: 8 + 4 / 16, maxZ: 8 + 12 / 16 })
+      expect(skull.every((quad) => quad.blockState?.rotation === 15 && quad.blockState.powered === true)).toBe(true)
+
+      expect(vertexBounds(modelAt(CHORUS_FLOWER, { age: 0 }))).toStrictEqual({ minX: 8 + 2 / 16, maxX: 8 + 14 / 16, minY: 64, maxY: 65, minZ: 8 + 2 / 16, maxZ: 8 + 14 / 16 })
+      expect(vertexBounds(modelAt(CHORUS_FLOWER, { age: 5 }))).toStrictEqual({ minX: 8 + 4 / 16, maxX: 8 + 12 / 16, minY: 64, maxY: 65, minZ: 8 + 4 / 16, maxZ: 8 + 12 / 16 })
+      const chorusBranch = modelAt(CHORUS_PLANT, { connections: { down: false, north: false, east: false, south: false, west: true, up: false } })
+      expect(vertexBounds(chorusBranch)).toStrictEqual({ minX: 8, maxX: 8 + 10 / 16, minY: 64 + 6 / 16, maxY: 64 + 10 / 16, minZ: 8 + 6 / 16, maxZ: 8 + 10 / 16 })
     }),
   )
 
@@ -1050,6 +1243,25 @@ describe('kernel-defined special block geometry', () => {
     }),
   )
 
+  it.effect('routes block models through merged, naive, and regional mesh entry points', () =>
+    Effect.sync(() => {
+      const chunk = chunkWith([
+        [1, 6, 1, TORCH],
+        [8, 64, 8, FARMLAND],
+      ])
+      const merged = Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG))
+      const naive = Result.getOrThrow(meshChunkNaive(chunk, {}, MESH_CONFIG))
+      const regional = Result.getOrThrow(meshChunkRegion(chunk, {}, MESH_CONFIG, {
+        min: [0, 0, 0],
+        max: [4, 10, 4],
+      }))
+
+      expect(merged.specialBlocks).toStrictEqual(naive.specialBlocks)
+      expect(merged.specialBlocks.some((quad) => quad.blockId === TORCH && quad.kind === 'blockModel')).toBe(true)
+      expect(regional.layers.specialBlocks).toStrictEqual(merged.specialBlocks.filter((quad) => quad.blockId === TORCH))
+    }),
+  )
+
   it.effect('does not scan a special block above the requested ceiling', () =>
     Effect.sync(() => {
       const chunk = chunkWith([[8, CHUNK_HEIGHT - 1, 8, CACTUS]])
@@ -1412,6 +1624,26 @@ describe('kernel-defined special block geometry', () => {
         { blockId: RAIL, state: { shape: 'invalid' }, property: 'shape' },
         { blockId: REDSTONE_WIRE, state: {}, property: 'connections' },
         { blockId: REDSTONE_WIRE, state: { connections: { north: 'diagonal', east: 'none', south: 'none', west: 'none' } }, property: 'connections.north' },
+        { blockId: REDSTONE_TORCH, state: { lit: 1 }, property: 'lit' },
+        { blockId: REDSTONE_WALL_TORCH, state: { facing: 'up', lit: true }, property: 'facing' },
+        { blockId: FARMLAND, state: { moisture: 8 }, property: 'moisture' },
+        { blockId: CHEST, state: { facing: 'north', type: 'both' }, property: 'type' },
+        { blockId: ENDER_CHEST, state: { facing: 'up' }, property: 'facing' },
+        { blockId: BED, state: { facing: 'north', part: 'side', occupied: false }, property: 'part' },
+        { blockId: ANVIL, state: { facing: 'down' }, property: 'facing' },
+        { blockId: WATER_CAULDRON, state: { level: 0 }, property: 'level' },
+        { blockId: HOPPER, state: { facing: 'up', enabled: true }, property: 'facing' },
+        { blockId: COMPARATOR, state: { facing: 'north', powered: false, mode: 'add' }, property: 'mode' },
+        { blockId: BREWING_STAND, state: { has_bottle_0: true, has_bottle_1: 'false', has_bottle_2: false }, property: 'has_bottle_1' },
+        { blockId: END_PORTAL_FRAME, state: { facing: 'north' }, property: 'eye' },
+        { blockId: END_ROD, state: { facing: 'sideways' }, property: 'facing' },
+        { blockId: PISTON_HEAD, state: { facing: 'north', short: false, type: 'sticky-ish' }, property: 'type' },
+        { blockId: NETHER_PORTAL, state: { axis: 'y' }, property: 'axis' },
+        { blockId: FIRE, state: { age: 0 }, property: 'connections' },
+        { blockId: FIRE, state: { age: 0, connections: { north: 'side', east: false, south: false, west: false, up: false } }, property: 'connections.north' },
+        { blockId: WITHER_SKELETON_SKULL, state: { powered: false, rotation: 16 }, property: 'rotation' },
+        { blockId: CHORUS_FLOWER, state: { age: 6 }, property: 'age' },
+        { blockId: CHORUS_PLANT, state: { connections: { down: false, north: 'side', east: false, south: false, west: false, up: false } }, property: 'connections.north' },
       ]
 
       for (const { blockId, state, property } of invalidCases) {
@@ -1428,6 +1660,23 @@ describe('kernel-defined special block geometry', () => {
           property,
         }))
       }
+
+      FastCheck.assert(FastCheck.property(
+        FastCheck.integer({ min: -64, max: 64 }).filter((moisture) => moisture < 0 || moisture > 7),
+        (moisture) => {
+          effectiveState = invalidFixture<EffectiveBlockStateValues>({ moisture })
+          expect(meshSpecials(
+            lookup,
+            chunkWithStates([[8, 64, 8, FARMLAND]], [[8, 64, 8, 0]]),
+            {},
+            CHUNK_HEIGHT,
+          )).toStrictEqual(Result.fail({
+            _tag: 'InvalidBlockStateModelProperty',
+            blockId: FARMLAND,
+            property: 'moisture',
+          }))
+        },
+      ))
     } finally {
       vi.doUnmock('@nerima-games/mc-kernel')
       vi.resetModules()

@@ -2199,6 +2199,7 @@ const pistonHeadPartsOf = (
   }
 }
 
+// For Wiki pages without model elements, use explicit visual estimates rather than collision bounds.
 const blockModelPartsOf = (
   blockId: BlockId,
   blockType: BlockType,
@@ -2303,23 +2304,29 @@ const blockModelPartsOf = (
     }
     case 'enchanting_table':
       return Result.succeed([
-        modelPartAt(position, [0, 0, 0], [16, 5, 16]),
-        modelPartAt(position, [3, 5, 3], [13, 12, 13]),
-        modelPartAt(position, [0, 12, 0], [16, 16, 16]),
+        modelPartAt(position, [0, 0, 0], [16, 3, 16]),
+        modelPartAt(position, [3, 3, 3], [13, 10, 13]),
+        modelPartAt(position, [0, 10, 0], [16, 12, 16]),
       ])
     case 'brewing_stand': {
+      const bottles: Array<boolean> = []
       for (const property of ['has_bottle_0', 'has_bottle_1', 'has_bottle_2'] as const) {
         const hasBottle = modelBooleanStateOf(state[property], blockId, property)
         if (Result.isFailure(hasBottle)) return Result.fail(hasBottle.failure)
+        bottles.push(hasBottle.success)
       }
-      return Result.succeed([
+      const parts: Array<ModelPart> = [
         modelPartAt(position, [2, 0, 2], [14, 2, 14]),
         modelPartAt(position, [7, 2, 7], [9, 14, 9]),
         modelPartAt(position, [3, 2, 3], [13, 3, 13]),
         modelPartAt(position, [4, 2, 4], [6, 5, 6]),
         modelPartAt(position, [10, 2, 4], [12, 5, 6]),
         modelPartAt(position, [7, 2, 10], [9, 5, 12]),
-      ])
+      ]
+      if (bottles[0]) parts.push(modelPartAt(position, [4, 3, 4], [7, 10, 7]))
+      if (bottles[1]) parts.push(modelPartAt(position, [9, 3, 4], [12, 10, 7]))
+      if (bottles[2]) parts.push(modelPartAt(position, [6, 3, 9], [10, 10, 13]))
+      return Result.succeed(parts)
     }
     case 'end_portal_frame':
     case 'end_portal_frame_filled': {
@@ -2385,7 +2392,18 @@ const blockModelPartsOf = (
         if (typeof connected !== 'boolean') {
           return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: `connections.${direction}` })
         }
-        if (connected && direction === 'up') parts.push(modelPartAt(position, [2, 4, 2], [14, 16, 14], ['yNeg', 'yPos']))
+        if (!connected) continue
+        if (direction === 'up') {
+          parts.push(modelPartAt(position, [2, 4, 2], [14, 16, 14], ['yNeg', 'yPos']))
+        } else if (direction === 'north') {
+          parts.push(modelPartAt(position, [0, 0, 0], [16, 16, 0], ['zNeg', 'zPos']))
+        } else if (direction === 'east') {
+          parts.push(modelPartAt(position, [16, 0, 0], [16, 16, 16], ['xNeg', 'xPos']))
+        } else if (direction === 'south') {
+          parts.push(modelPartAt(position, [0, 0, 16], [16, 16, 16], ['zNeg', 'zPos']))
+        } else {
+          parts.push(modelPartAt(position, [0, 0, 0], [0, 16, 16], ['xNeg', 'xPos']))
+        }
       }
       return Result.succeed(parts)
     }
