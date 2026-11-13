@@ -2154,9 +2154,9 @@ const modelElementPartsAt = (
   return faces.map((name) => {
     const face = VANILLA_FACE_GEOMETRY[name]
     const coordinate = from[face.axis] + (to[face.axis] - from[face.axis]) * face.edge
-    const faceVertices = corners
-      .map((corner, index) => corner[face.axis] === coordinate ? transformed[index] : undefined)
-      .filter((point): point is ModelPoint => typeof point !== 'undefined')
+    const faceVertices = corners.flatMap((corner, index) =>
+      corner[face.axis] === coordinate ? [transformed[index]] : [],
+    )
     return {
       bounds: {
         minX: lx + Math.min(...faceVertices.map(([x]) => x)) / 16,
