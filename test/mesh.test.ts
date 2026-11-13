@@ -137,12 +137,30 @@ const everyQuad = (layers: MeshLayers): ReadonlyArray<Quad> => [
   ...layers.transparentSolid,
 ]
 
-const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
-  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+const everyQuadPreservesBlockId = (layers: MeshLayers, chunk: ChunkView): boolean =>
+  everyQuad(layers).every((quad) => {
+    const [widthAxis, heightAxis] = tangentAxes(quad.direction)
+    const at = (axis: QuadAxis, width: number, height: number): number => {
+      const origin = axis === 'x' ? quad.lx : axis === 'y' ? quad.y : quad.lz
+      return origin + (axis === widthAxis ? width : axis === heightAxis ? height : 0)
+    }
+    for (let width = 0; width < quad.width; width += 1) {
+      for (let height = 0; height < quad.height; height += 1) {
+        if (getBlock(chunk, at('x', width, height), at('y', width, height), at('z', width, height)) !== quad.blockId) return false
+      }
+    }
+    return true
+  })
+
+const chunkWith = (
+  cells: ReadonlyArray<readonly [number, number, number, number]>,
+  height: number = CHUNK_HEIGHT,
+): ChunkView => {
+  const blocks = new Uint16Array(CHUNK_SIZE * height * CHUNK_SIZE)
   for (const [lx, y, lz, blockId] of cells) {
-    blocks[blockIndex(lx, y, lz, CHUNK_HEIGHT)] = blockId
+    blocks[blockIndex(lx, y, lz, height)] = blockId
   }
-  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height, blocks }
 }
 
 const chunkWithBlockStates = (
@@ -368,8 +386,9 @@ describe('face count', () => {
                 cells.push([lx, 64, lz, STONE])
               }
             }
-            const layers = meshChunk(chunkWith(cells), {}, EMPTY_MESH_CONFIG)
-            const naive = meshChunkNaive(chunkWith(cells), {}, EMPTY_MESH_CONFIG)
+            const chunk = chunkWith(cells, 65)
+            const layers = meshChunk(chunk, {}, EMPTY_MESH_CONFIG)
+            const naive = meshChunkNaive(chunk, {}, EMPTY_MESH_CONFIG)
             const mergedQuadCount = totalQuadCount(layers)
             const naiveQuadCount = totalQuadCount(naive)
             expect(totalQuadArea(layers)).toBe(2 * side * side + 4 * side)
@@ -1065,6 +1084,9 @@ describe('result ownership', () => {
  */
 const STONE_B = DIRT
 
+// Box origins stop at 40 and extents at 6, so generated cells stop at row 45.
+const ARBITRARY_BOX_CHUNK_HEIGHT = 46
+
 const arbitraryChunkOfBoxes: FastCheck.Arbitrary<ChunkView> = FastCheck.array(
   FastCheck.tuple(
     integerArbitrary(0, CHUNK_SIZE - 1),
@@ -1077,17 +1099,17 @@ const arbitraryChunkOfBoxes: FastCheck.Arbitrary<ChunkView> = FastCheck.array(
   ),
   { maxLength: 10, minLength: 1 },
 ).map((boxes) => {
-  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(CHUNK_SIZE * ARBITRARY_BOX_CHUNK_HEIGHT * CHUNK_SIZE)
   for (const [lx, y, lz, dx, dy, dz, blockId] of boxes) {
     for (let x = lx; x < Math.min(lx + dx, CHUNK_SIZE); x += 1) {
       for (let z = lz; z < Math.min(lz + dz, CHUNK_SIZE); z += 1) {
-        for (let height = y; height < Math.min(y + dy, CHUNK_HEIGHT); height += 1) {
-          blocks[blockIndex(x, height, z, CHUNK_HEIGHT)] = blockId
+        for (let height = y; height < Math.min(y + dy, ARBITRARY_BOX_CHUNK_HEIGHT); height += 1) {
+          blocks[blockIndex(x, height, z, ARBITRARY_BOX_CHUNK_HEIGHT)] = blockId
         }
       }
     }
   }
-  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: CHUNK_HEIGHT, blocks }
+  return { coord: chunkCoord(chunkAxis(0), chunkAxis(0)), height: ARBITRARY_BOX_CHUNK_HEIGHT, blocks }
 })
 
 /** Some of the four horizontal neighbours present, some absent. */
@@ -1184,34 +1206,28 @@ describe('the greedy merge against the naive oracle', () => {
   it.effect(
     'REGRESSION: never merges two different block ids, however they are arranged',
     () =>
-      Effect.sync(() =>
+      Effect.sync(() => {
+        const adjacentDifferentIds = meshChunk(
+          chunkWith([
+            [4, 64, 4, STONE],
+            [5, 64, 4, STONE_B],
+          ], 65),
+          {},
+          EMPTY_MESH_CONFIG,
+        )
+        const tops = adjacentDifferentIds.opaque.filter((quad) => quad.direction === 'yPos')
+        expect(tops).toHaveLength(2)
+        expect(tops.map((quad) => quad.blockId)).toStrictEqual([STONE, STONE_B])
+        expect(tops.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
+
         FastCheck.assert(
           FastCheck.property(arbitraryChunkOfBoxes, (chunk) => {
-            const layers = meshChunk(
-              chunkWith([
-                [4, 64, 4, STONE],
-                [5, 64, 4, STONE_B],
-              ]),
-              {},
-              EMPTY_MESH_CONFIG,
-            )
-            const tops = layers.opaque.filter((quad) => quad.direction === 'yPos')
-            expect(tops.length).toBe(2)
-            expect(tops.map((quad) => quad.blockId)).toStrictEqual([STONE, STONE_B])
-            expect(tops.every((quad) => quad.width === 1 && quad.height === 1)).toBe(true)
-
             const merged = meshChunk(chunk, {}, CONFIG)
-            expect(everyQuad(merged).every((quad) =>
-              unitFacesOf(quad).every((face) => {
-                const [, position] = face.split(':')
-                const [lx, y, lz] = (position ?? '').split(',').map(Number)
-                return getBlock(chunk, lx ?? -1, y ?? -1, lz ?? -1) === quad.blockId
-              }),
-            )).toBe(true)
+            expect(everyQuadPreservesBlockId(merged, chunk)).toBe(true)
           }),
           { numRuns: 80 },
-        ),
-      ),
+        )
+      }),
   )
 
   it.effect('REGRESSION: greedily merges opaque faces but keeps transparent faces as unit quads', () =>
