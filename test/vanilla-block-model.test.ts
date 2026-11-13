@@ -7,7 +7,15 @@ import {
   type VanillaBlockModelClass,
 } from '../src/domain/vanilla-block-model.js'
 
-const MODEL_CLASSES = new Set<VanillaBlockModelClass>(['air', 'cube', 'cross', 'crop', 'fluid', 'special'])
+const MODEL_CLASSES = new Set<VanillaBlockModelClass>([
+  'air',
+  'cube',
+  'closedBlockEntityCube',
+  'cross',
+  'crop',
+  'fluid',
+  'special',
+])
 
 describe('vanilla block model classification', () => {
   it('classifies every registered kernel block exactly once', () => {
@@ -58,6 +66,11 @@ describe('vanilla block model classification', () => {
       expect(EXPLICIT_CUBE_BLOCK_TYPES.has(blockType)).toBe(false)
       expect(classifyVanillaBlockType(blockType)).toEqual(Result.succeed('special'))
     }
+  })
+
+  it('classifies shulker boxes as closed block-entity cubes', () => {
+    expect(EXPLICIT_CUBE_BLOCK_TYPES.has('shulker_box')).toBe(false)
+    expect(classifyVanillaBlockType('shulker_box')).toEqual(Result.succeed('closedBlockEntityCube'))
   })
 
   it('classifies air separately from block geometry', () => {

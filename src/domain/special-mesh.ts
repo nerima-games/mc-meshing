@@ -129,6 +129,7 @@ const STATEFUL_SPECIAL_KIND_BY_BLOCK_TYPE: Partial<Record<BlockType, SpecialRend
   torch: 'blockModel',
   redstone_torch: 'blockModel',
   redstone_wall_torch: 'blockModel',
+  shulker_box: 'blockModel',
   piston: 'blockModel',
   sticky_piston: 'blockModel',
   farmland: 'blockModel',
@@ -2595,6 +2596,8 @@ const SPECIAL_BLOCK_MODEL_BUILDERS: Readonly<Partial<Record<BlockType, BlockMode
   torch: staticBlockModelBuilder(standingTorchPartsOf),
   redstone_torch: redstoneTorchModelPartsOf,
   redstone_wall_torch: redstoneWallTorchModelPartsOf,
+  // Lid opening belongs to the block-entity renderer; static meshing draws the closed cube.
+  shulker_box: staticBlockModelBuilder((position) => [modelPartAt(position, [0, 0, 0], [16, 16, 16])]),
   piston: pistonBaseModelPartsOf,
   sticky_piston: pistonBaseModelPartsOf,
   farmland: farmlandModelPartsOf,

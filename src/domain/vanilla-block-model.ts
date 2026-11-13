@@ -1,7 +1,14 @@
 import { isBlockType, type BlockType } from '@nerima-games/mc-kernel'
 import { Result } from 'effect'
 
-export type VanillaBlockModelClass = 'air' | 'cube' | 'cross' | 'crop' | 'fluid' | 'special'
+export type VanillaBlockModelClass =
+  | 'air'
+  | 'cube'
+  | 'closedBlockEntityCube'
+  | 'cross'
+  | 'crop'
+  | 'fluid'
+  | 'special'
 
 export type UnclassifiedVanillaBlockType = {
   readonly _tag: 'UnclassifiedVanillaBlockType'
@@ -67,7 +74,6 @@ const EXPLICIT_CUBE_BLOCK_TYPE_NAMES = [
   'redstone_ore',
   'sand',
   'sandstone',
-  'shulker_box',
   'smooth_basalt',
   'soul_sand',
   'soul_soil',
@@ -131,6 +137,7 @@ const NAMED_NON_CUBE_BLOCK_MODELS: Partial<
   repeater: 'special',
   sapling: 'cross',
   seagrass: 'cross',
+  shulker_box: 'closedBlockEntityCube',
   snow: 'special',
   sticky_piston: 'special',
   stone_button: 'special',

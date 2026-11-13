@@ -120,9 +120,14 @@ const TALL_GRASS_BLOCK_ID = blockIdOf('tall_grass')
 // Registry metadata is immutable, but a chunk can contain many cells with the same plant id.
 const VANILLA_BLOCK_TYPE_CACHE = new Map<BlockId, BlockType | null>()
 
-const cacheVanillaBlockType = (blockId: BlockId): Result.Result<null, UnclassifiedVanillaBlockType> => {
+const cacheVanillaBlockType = (
+  blockId: BlockId,
+): Result.Result<null, BlockRegistryResolutionFailure | UnclassifiedVanillaBlockType> => {
   const registeredType = blockTypeOfId(blockId)
-  if (Result.isFailure(registeredType) || typeof registeredType.success === 'undefined') {
+  if (Result.isFailure(registeredType)) {
+    return Result.fail(registeredType.failure)
+  }
+  if (typeof registeredType.success === 'undefined') {
     VANILLA_BLOCK_TYPE_CACHE.set(blockId, null)
     return Result.succeed(null)
   }

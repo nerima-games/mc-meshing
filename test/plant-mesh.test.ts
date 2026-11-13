@@ -916,6 +916,31 @@ describe('crop texture stages', () => {
     }
   })
 
+  it('propagates a block-type registry failure while caching a vanilla cross plant', async () => {
+    vi.resetModules()
+    const targetId = Option.getOrThrow(blockIdOf('dandelion'))
+    const failure = { _tag: 'InjectedBlockTypeFailure', blockId: targetId }
+    const plantLookup = new Uint8Array(MAX_BLOCK_ID + 1)
+    plantLookup[targetId] = 1
+    const chunk = chunkWith([[4, 30, 5, targetId]])
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        blockTypeOfId: invalidFixture<typeof kernel.blockTypeOfId>((candidateId: BlockId) =>
+          candidateId === targetId ? Result.fail(failure) : kernel.blockTypeOfId(candidateId),
+        ),
+      }
+    })
+    try {
+      const { meshCrossPlants: meshPlants } = await import('../src/domain/plant-mesh.js')
+      expect(meshPlants({ chunk, plantLookup, yLimit: chunk.height })).toStrictEqual(Result.fail(failure))
+    } finally {
+      vi.doUnmock('@nerima-games/mc-kernel')
+      vi.resetModules()
+    }
+  })
+
   it('fails closed when a registered plant id resolves to an unclassified future block type', async () => {
     vi.resetModules()
     const targetId = Option.getOrThrow(blockIdOf('dandelion'))

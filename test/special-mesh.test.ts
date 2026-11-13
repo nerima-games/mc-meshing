@@ -82,6 +82,7 @@ const STONE_BUTTON = firstBlockIdWithType('stone_button')
 const TORCH = firstBlockIdWithType('torch')
 const REDSTONE_TORCH = firstBlockIdWithType('redstone_torch')
 const REDSTONE_WALL_TORCH = firstBlockIdWithType('redstone_wall_torch')
+const SHULKER_BOX = firstBlockIdWithType('shulker_box')
 const PISTON = firstBlockIdWithType('piston')
 const STICKY_PISTON = firstBlockIdWithType('sticky_piston')
 const FARMLAND = firstBlockIdWithType('farmland')
@@ -353,6 +354,36 @@ describe('kernel-defined special block geometry', () => {
       expect(isSpecialBlock(SPECIAL_LOOKUP, OPAQUE_CUBE)).toBe(false)
       expect(isSpecialBlock(SPECIAL_LOOKUP, SLAB)).toBe(true)
       expect(isSpecialBlock(SPECIAL_LOOKUP, PRESSURE_PLATE)).toBe(true)
+    }),
+  )
+
+  it.effect('meshes shulker boxes as closed full cubes without lid state', () =>
+    Effect.sync(() => {
+      const encodedFacing = encodeState(SHULKER_BOX, { facing: 'north' })
+      const chunk = chunkWithStates(
+        [[8, 64, 8, SHULKER_BOX]],
+        [[8, 64, 8, encodedFacing]],
+      )
+      const state = Result.getOrThrow(blockStateAt(chunk, blockIndex(8, 64, 8, CHUNK_HEIGHT)))
+      const layers = Result.getOrThrow(meshChunk(chunk, {}, MESH_CONFIG))
+
+      expect(state).toStrictEqual({ facing: 'north' })
+      expect(encodeBlockState(SHULKER_BOX, { facing: 'north', open: true })).toMatchObject({ _tag: 'Failure' })
+      expect(encodeBlockState(SHULKER_BOX, { facing: 'north', lid: true })).toMatchObject({ _tag: 'Failure' })
+      expect(layers.specialBlocks).toHaveLength(6)
+      expect(vertexBounds(layers.specialBlocks)).toStrictEqual({
+        minX: 8,
+        maxX: 9,
+        minY: 64,
+        maxY: 65,
+        minZ: 8,
+        maxZ: 9,
+      })
+      expect(layers.specialBlocks.every((quad) => quad.kind === 'blockModel' && quad.blockState?.facing === 'north')).toBe(true)
+      expect(layers.specialBlocks.every((quad) =>
+        !Object.hasOwn(quad.blockState ?? {}, 'open') && !Object.hasOwn(quad.blockState ?? {}, 'lid'),
+      )).toBe(true)
+      expect(layers.opaque).toHaveLength(0)
     }),
   )
 
