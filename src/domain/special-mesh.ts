@@ -2136,7 +2136,8 @@ const modelElementPartsAt = (
     [to[0], from[1], from[2]], [to[0], from[1], to[2]],
     [to[0], to[1], from[2]], [to[0], to[1], to[2]],
   ]
-  const transformed = corners.map(([x, y, z]): ModelPoint => {
+  const transformed = corners.map((corner) => {
+    const [x, y, z] = corner
     const dx = x - originX
     const dy = y - originY
     const tiltedX = originX + cos * dx - sin * dy
@@ -2148,15 +2149,15 @@ const modelElementPartsAt = (
         : turns === 2
           ? [16 - tiltedX, tiltedY, 16 - z] as const
           : [z, tiltedY, 16 - tiltedX] as const
-    return turned
+    return { corner, point: turned }
   })
   const [lx, y, lz] = position
   return faces.map((name) => {
     const face = VANILLA_FACE_GEOMETRY[name]
     const coordinate = from[face.axis] + (to[face.axis] - from[face.axis]) * face.edge
-    const faceVertices = corners.flatMap((corner, index) =>
-      corner[face.axis] === coordinate ? [transformed[index]] : [],
-    )
+    const faceVertices = transformed
+      .filter(({ corner }) => corner[face.axis] === coordinate)
+      .map(({ point }) => point)
     return {
       bounds: {
         minX: lx + Math.min(...faceVertices.map(([x]) => x)) / 16,
