@@ -571,6 +571,10 @@ describe('kernel-defined special block geometry', () => {
         const bedHead = modelAt(BED, { facing, occupied: true, part: 'head' })
         expect(bedHead.map((quad) => geometryFaceKey(quad.direction, quad.vertices))).toContain(expectedFace)
         expect(bedHead.every((quad) => quad.blockState?.occupied === true)).toBe(true)
+
+        const bedFoot = modelAt(BED, { facing, occupied: false, part: 'foot' })
+        expect(bedFoot.map((quad) => geometryFaceKey(quad.direction, quad.vertices))).not.toContain(expectedFace)
+        expect(bedFoot.every((quad) => quad.blockState?.part === 'foot' && quad.blockState.occupied === false)).toBe(true)
       }
 
       expect(vertexBounds(modelAt(CAULDRON))).toStrictEqual({
