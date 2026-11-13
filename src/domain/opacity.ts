@@ -49,6 +49,7 @@
 import { Option, Result } from 'effect'
 import { BlockId as KernelBlockId } from '@nerima-games/mc-kernel'
 import type { BlockId } from './block-data.js'
+import type { UnclassifiedVanillaBlockType } from './vanilla-block-model.js'
 import {
   AIR,
   type BlockDataFailure,
@@ -170,6 +171,7 @@ export const EMPTY_MESH_CONFIG: MeshConfig = {
 
 export type MeshConfigFailure =
   | BlockDataFailure
+  | UnclassifiedVanillaBlockType
   | { readonly _tag: 'MissingTransparentSolidBlockIds' }
 
 export const MINECRAFT_MESH_CONFIG: Result.Result<MeshConfig, MeshConfigFailure> = Result.flatMap(

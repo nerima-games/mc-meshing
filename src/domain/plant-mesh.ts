@@ -612,7 +612,7 @@ export const meshCrossPlants = (
             light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
             lx,
             lz,
-            textureStage,
+            ...(typeof textureStage === 'undefined' ? {} : { textureStage }),
             y,
           }
           if (isCropTextureBlockType(blockType)) {
