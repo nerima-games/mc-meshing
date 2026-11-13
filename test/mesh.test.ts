@@ -21,7 +21,7 @@ import { describe, expect, it } from './effect-test.js'
 import { vi } from 'vitest'
 import { Effect, Option, Result } from 'effect'
 import * as FastCheck from 'fast-check'
-import { BlockId as KernelBlockId, BLOCK_IDS, ChunkAxis as chunkAxis, FLOWING_FLUID_LEVEL, FLUID_LEVEL_STEP, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
+import { BlockId as KernelBlockId, BLOCK_IDS, ChunkAxis as chunkAxis, blockIdOf, chunkCoord, encodeBlockState } from '@nerima-games/mc-kernel'
 import { AIR, MAX_BLOCK_ID, type BlockId } from '../src/domain/block-data'
 import {
   BLOCKS_PER_CHUNK,
@@ -648,17 +648,19 @@ describe('bucketFor', () => {
 describe('layer routing', () => {
   it('fails Minecraft mesh configuration when transparent-solid registry data is absent', async () => {
     vi.resetModules()
-    vi.doMock('@nerima-games/mc-kernel', () => ({
-      AIR_BLOCK_ID: 0,
-      BLOCK_ID_MAX: 0xffff,
-      BLOCK_IDS: [1],
-      BlockId: KernelBlockId,
-      FLOWING_FLUID_LEVEL,
-      FLUID_LEVEL_STEP,
-      blockIdsWithOpacity: () => Result.succeed(Option.none()),
-      propertyOfBlockId: (_blockId: number, property: string) =>
-        Result.succeed(property === 'renderKind' ? 'cube' : new Map<string, unknown>().get('missing')),
-    }))
+    vi.doMock('@nerima-games/mc-kernel', async () => {
+      const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
+      return {
+        ...kernel,
+        AIR_BLOCK_ID: 0,
+        BLOCK_ID_MAX: 0xffff,
+        BLOCK_IDS: [1],
+        BlockId: KernelBlockId,
+        blockIdsWithOpacity: () => Result.succeed(Option.none()),
+        propertyOfBlockId: (_blockId: number, property: string) =>
+          Result.succeed(property === 'renderKind' ? 'cube' : new Map<string, unknown>().get('missing')),
+      }
+    })
     try {
       const opacity = await import('../src/domain/opacity.js')
 

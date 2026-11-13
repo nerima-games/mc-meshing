@@ -1235,10 +1235,12 @@ describe('the two meshers, and the merge, with fluids configured', () => {
       Effect.sync(() =>
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
-            const merged = allUnitFaces(meshChunk(chunk, {}, CONFIG))
-            const naive = allUnitFaces(meshChunkNaive(chunk, {}, CONFIG))
+            const mergedLayers = meshChunk(chunk, {}, CONFIG)
+            const naiveLayers = meshChunkNaive(chunk, {}, CONFIG)
+            const merged = allUnitFaces(mergedLayers)
+            const naive = allUnitFaces(naiveLayers)
             expect([...merged].sort()).toStrictEqual([...naive].sort())
-            expect(totalQuadArea(meshChunk(chunk, {}, CONFIG))).toBe(totalQuadArea(meshChunkNaive(chunk, {}, CONFIG)))
+            expect(totalQuadArea(mergedLayers)).toBe(totalQuadArea(naiveLayers))
           }),
           { numRuns: 100 },
         ),

@@ -109,13 +109,30 @@ export type { CrossPlantQuad, PlantTextureStage, PlantVertex } from './plant-typ
 type PlantTextureBlockType = Extract<BlockType, 'sapling' | 'wheat_crop' | 'potato_crop' | 'nether_wart_crop'>
 type CropTextureBlockType = Exclude<PlantTextureBlockType, 'sapling'>
 
-const isPlantTextureBlockType = (blockType: BlockType): blockType is PlantTextureBlockType =>
+const isPlantTextureBlockType = (blockType: BlockType | null | undefined): blockType is PlantTextureBlockType =>
   blockType === 'sapling' || blockType === 'wheat_crop' || blockType === 'potato_crop' || blockType === 'nether_wart_crop'
 
-const isCropTextureBlockType = (blockType: BlockType | undefined): blockType is CropTextureBlockType =>
+const isCropTextureBlockType = (blockType: BlockType | null | undefined): blockType is CropTextureBlockType =>
   blockType === 'wheat_crop' || blockType === 'potato_crop' || blockType === 'nether_wart_crop'
 
 const TALL_GRASS_BLOCK_ID = blockIdOf('tall_grass')
+
+// Registry metadata is immutable, but a chunk can contain many cells with the same plant id.
+const VANILLA_BLOCK_TYPE_CACHE = new Map<BlockId, BlockType | null>()
+
+const cacheVanillaBlockType = (blockId: BlockId): Result.Result<null, UnclassifiedVanillaBlockType> => {
+  const registeredType = blockTypeOfId(blockId)
+  if (Result.isFailure(registeredType) || typeof registeredType.success === 'undefined') {
+    VANILLA_BLOCK_TYPE_CACHE.set(blockId, null)
+    return Result.succeed(null)
+  }
+  const modelClass = classifyVanillaBlockType(registeredType.success)
+  if (Result.isFailure(modelClass)) {
+    return Result.fail(modelClass.failure)
+  }
+  VANILLA_BLOCK_TYPE_CACHE.set(blockId, registeredType.success)
+  return Result.succeed(null)
+}
 
 export type PlantTextureStageFailure =
   | BlockRegistryResolutionFailure
@@ -580,32 +597,30 @@ export const meshCrossPlants = (
         if (isCrossPlant(plantLookup, blockId)) {
           let blockState: CrossPlantQuad['blockState']
           let textureStage: PlantTextureStage | undefined
-          const registeredType = blockTypeOfId(blockId)
-          let blockType: BlockType | undefined
-          if (!Result.isFailure(registeredType) && typeof registeredType.success !== 'undefined') {
-            blockType = registeredType.success
-            const modelClass = classifyVanillaBlockType(blockType)
-            if (Result.isFailure(modelClass)) {
-              return Result.fail(modelClass.failure)
+          if (!VANILLA_BLOCK_TYPE_CACHE.has(blockId)) {
+            const cached = cacheVanillaBlockType(blockId)
+            if (Result.isFailure(cached)) {
+              return Result.fail(cached.failure)
             }
-            if (isPlantTextureBlockType(blockType)) {
-              const index = blockIndex(lx, y, lz, chunk.height)
-              const selectedStage = plantTextureStageAt(chunk, index)
-              if (Result.isFailure(selectedStage)) {
-                return Result.fail(modelPropertyFailureOf(selectedStage.failure, blockType))
-              }
-              if (Option.isNone(selectedStage.success)) {
-                return Result.fail({ _tag: 'MissingPlantTextureStage', blockId, blockType })
-              }
-              textureStage = selectedStage.success.value
+          }
+          const blockType = VANILLA_BLOCK_TYPE_CACHE.get(blockId)
+          if (isPlantTextureBlockType(blockType)) {
+            const index = blockIndex(lx, y, lz, chunk.height)
+            const selectedStage = plantTextureStageAt(chunk, index)
+            if (Result.isFailure(selectedStage)) {
+              return Result.fail(modelPropertyFailureOf(selectedStage.failure, blockType))
             }
-            if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
-              const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
-              if (Result.isFailure(state)) {
-                return Result.fail(state.failure)
-              }
-              blockState = state.success
+            if (Option.isNone(selectedStage.success)) {
+              return Result.fail({ _tag: 'MissingPlantTextureStage', blockId, blockType })
             }
+            textureStage = selectedStage.success.value
+          }
+          if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
+            const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
+            if (Result.isFailure(state)) {
+              return Result.fail(state.failure)
+            }
+            blockState = state.success
           }
           const input = {
             blockId,
