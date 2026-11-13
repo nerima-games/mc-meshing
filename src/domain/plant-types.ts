@@ -41,6 +41,8 @@ export type CrossPlantQuad = {
   readonly role: 'side'
   /** Effective kernel state used to select a plant texture or model. */
   readonly blockState?: EffectiveBlockStateValues
+  /** Crop or sapling texture selection, also consumed by stage-specific atlas tiles. */
+  readonly textureStage?: PlantTextureStage
   readonly vertices: readonly [PlantVertex, PlantVertex, PlantVertex, PlantVertex]
   readonly nx: number
   readonly ny: number

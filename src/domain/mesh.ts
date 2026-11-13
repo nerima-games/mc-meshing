@@ -152,6 +152,7 @@ import {
 import {
   buildCrossPlantLookup,
   type CrossPlantLookupFailure,
+  type PlantMeshFailure,
   isCrossPlant,
   meshCrossPlants,
 } from './plant-mesh.js'
@@ -297,7 +298,7 @@ const chunkMeshContextOf = (
   specialLookup: SpecialBlockLookup,
 ): Result.Result<
   ChunkMeshContext,
-  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | PlantMeshFailure | SpecialMeshFailure
 > =>
   Result.flatMap(layerLookupForMesh(config), (lookup) =>
     Result.flatMap(fluidLookupForMesh(config), (fluids) => {
@@ -397,7 +398,7 @@ export const meshChunk = (
   scratch?: MeshScratch,
 ): Result.Result<
   MeshLayers,
-  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | PlantMeshFailure | SpecialMeshFailure | MeshScratchFailure | GreedyMaskFailure
 > =>
   Result.flatMap(validateChunkViews(chunk, neighbours), () =>
     Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
@@ -554,7 +555,7 @@ export const meshChunkNaive = (
   config: MeshConfig,
 ): Result.Result<
   MeshLayers,
-  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | PlantMeshFailure | SpecialMeshFailure
 > =>
   Result.flatMap(validateChunkViews(chunk, neighbours), () =>
     Result.flatMap(SPECIAL_BLOCK_LOOKUP, (specialLookup) =>
@@ -656,7 +657,7 @@ export const meshChunkRegion = (
   dirtyRegion: MeshRegion,
 ): Result.Result<
   RegionMesh,
-  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | SpecialMeshFailure | GreedyMaskFailure
+  ChunkViewFailure | LayerLookupFailureWithTable | FluidLookupFailure | FluidSamplingFailure | FluidViewFailure | CrossPlantLookupFailure | PlantMeshFailure | SpecialMeshFailure | GreedyMaskFailure
 > =>
   Result.flatMap(validateChunkViews(chunk, neighbours), () => {
     const dirty = normalizeRegion(dirtyRegion, chunk.height)

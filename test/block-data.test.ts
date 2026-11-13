@@ -2,13 +2,17 @@ import * as FastCheck from 'fast-check'
 import { Option, Result } from 'effect'
 import {
   BlockId as KernelBlockId,
+  BLOCK_IDS,
   BLOCK_ID_MAX,
   FLOWING_FLUID_LEVEL,
   FLUID_LEVEL_STEP,
+  blockIdOf,
+  blockTypeOfId,
   propertyOfBlockId,
 } from '@nerima-games/mc-kernel'
 import { describe, expect, it, vi } from 'vitest'
-import { AIR, blockIdAt, MINECRAFT_FLUID_MAX_LEVELS } from '../src/domain/block-data.js'
+import { AIR, blockIdAt, MINECRAFT_CROSS_PLANT_BLOCK_IDS, MINECRAFT_FLUID_MAX_LEVELS } from '../src/domain/block-data.js'
+import { classifyVanillaBlockType } from '../src/domain/vanilla-block-model.js'
 
 const OVERWORLD_LAVA_LEVEL_INCREMENT = 2
 const flowingLevelOffsets = Array.from(
@@ -23,6 +27,7 @@ const expectedLavaMaxLevel = flowingLevelOffsets.filter(
 const importBlockDataWithRegistry = async (
   blockIds: ReadonlyArray<number>,
   resolveProperty: (blockId: number, property: string) => unknown,
+  resolveBlockType: (blockId: number) => unknown = () => Result.succeed('stone'),
 ) => {
   vi.resetModules()
   vi.doMock('@nerima-games/mc-kernel', () => ({
@@ -31,7 +36,9 @@ const importBlockDataWithRegistry = async (
     BLOCK_IDS: blockIds,
     FLOWING_FLUID_LEVEL,
     FLUID_LEVEL_STEP,
+    blockTypeOfId: resolveBlockType,
     blockIdsWithOpacity: () => Result.succeed(Option.some(new Set())),
+    isBlockType: (value: unknown) => typeof value === 'string',
     propertyOfBlockId: resolveProperty,
   }))
   try {
@@ -82,6 +89,32 @@ describe('block data ids', () => {
     )
   })
 
+  it('classifies the registered cross models by name and excludes the torch', () => {
+    const crossBlockIds = Result.getOrThrow(MINECRAFT_CROSS_PLANT_BLOCK_IDS)
+    const crossTypes = [...crossBlockIds]
+      .map((blockId) => Result.getOrThrow(blockTypeOfId(blockId)))
+      .sort()
+    const expectedCrossTypes = [
+      'amethyst_cluster',
+      'brown_mushroom',
+      'cobweb',
+      'dandelion',
+      'fern',
+      'kelp',
+      'poppy',
+      'red_mushroom',
+      'sapling',
+      'seagrass',
+      'sugar_cane',
+      'tall_grass',
+    ].sort()
+
+    expect(BLOCK_IDS.length).toBeGreaterThan(0)
+    expect(crossTypes).toStrictEqual(expectedCrossTypes)
+    expect(crossBlockIds.has(Option.getOrThrow(blockIdOf('torch')))).toBe(false)
+    expect(classifyVanillaBlockType('torch')).toStrictEqual(Result.succeed('special'))
+  })
+
   it('maps registered fluid kinds to their propagation ceilings', async () => {
     const blockData = await importBlockDataWithRegistry([1, 2, 3], (blockId, property) => {
       if (property === 'renderKind') {
@@ -94,6 +127,7 @@ describe('block data ids', () => {
       Result.succeed(new Map([[1, expectedWaterMaxLevel], [2, expectedLavaMaxLevel]])),
     )
     expect(blockData.MINECRAFT_WATER_BLOCK_IDS).toStrictEqual(Result.succeed(new Set([1])))
+    expect(blockData.MINECRAFT_CROSS_PLANT_BLOCK_IDS).toStrictEqual(Result.succeed(new Set()))
   })
 
   it('propagates block-property resolution failures from registry scans', async () => {
@@ -101,8 +135,32 @@ describe('block data ids', () => {
     const blockData = await importBlockDataWithRegistry([1], () => Result.fail(failure))
 
     expect(blockData.MINECRAFT_WATER_BLOCK_IDS).toStrictEqual(Result.fail(failure))
-    expect(blockData.MINECRAFT_CROSS_PLANT_BLOCK_IDS).toStrictEqual(Result.fail(failure))
+    expect(blockData.MINECRAFT_CROSS_PLANT_BLOCK_IDS).toStrictEqual(Result.succeed(new Set()))
     expect(blockData.MINECRAFT_FLUID_MAX_LEVELS).toStrictEqual(Result.fail(failure))
+  })
+
+  it('propagates block-type resolution failures during cross-model classification', async () => {
+    const failure = { _tag: 'TestBlockTypeResolutionFailure' }
+    const blockData = await importBlockDataWithRegistry(
+      [1],
+      () => Result.succeed(new Map<string, unknown>().get('missing')),
+      () => Result.fail(failure),
+    )
+
+    expect(blockData.MINECRAFT_CROSS_PLANT_BLOCK_IDS).toStrictEqual(Result.fail(failure))
+  })
+
+  it('returns a typed failure when a registered type has no named model classification', async () => {
+    const blockType = 'future_registry_block'
+    const blockData = await importBlockDataWithRegistry(
+      [1],
+      () => Result.succeed(new Map<string, unknown>().get('missing')),
+      () => Result.succeed(blockType),
+    )
+
+    expect(blockData.MINECRAFT_CROSS_PLANT_BLOCK_IDS).toStrictEqual(
+      Result.fail({ _tag: 'UnclassifiedVanillaBlockType', blockType }),
+    )
   })
 
   it('rejects fluid-renderable blocks whose registry omits fluid kind', async () => {

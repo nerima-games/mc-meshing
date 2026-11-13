@@ -19,6 +19,17 @@ export type SpecialRenderKind =
   | 'stairs'
   | 'stoneButton'
   | 'snowLayer'
+  | 'blockModel'
+
+export type InvalidBlockStateModelProperty =
+  | keyof EffectiveBlockStateValues
+  | `connections.${keyof NonNullable<EffectiveBlockStateValues['connections']>}`
+
+export type InvalidBlockStateModelPropertyFailure = {
+  readonly _tag: 'InvalidBlockStateModelProperty'
+  readonly blockId: BlockId
+  readonly property: InvalidBlockStateModelProperty
+}
 
 export type SpecialVertex = readonly [x: number, y: number, z: number]
 

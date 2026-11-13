@@ -1163,17 +1163,20 @@ describe('the injected fluid table', () => {
  * transparent solid, because the interesting faults are at the meetings: lava
  * against water, glass over a lake, a flower on a shore.
  */
+// arbitraryFluidBox has y <= 6 and sy <= 3, so its highest occupied row is 8.
+const ARBITRARY_FLUID_CHUNK_HEIGHT = 9
+
 const arbitraryFluidChunk = FastCheck.array(arbitraryFluidBox, { maxLength: 8, minLength: 1 }).map((boxes): ChunkView => {
-  const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
-  const levels = new Uint8Array(BLOCKS_PER_CHUNK)
-  const sources = new Uint8Array(BLOCKS_PER_CHUNK)
-  const falling = new Uint8Array(BLOCKS_PER_CHUNK)
+  const blocks = new Uint16Array(CHUNK_SIZE * ARBITRARY_FLUID_CHUNK_HEIGHT * CHUNK_SIZE)
+  const levels = new Uint8Array(CHUNK_SIZE * ARBITRARY_FLUID_CHUNK_HEIGHT * CHUNK_SIZE)
+  const sources = new Uint8Array(CHUNK_SIZE * ARBITRARY_FLUID_CHUNK_HEIGHT * CHUNK_SIZE)
+  const falling = new Uint8Array(CHUNK_SIZE * ARBITRARY_FLUID_CHUNK_HEIGHT * CHUNK_SIZE)
   for (const box of boxes) {
     const blockId = expectDefined(fluidBlockIds[box.blockIdIndex], `invalid fluid block index: ${box.blockIdIndex}`)
     for (let { lx } = box; lx < Math.min(box.lx + box.sx, CHUNK_SIZE); lx += 1) {
-      for (let { y } = box; y < Math.min(box.y + box.sy, CHUNK_HEIGHT); y += 1) {
+      for (let { y } = box; y < Math.min(box.y + box.sy, ARBITRARY_FLUID_CHUNK_HEIGHT); y += 1) {
         for (let { lz } = box; lz < Math.min(box.lz + box.sz, CHUNK_SIZE); lz += 1) {
-          const index = blockIndex(lx, y, lz, CHUNK_HEIGHT)
+          const index = blockIndex(lx, y, lz, ARBITRARY_FLUID_CHUNK_HEIGHT)
           blocks[index] = blockId
           levels[index] = box.level
           sources[index] = box.source
@@ -1182,7 +1185,12 @@ const arbitraryFluidChunk = FastCheck.array(arbitraryFluidBox, { maxLength: 8, m
       }
     }
   }
-  return { coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS), height: CHUNK_HEIGHT, blocks, fluid: { falling, levels, sources } }
+  return {
+    coord: chunkCoord(ORIGIN_AXIS, ORIGIN_AXIS),
+    height: ARBITRARY_FLUID_CHUNK_HEIGHT,
+    blocks,
+    fluid: { falling, levels, sources },
+  }
 })
 
 /** A fluid quad as a string, for multiset comparison. */
@@ -1235,10 +1243,12 @@ describe('the two meshers, and the merge, with fluids configured', () => {
       Effect.sync(() =>
         FastCheck.assert(
           FastCheck.property(arbitraryFluidChunk, (chunk) => {
-            const merged = allUnitFaces(meshChunk(chunk, {}, CONFIG))
-            const naive = allUnitFaces(meshChunkNaive(chunk, {}, CONFIG))
+            const mergedLayers = meshChunk(chunk, {}, CONFIG)
+            const naiveLayers = meshChunkNaive(chunk, {}, CONFIG)
+            const merged = allUnitFaces(mergedLayers)
+            const naive = allUnitFaces(naiveLayers)
             expect([...merged].sort()).toStrictEqual([...naive].sort())
-            expect(totalQuadArea(meshChunk(chunk, {}, CONFIG))).toBe(totalQuadArea(meshChunkNaive(chunk, {}, CONFIG)))
+            expect(totalQuadArea(mergedLayers)).toBe(totalQuadArea(naiveLayers))
           }),
           { numRuns: 100 },
         ),
