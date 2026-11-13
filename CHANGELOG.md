@@ -1,5 +1,11 @@
 # @nerima-games/mc-meshing
 
+## 0.7.0
+
+### Minor Changes
+
+- Add state-aware vanilla non-cube geometry and expose `textureStage` on crop and sapling quads.
+
 ## 0.6.0
 
 ### Minor Changes
