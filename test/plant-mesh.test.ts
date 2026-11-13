@@ -91,6 +91,7 @@ const crossPlants = (chunk: ChunkView, config: MeshConfig = EMPTY_MESH_CONFIG) =
   }))
 
 type CropBlockType = Exclude<PlantTextureStage['blockType'], 'sapling'>
+const CROP_BLOCK_TYPES: ReadonlyArray<CropBlockType> = ['wheat_crop', 'potato_crop', 'nether_wart_crop']
 
 // Pixel silhouettes measured from vanilla Java 26.3-snapshot-4 textures at
 // https://mcasset.cloud/26.3-snapshot-4/assets/minecraft/textures/block/:
@@ -614,9 +615,8 @@ describe('crop texture stages', () => {
   it.effect('selects each vanilla stage texture with its independently measured silhouette height', () =>
     Effect.sync(() => {
       const plantLookup = Result.getOrThrow(buildCrossPlantLookup(EMPTY_MESH_CONFIG))
-      for (const [blockType, heights] of Object.entries(VANILLA_CROP_TEXTURE_HEIGHT_PIXELS) as Array<
-        [CropBlockType, ReadonlyArray<number>]
-      >) {
+      for (const blockType of CROP_BLOCK_TYPES) {
+        const heights = VANILLA_CROP_TEXTURE_HEIGHT_PIXELS[blockType]
         for (const [age, expectedVisibleHeight] of heights.entries()) {
           const { chunk } = cropChunk(blockType, age)
           const quads = Result.getOrThrow(meshCrossPlants({ chunk, plantLookup, yLimit: chunk.height }))
@@ -627,7 +627,7 @@ describe('crop texture stages', () => {
           const selectedTextureHeights = quads.map((quad) => {
             const stage = quad.textureStage
             if (!stage || stage.blockType === 'sapling') {
-              return undefined
+              return null
             }
             return VANILLA_CROP_TEXTURE_HEIGHT_PIXELS[stage.blockType][stage.stage]
           })
@@ -804,9 +804,12 @@ describe('crop texture stages', () => {
         FastCheck.property(invalidAge, (candidateAge) => {
           age = candidateAge
           const result = meshPlants({ chunk, plantLookup, yLimit: chunk.height })
-          return Result.isFailure(result) && result.failure._tag === 'InvalidBlockStateModelProperty' &&
-            result.failure.blockId === Option.getOrThrow(blockIdOf('wheat_crop')) &&
-            result.failure.property === 'age'
+          expect(result).toStrictEqual(Result.fail({
+            _tag: 'InvalidBlockStateModelProperty',
+            blockId: Option.getOrThrow(blockIdOf('wheat_crop')),
+            property: 'age',
+          }))
+          return true
         }),
         { numRuns: 120 },
       )

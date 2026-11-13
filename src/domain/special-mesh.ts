@@ -1931,6 +1931,9 @@ type ModelPart = {
 }
 
 type ModelPoint = readonly [x: number, y: number, z: number]
+type ModelAxis = 'x' | 'y' | 'z'
+type ModelEdge = 'min' | 'max'
+type ModelAxisRange = readonly [min: number, max: number]
 
 const modelPartAt = (
   position: BlockPosition,
@@ -1952,25 +1955,42 @@ const modelPartAt = (
   }
 }
 
+const MODEL_FACE_COVERAGE: Readonly<Record<FaceDirection, {
+  readonly normalAxis: ModelAxis
+  readonly edge: ModelEdge
+  readonly tangentAxes: readonly [ModelAxis, ModelAxis]
+}>> = {
+  xNeg: { normalAxis: 'x', edge: 'min', tangentAxes: ['y', 'z'] },
+  xPos: { normalAxis: 'x', edge: 'max', tangentAxes: ['y', 'z'] },
+  yNeg: { normalAxis: 'y', edge: 'min', tangentAxes: ['x', 'z'] },
+  yPos: { normalAxis: 'y', edge: 'max', tangentAxes: ['x', 'z'] },
+  zNeg: { normalAxis: 'z', edge: 'min', tangentAxes: ['x', 'y'] },
+  zPos: { normalAxis: 'z', edge: 'max', tangentAxes: ['x', 'y'] },
+}
+
+const MODEL_OPPOSITE_EDGE: Readonly<Record<ModelEdge, ModelEdge>> = { min: 'max', max: 'min' }
+
+const MODEL_BOUNDS_RANGES: Readonly<Record<ModelAxis, (bounds: BoxBounds) => ModelAxisRange>> = {
+  x: (bounds) => [bounds.minX, bounds.maxX],
+  y: (bounds) => [bounds.minY, bounds.maxY],
+  z: (bounds) => [bounds.minZ, bounds.maxZ],
+}
+
+const edgeIndexOf = (edge: ModelEdge): 0 | 1 => edge === 'min' ? 0 : 1
+
 const modelPartHasCoveredFace = (
   bounds: BoxBounds,
   direction: FaceDirection,
   other: BoxBounds,
 ): boolean => {
-  switch (direction) {
-    case 'xNeg':
-      return other.maxX === bounds.minX && other.minY <= bounds.minY && other.maxY >= bounds.maxY && other.minZ <= bounds.minZ && other.maxZ >= bounds.maxZ
-    case 'xPos':
-      return other.minX === bounds.maxX && other.minY <= bounds.minY && other.maxY >= bounds.maxY && other.minZ <= bounds.minZ && other.maxZ >= bounds.maxZ
-    case 'yNeg':
-      return other.maxY === bounds.minY && other.minX <= bounds.minX && other.maxX >= bounds.maxX && other.minZ <= bounds.minZ && other.maxZ >= bounds.maxZ
-    case 'yPos':
-      return other.minY === bounds.maxY && other.minX <= bounds.minX && other.maxX >= bounds.maxX && other.minZ <= bounds.minZ && other.maxZ >= bounds.maxZ
-    case 'zNeg':
-      return other.maxZ === bounds.minZ && other.minX <= bounds.minX && other.maxX >= bounds.maxX && other.minY <= bounds.minY && other.maxY >= bounds.maxY
-    case 'zPos':
-      return other.minZ === bounds.maxZ && other.minX <= bounds.minX && other.maxX >= bounds.maxX && other.minY <= bounds.minY && other.maxY >= bounds.maxY
-  }
+  const { normalAxis, edge, tangentAxes } = MODEL_FACE_COVERAGE[direction]
+  const plane = MODEL_BOUNDS_RANGES[normalAxis](bounds)[edgeIndexOf(edge)]
+  const oppositePlane = MODEL_BOUNDS_RANGES[normalAxis](other)[edgeIndexOf(MODEL_OPPOSITE_EDGE[edge])]
+  return plane === oppositePlane && tangentAxes.every((axis) => {
+    const [min, max] = MODEL_BOUNDS_RANGES[axis](bounds)
+    const [otherMin, otherMax] = MODEL_BOUNDS_RANGES[axis](other)
+    return otherMin <= min && otherMax >= max
+  })
 }
 
 const meshBlockModelParts = (
@@ -2120,14 +2140,15 @@ const chestPartsOf = (
   })
 }
 
-const bedPillowPartOf = (position: BlockPosition, facing: HorizontalFacing): ModelPart => {
-  switch (facing) {
-    case 'north': return modelPartAt(position, [0, 5, 0], [16, 9, 4])
-    case 'south': return modelPartAt(position, [0, 5, 12], [16, 9, 16])
-    case 'west': return modelPartAt(position, [0, 5, 0], [4, 9, 16])
-    case 'east': return modelPartAt(position, [12, 5, 0], [16, 9, 16])
-  }
+const BED_PILLOW_PARTS: Readonly<Record<HorizontalFacing, (position: BlockPosition) => ModelPart>> = {
+  north: (position) => modelPartAt(position, [0, 5, 0], [16, 9, 4]),
+  south: (position) => modelPartAt(position, [0, 5, 12], [16, 9, 16]),
+  west: (position) => modelPartAt(position, [0, 5, 0], [4, 9, 16]),
+  east: (position) => modelPartAt(position, [12, 5, 0], [16, 9, 16]),
 }
+
+const bedPillowPartOf = (position: BlockPosition, facing: HorizontalFacing): ModelPart =>
+  BED_PILLOW_PARTS[facing](position)
 
 const anvilPartsOf = (position: BlockPosition, facing: HorizontalFacing): ReadonlyArray<ModelPart> => [
   modelPartAt(position, [2, 0, 2], [14, 4, 14]),
@@ -2177,281 +2198,326 @@ const endFramePartsOf = (position: BlockPosition, eye: boolean): ReadonlyArray<M
   return parts
 }
 
-const pistonHeadPartsOf = (
-  position: BlockPosition,
-  facing: NonNullable<EffectiveBlockStateValues['facing']>,
-  short: boolean,
-): ReadonlyArray<ModelPart> => {
-  const stemLength = short ? 8 : 12
-  switch (facing) {
-    case 'up':
-      return [modelPartAt(position, [6, 12 - stemLength, 6], [10, 12, 10]), modelPartAt(position, [0, 12, 0], [16, 16, 16])]
-    case 'down':
-      return [modelPartAt(position, [6, 4, 6], [10, 4 + stemLength, 10]), modelPartAt(position, [0, 0, 0], [16, 4, 16])]
-    case 'north':
-      return [modelPartAt(position, [6, 6, 4], [10, 10, 4 + stemLength]), modelPartAt(position, [0, 0, 0], [16, 16, 4])]
-    case 'south':
-      return [modelPartAt(position, [6, 6, 12 - stemLength], [10, 10, 12]), modelPartAt(position, [0, 0, 12], [16, 16, 16])]
-    case 'west':
-      return [modelPartAt(position, [4, 6, 6], [4 + stemLength, 10, 10]), modelPartAt(position, [0, 0, 0], [4, 16, 16])]
-    case 'east':
-      return [modelPartAt(position, [12 - stemLength, 6, 6], [12, 10, 10]), modelPartAt(position, [12, 0, 0], [16, 16, 16])]
-  }
+type ModelFacing = NonNullable<EffectiveBlockStateValues['facing']>
+
+const PISTON_HEAD_PARTS: Readonly<Record<ModelFacing, (position: BlockPosition, stemLength: number) => ReadonlyArray<ModelPart>>> = {
+  up: (position, stemLength) => [
+    modelPartAt(position, [6, 12 - stemLength, 6], [10, 12, 10]),
+    modelPartAt(position, [0, 12, 0], [16, 16, 16]),
+  ],
+  down: (position, stemLength) => [
+    modelPartAt(position, [6, 4, 6], [10, 4 + stemLength, 10]),
+    modelPartAt(position, [0, 0, 0], [16, 4, 16]),
+  ],
+  north: (position, stemLength) => [
+    modelPartAt(position, [6, 6, 4], [10, 10, 4 + stemLength]),
+    modelPartAt(position, [0, 0, 0], [16, 16, 4]),
+  ],
+  south: (position, stemLength) => [
+    modelPartAt(position, [6, 6, 12 - stemLength], [10, 10, 12]),
+    modelPartAt(position, [0, 0, 12], [16, 16, 16]),
+  ],
+  west: (position, stemLength) => [
+    modelPartAt(position, [4, 6, 6], [4 + stemLength, 10, 10]),
+    modelPartAt(position, [0, 0, 0], [4, 16, 16]),
+  ],
+  east: (position, stemLength) => [
+    modelPartAt(position, [12 - stemLength, 6, 6], [12, 10, 10]),
+    modelPartAt(position, [12, 0, 0], [16, 16, 16]),
+  ],
 }
 
+const pistonHeadPartsOf = (
+  position: BlockPosition,
+  facing: ModelFacing,
+  short: boolean,
+): ReadonlyArray<ModelPart> => PISTON_HEAD_PARTS[facing](position, short ? 8 : 12)
+
 // For Wiki pages without model elements, use explicit visual estimates rather than collision bounds.
+type BlockModelBuildContext = {
+  readonly blockId: BlockId
+  readonly blockType: BlockType
+  readonly position: BlockPosition
+  readonly state: EffectiveBlockStateValues
+}
+
+type BlockModelBuilder = (context: BlockModelBuildContext) => Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure>
+
+const staticBlockModelBuilder = (
+  partsOf: (position: BlockPosition) => ReadonlyArray<ModelPart>,
+): BlockModelBuilder => ({ position }) => Result.succeed(partsOf(position))
+
+const redstoneTorchModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
+  return Result.map(lit, () => standingTorchPartsOf(position))
+}
+
+const redstoneWallTorchModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
+  return Result.map(lit, () => wallTorchPartsOf(position, facing.success))
+}
+
+const farmlandModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const moisture = modelIntegerStateOf(state.moisture, blockId, 'moisture', 0, 7)
+  return Result.map(moisture, () => [modelPartAt(position, [0, 0, 0], [16, 15, 16])])
+}
+
+const chestModelPartsOf = ({ blockId, blockType, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  if (blockType === 'ender_chest') return Result.succeed(chestPartsOf(position, facing.success, 'single'))
+  const type = requiredStateProperty(state.type, blockId, 'type')
+  if (Result.isFailure(type)) return Result.fail(type.failure)
+  if (type.success !== 'single' && type.success !== 'left' && type.success !== 'right') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
+  }
+  return Result.succeed(chestPartsOf(position, facing.success, type.success))
+}
+
+const bedModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const part = requiredStateProperty(state.part, blockId, 'part')
+  if (Result.isFailure(part)) return Result.fail(part.failure)
+  if (part.success !== 'head' && part.success !== 'foot') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'part' })
+  }
+  const occupied = modelBooleanStateOf(state.occupied, blockId, 'occupied')
+  if (Result.isFailure(occupied)) return Result.fail(occupied.failure)
+  return Result.succeed([
+    modelPartAt(position, [0, 0, 0], [16, 5, 16]),
+    modelPartAt(position, [0, 5, 0], [16, 9, 16]),
+    ...(part.success === 'head' ? [bedPillowPartOf(position, facing.success)] : []),
+  ])
+}
+
+const anvilModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  return Result.map(facing, (value) => anvilPartsOf(position, value))
+}
+
+const waterCauldronModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const level = modelIntegerStateOf(state.level, blockId, 'level', 1, 3)
+  if (Result.isFailure(level)) return Result.fail(level.failure)
+  const waterHeight = 3 + level.success * 3
+  return Result.succeed([
+    ...cauldronPartsOf(position),
+    modelPartAt(position, [4, 3, 4], [12, waterHeight, 12]),
+  ])
+}
+
+const hopperModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = modelFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  if (facing.success === 'up') return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'facing' })
+  const enabled = modelBooleanStateOf(state.enabled, blockId, 'enabled')
+  return Result.map(enabled, () => hopperPartsOf(position, facing.success))
+}
+
+const comparatorModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const powered = modelBooleanStateOf(state.powered, blockId, 'powered')
+  if (Result.isFailure(powered)) return Result.fail(powered.failure)
+  const mode = requiredStateProperty(state.mode, blockId, 'mode')
+  if (Result.isFailure(mode)) return Result.fail(mode.failure)
+  if (mode.success !== 'compare' && mode.success !== 'subtract') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'mode' })
+  }
+  const baseParts = [
+    modelPartAt(position, [0, 0, 0], [16, 2, 16]),
+    modelPartAt(position, [6, 2, 6], [10, 4, 10]),
+    modelPartAt(position, [4, 2, 3], [6, 7, 5]),
+    modelPartAt(position, [10, 2, 3], [12, 7, 5]),
+    modelPartAt(position, [7, 2, 11], [9, 6, 13]),
+  ]
+  const turns: Readonly<Record<HorizontalFacing, number>> = { north: 0, east: 1, south: 2, west: 3 }
+  return Result.succeed(baseParts.map((part) => rotateModelPartY(part, position, turns[facing.success])))
+}
+
+const brewingStandModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const bottles: Array<boolean> = []
+  for (const property of ['has_bottle_0', 'has_bottle_1', 'has_bottle_2'] as const) {
+    const hasBottle = modelBooleanStateOf(state[property], blockId, property)
+    if (Result.isFailure(hasBottle)) return Result.fail(hasBottle.failure)
+    bottles.push(hasBottle.success)
+  }
+  const parts: Array<ModelPart> = [
+    modelPartAt(position, [2, 0, 2], [14, 2, 14]),
+    modelPartAt(position, [7, 2, 7], [9, 14, 9]),
+    modelPartAt(position, [3, 2, 3], [13, 3, 13]),
+    modelPartAt(position, [4, 2, 4], [6, 5, 6]),
+    modelPartAt(position, [10, 2, 4], [12, 5, 6]),
+    modelPartAt(position, [7, 2, 10], [9, 5, 12]),
+  ]
+  if (bottles[0]) parts.push(modelPartAt(position, [4, 3, 4], [7, 10, 7]))
+  if (bottles[1]) parts.push(modelPartAt(position, [9, 3, 4], [12, 10, 7]))
+  if (bottles[2]) parts.push(modelPartAt(position, [6, 3, 9], [10, 10, 13]))
+  return Result.succeed(parts)
+}
+
+const endPortalFrameModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = horizontalFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const eye = modelBooleanStateOf(state.eye, blockId, 'eye')
+  return Result.map(eye, (value) => endFramePartsOf(position, value))
+}
+
+const END_ROD_PARTS: Readonly<Record<ModelFacing, (position: BlockPosition) => ReadonlyArray<ModelPart>>> = {
+  up: (position) => [modelPartAt(position, [7, 0, 7], [9, 16, 9])],
+  down: (position) => [modelPartAt(position, [7, 0, 7], [9, 16, 9])],
+  east: (position) => [modelPartAt(position, [0, 7, 7], [16, 9, 9])],
+  west: (position) => [modelPartAt(position, [0, 7, 7], [16, 9, 9])],
+  north: (position) => [modelPartAt(position, [7, 7, 0], [9, 9, 16])],
+  south: (position) => [modelPartAt(position, [7, 7, 0], [9, 9, 16])],
+}
+
+const endRodModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = modelFacingOf(state, blockId)
+  return Result.map(facing, (value) => END_ROD_PARTS[value](position))
+}
+
+const pistonHeadModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = modelFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const short = modelBooleanStateOf(state.short, blockId, 'short')
+  if (Result.isFailure(short)) return Result.fail(short.failure)
+  const type = requiredStateProperty(state.type, blockId, 'type')
+  if (Result.isFailure(type)) return Result.fail(type.failure)
+  if (type.success !== 'normal' && type.success !== 'sticky') {
+    return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
+  }
+  return Result.succeed(pistonHeadPartsOf(position, facing.success, short.success))
+}
+
+const netherPortalModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const axis = requiredStateProperty(state.axis, blockId, 'axis')
+  if (Result.isFailure(axis)) return Result.fail(axis.failure)
+  if (axis.success === 'x') return Result.succeed([modelPartAt(position, [0, 0, 8], [16, 16, 8], ['zNeg', 'zPos'])])
+  if (axis.success === 'z') return Result.succeed([modelPartAt(position, [8, 0, 0], [8, 16, 16], ['xNeg', 'xPos'])])
+  return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'axis' })
+}
+
+const FIRE_CONNECTION_PARTS: Readonly<Record<'north' | 'east' | 'south' | 'west' | 'up', (position: BlockPosition) => ModelPart>> = {
+  north: (position) => modelPartAt(position, [0, 0, 0], [16, 16, 0], ['zNeg', 'zPos']),
+  east: (position) => modelPartAt(position, [16, 0, 0], [16, 16, 16], ['xNeg', 'xPos']),
+  south: (position) => modelPartAt(position, [0, 0, 16], [16, 16, 16], ['zNeg', 'zPos']),
+  west: (position) => modelPartAt(position, [0, 0, 0], [0, 16, 16], ['xNeg', 'xPos']),
+  up: (position) => modelPartAt(position, [2, 4, 2], [14, 16, 14], ['yNeg', 'yPos']),
+}
+
+const fireModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const age = modelIntegerStateOf(state.age, blockId, 'age', 0, 15)
+  if (Result.isFailure(age)) return Result.fail(age.failure)
+  const connections = requiredStateProperty(state.connections, blockId, 'connections')
+  if (Result.isFailure(connections)) return Result.fail(connections.failure)
+  const parts: Array<ModelPart> = [
+    modelPartAt(position, [0, 0, 7], [16, 16, 9], ['xNeg', 'xPos']),
+    modelPartAt(position, [7, 0, 0], [9, 16, 16], ['zNeg', 'zPos']),
+  ]
+  for (const direction of ['north', 'east', 'south', 'west', 'up'] as const) {
+    const connected = connections.success[direction]
+    if (typeof connected !== 'boolean') {
+      return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: `connections.${direction}` })
+    }
+    if (connected) parts.push(FIRE_CONNECTION_PARTS[direction](position))
+  }
+  return Result.succeed(parts)
+}
+
+const witherSkullModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const powered = modelBooleanStateOf(state.powered, blockId, 'powered')
+  if (Result.isFailure(powered)) return Result.fail(powered.failure)
+  const rotation = modelIntegerStateOf(state.rotation, blockId, 'rotation', 0, 15)
+  return Result.map(rotation, () => [modelPartAt(position, [4, 4, 4], [12, 12, 12])])
+}
+
+const chorusFlowerModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const age = modelIntegerStateOf(state.age, blockId, 'age', 0, 5)
+  if (Result.isFailure(age)) return Result.fail(age.failure)
+  return Result.succeed(age.success === 5
+    ? [modelPartAt(position, [4, 0, 4], [12, 16, 12])]
+    : [
+        modelPartAt(position, [4, 0, 4], [12, 10, 12]),
+        modelPartAt(position, [2, 10, 2], [14, 14, 14]),
+        modelPartAt(position, [4, 14, 4], [12, 16, 12]),
+      ])
+}
+
+const CHORUS_PLANT_ARMS: Readonly<Record<'down' | 'north' | 'east' | 'south' | 'west' | 'up', readonly [ModelPoint, ModelPoint]>> = {
+  down: [[6, 0, 6], [10, 6, 10]],
+  north: [[6, 6, 0], [10, 10, 6]],
+  east: [[10, 6, 6], [16, 10, 10]],
+  south: [[6, 6, 10], [10, 10, 16]],
+  west: [[0, 6, 6], [6, 10, 10]],
+  up: [[6, 10, 6], [10, 16, 10]],
+}
+
+const chorusPlantModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const connections = requiredStateProperty(state.connections, blockId, 'connections')
+  if (Result.isFailure(connections)) return Result.fail(connections.failure)
+  const parts: Array<ModelPart> = [modelPartAt(position, [6, 6, 6], [10, 10, 10])]
+  for (const direction of ['down', 'north', 'east', 'south', 'west', 'up'] as const) {
+    const connected = connections.success[direction]
+    if (typeof connected !== 'boolean') {
+      return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: `connections.${direction}` })
+    }
+    if (connected) parts.push(modelPartAt(position, ...CHORUS_PLANT_ARMS[direction]))
+  }
+  return Result.succeed(parts)
+}
+
+const SPECIAL_BLOCK_MODEL_BUILDERS: Readonly<Partial<Record<BlockType, BlockModelBuilder>>> = {
+  torch: staticBlockModelBuilder(standingTorchPartsOf),
+  redstone_torch: redstoneTorchModelPartsOf,
+  redstone_wall_torch: redstoneWallTorchModelPartsOf,
+  farmland: farmlandModelPartsOf,
+  chest: chestModelPartsOf,
+  ender_chest: chestModelPartsOf,
+  bed: bedModelPartsOf,
+  anvil: anvilModelPartsOf,
+  cauldron: staticBlockModelBuilder(cauldronPartsOf),
+  water_cauldron: waterCauldronModelPartsOf,
+  hopper: hopperModelPartsOf,
+  comparator: comparatorModelPartsOf,
+  enchanting_table: staticBlockModelBuilder((position) => [
+    modelPartAt(position, [0, 0, 0], [16, 3, 16]),
+    modelPartAt(position, [3, 3, 3], [13, 10, 13]),
+    modelPartAt(position, [0, 10, 0], [16, 12, 16]),
+  ]),
+  brewing_stand: brewingStandModelPartsOf,
+  end_portal_frame: endPortalFrameModelPartsOf,
+  end_portal_frame_filled: endPortalFrameModelPartsOf,
+  end_rod: endRodModelPartsOf,
+  piston_head: pistonHeadModelPartsOf,
+  dragon_egg: staticBlockModelBuilder((position) => [
+    modelPartAt(position, [5, 0, 5], [11, 4, 11]),
+    modelPartAt(position, [2, 4, 2], [14, 12, 14]),
+    modelPartAt(position, [4, 12, 4], [12, 16, 12]),
+  ]),
+  end_portal: staticBlockModelBuilder((position) => [modelPartAt(position, [0, 12, 0], [16, 12, 16], ['yNeg', 'yPos'])]),
+  end_gateway: staticBlockModelBuilder((position) => [modelPartAt(position, [0, 12, 0], [16, 12, 16], ['yNeg', 'yPos'])]),
+  nether_portal: netherPortalModelPartsOf,
+  fire: fireModelPartsOf,
+  wither_skeleton_skull: witherSkullModelPartsOf,
+  chorus_flower: chorusFlowerModelPartsOf,
+  chorus_plant: chorusPlantModelPartsOf,
+  end_crystal: ({ blockId, blockType }) => Result.fail({ _tag: 'UnsupportedSpecialBlockModel', blockId, blockType }),
+}
+
 const blockModelPartsOf = (
   blockId: BlockId,
   blockType: BlockType,
   position: BlockPosition,
   state: EffectiveBlockStateValues,
 ): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
-  switch (blockType) {
-    case 'torch':
-      return Result.succeed(standingTorchPartsOf(position))
-    case 'redstone_torch': {
-      const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
-      return Result.isFailure(lit) ? Result.fail(lit.failure) : Result.succeed(standingTorchPartsOf(position))
-    }
-    case 'redstone_wall_torch': {
-      const facing = horizontalFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
-      return Result.isFailure(lit) ? Result.fail(lit.failure) : Result.succeed(wallTorchPartsOf(position, facing.success))
-    }
-    case 'farmland': {
-      const moisture = modelIntegerStateOf(state.moisture, blockId, 'moisture', 0, 7)
-      return Result.isFailure(moisture)
-        ? Result.fail(moisture.failure)
-        : Result.succeed([modelPartAt(position, [0, 0, 0], [16, 15, 16])])
-    }
-    case 'chest':
-    case 'ender_chest': {
-      const facing = horizontalFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      if (blockType === 'ender_chest') {
-        return Result.succeed(chestPartsOf(position, facing.success, 'single'))
-      }
-      const type = requiredStateProperty(state.type, blockId, 'type')
-      if (Result.isFailure(type)) return Result.fail(type.failure)
-      if (type.success !== 'single' && type.success !== 'left' && type.success !== 'right') {
-        return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
-      }
-      return Result.succeed(chestPartsOf(position, facing.success, type.success))
-    }
-    case 'bed': {
-      const facing = horizontalFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      const part = requiredStateProperty(state.part, blockId, 'part')
-      if (Result.isFailure(part)) return Result.fail(part.failure)
-      if (part.success !== 'head' && part.success !== 'foot') {
-        return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'part' })
-      }
-      const occupied = modelBooleanStateOf(state.occupied, blockId, 'occupied')
-      if (Result.isFailure(occupied)) return Result.fail(occupied.failure)
-      const parts = [
-        modelPartAt(position, [0, 0, 0], [16, 5, 16]),
-        modelPartAt(position, [0, 5, 0], [16, 9, 16]),
-        ...(part.success === 'head' ? [bedPillowPartOf(position, facing.success)] : []),
-      ]
-      return Result.succeed(parts)
-    }
-    case 'anvil': {
-      const facing = horizontalFacingOf(state, blockId)
-      return Result.isFailure(facing) ? Result.fail(facing.failure) : Result.succeed(anvilPartsOf(position, facing.success))
-    }
-    case 'cauldron':
-      return Result.succeed(cauldronPartsOf(position))
-    case 'water_cauldron': {
-      const level = modelIntegerStateOf(state.level, blockId, 'level', 1, 3)
-      if (Result.isFailure(level)) return Result.fail(level.failure)
-      const waterHeight = 3 + level.success * 3
-      return Result.succeed([
-        ...cauldronPartsOf(position),
-        modelPartAt(position, [4, 3, 4], [12, waterHeight, 12]),
-      ])
-    }
-    case 'hopper': {
-      const facing = modelFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      if (facing.success === 'up') {
-        return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'facing' })
-      }
-      const enabled = modelBooleanStateOf(state.enabled, blockId, 'enabled')
-      return Result.isFailure(enabled)
-        ? Result.fail(enabled.failure)
-        : Result.succeed(hopperPartsOf(position, facing.success))
-    }
-    case 'comparator': {
-      const facing = horizontalFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      const powered = modelBooleanStateOf(state.powered, blockId, 'powered')
-      if (Result.isFailure(powered)) return Result.fail(powered.failure)
-      const mode = requiredStateProperty(state.mode, blockId, 'mode')
-      if (Result.isFailure(mode)) return Result.fail(mode.failure)
-      if (mode.success !== 'compare' && mode.success !== 'subtract') {
-        return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'mode' })
-      }
-      const baseParts = [
-        modelPartAt(position, [0, 0, 0], [16, 2, 16]),
-        modelPartAt(position, [6, 2, 6], [10, 4, 10]),
-        modelPartAt(position, [4, 2, 3], [6, 7, 5]),
-        modelPartAt(position, [10, 2, 3], [12, 7, 5]),
-        modelPartAt(position, [7, 2, 11], [9, 6, 13]),
-      ]
-      const turns: Readonly<Record<HorizontalFacing, number>> = { north: 0, east: 1, south: 2, west: 3 }
-      return Result.succeed(baseParts.map((part) => rotateModelPartY(part, position, turns[facing.success])))
-    }
-    case 'enchanting_table':
-      return Result.succeed([
-        modelPartAt(position, [0, 0, 0], [16, 3, 16]),
-        modelPartAt(position, [3, 3, 3], [13, 10, 13]),
-        modelPartAt(position, [0, 10, 0], [16, 12, 16]),
-      ])
-    case 'brewing_stand': {
-      const bottles: Array<boolean> = []
-      for (const property of ['has_bottle_0', 'has_bottle_1', 'has_bottle_2'] as const) {
-        const hasBottle = modelBooleanStateOf(state[property], blockId, property)
-        if (Result.isFailure(hasBottle)) return Result.fail(hasBottle.failure)
-        bottles.push(hasBottle.success)
-      }
-      const parts: Array<ModelPart> = [
-        modelPartAt(position, [2, 0, 2], [14, 2, 14]),
-        modelPartAt(position, [7, 2, 7], [9, 14, 9]),
-        modelPartAt(position, [3, 2, 3], [13, 3, 13]),
-        modelPartAt(position, [4, 2, 4], [6, 5, 6]),
-        modelPartAt(position, [10, 2, 4], [12, 5, 6]),
-        modelPartAt(position, [7, 2, 10], [9, 5, 12]),
-      ]
-      if (bottles[0]) parts.push(modelPartAt(position, [4, 3, 4], [7, 10, 7]))
-      if (bottles[1]) parts.push(modelPartAt(position, [9, 3, 4], [12, 10, 7]))
-      if (bottles[2]) parts.push(modelPartAt(position, [6, 3, 9], [10, 10, 13]))
-      return Result.succeed(parts)
-    }
-    case 'end_portal_frame':
-    case 'end_portal_frame_filled': {
-      const facing = horizontalFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      const eye = modelBooleanStateOf(state.eye, blockId, 'eye')
-      return Result.isFailure(eye) ? Result.fail(eye.failure) : Result.succeed(endFramePartsOf(position, eye.success))
-    }
-    case 'end_rod': {
-      const facing = modelFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      if (facing.success === 'up' || facing.success === 'down') {
-        return Result.succeed([modelPartAt(position, [7, 0, 7], [9, 16, 9])])
-      }
-      if (facing.success === 'east' || facing.success === 'west') {
-        return Result.succeed([modelPartAt(position, [0, 7, 7], [16, 9, 9])])
-      }
-      return Result.succeed([modelPartAt(position, [7, 7, 0], [9, 9, 16])])
-    }
-    case 'piston_head': {
-      const facing = modelFacingOf(state, blockId)
-      if (Result.isFailure(facing)) return Result.fail(facing.failure)
-      const short = modelBooleanStateOf(state.short, blockId, 'short')
-      if (Result.isFailure(short)) return Result.fail(short.failure)
-      const type = requiredStateProperty(state.type, blockId, 'type')
-      if (Result.isFailure(type)) return Result.fail(type.failure)
-      if (type.success !== 'normal' && type.success !== 'sticky') {
-        return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'type' })
-      }
-      return Result.succeed(pistonHeadPartsOf(position, facing.success, short.success))
-    }
-    case 'dragon_egg':
-      return Result.succeed([
-        modelPartAt(position, [5, 0, 5], [11, 4, 11]),
-        modelPartAt(position, [2, 4, 2], [14, 12, 14]),
-        modelPartAt(position, [4, 12, 4], [12, 16, 12]),
-      ])
-    case 'end_portal':
-    case 'end_gateway':
-      return Result.succeed([modelPartAt(position, [0, 12, 0], [16, 12, 16], ['yNeg', 'yPos'])])
-    case 'nether_portal': {
-      const axis = requiredStateProperty(state.axis, blockId, 'axis')
-      if (Result.isFailure(axis)) return Result.fail(axis.failure)
-      if (axis.success === 'x') {
-        return Result.succeed([modelPartAt(position, [0, 0, 8], [16, 16, 8], ['zNeg', 'zPos'])])
-      }
-      if (axis.success === 'z') {
-        return Result.succeed([modelPartAt(position, [8, 0, 0], [8, 16, 16], ['xNeg', 'xPos'])])
-      }
-      return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: 'axis' })
-    }
-    case 'fire': {
-      const age = modelIntegerStateOf(state.age, blockId, 'age', 0, 15)
-      if (Result.isFailure(age)) return Result.fail(age.failure)
-      const connections = requiredStateProperty(state.connections, blockId, 'connections')
-      if (Result.isFailure(connections)) return Result.fail(connections.failure)
-      const parts: Array<ModelPart> = [
-        modelPartAt(position, [0, 0, 7], [16, 16, 9], ['xNeg', 'xPos']),
-        modelPartAt(position, [7, 0, 0], [9, 16, 16], ['zNeg', 'zPos']),
-      ]
-      for (const direction of ['north', 'east', 'south', 'west', 'up'] as const) {
-        const connected = connections.success[direction]
-        if (typeof connected !== 'boolean') {
-          return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: `connections.${direction}` })
-        }
-        if (!connected) continue
-        if (direction === 'up') {
-          parts.push(modelPartAt(position, [2, 4, 2], [14, 16, 14], ['yNeg', 'yPos']))
-        } else if (direction === 'north') {
-          parts.push(modelPartAt(position, [0, 0, 0], [16, 16, 0], ['zNeg', 'zPos']))
-        } else if (direction === 'east') {
-          parts.push(modelPartAt(position, [16, 0, 0], [16, 16, 16], ['xNeg', 'xPos']))
-        } else if (direction === 'south') {
-          parts.push(modelPartAt(position, [0, 0, 16], [16, 16, 16], ['zNeg', 'zPos']))
-        } else {
-          parts.push(modelPartAt(position, [0, 0, 0], [0, 16, 16], ['xNeg', 'xPos']))
-        }
-      }
-      return Result.succeed(parts)
-    }
-    case 'wither_skeleton_skull': {
-      const powered = modelBooleanStateOf(state.powered, blockId, 'powered')
-      if (Result.isFailure(powered)) return Result.fail(powered.failure)
-      const rotation = modelIntegerStateOf(state.rotation, blockId, 'rotation', 0, 15)
-      return Result.isFailure(rotation)
-        ? Result.fail(rotation.failure)
-        : Result.succeed([modelPartAt(position, [4, 4, 4], [12, 12, 12])])
-    }
-    case 'chorus_flower': {
-      const age = modelIntegerStateOf(state.age, blockId, 'age', 0, 5)
-      if (Result.isFailure(age)) return Result.fail(age.failure)
-      return age.success === 5
-        ? Result.succeed([modelPartAt(position, [4, 0, 4], [12, 16, 12])])
-        : Result.succeed([
-            modelPartAt(position, [4, 0, 4], [12, 10, 12]),
-            modelPartAt(position, [2, 10, 2], [14, 14, 14]),
-            modelPartAt(position, [4, 14, 4], [12, 16, 12]),
-          ])
-    }
-    case 'chorus_plant': {
-      const connections = requiredStateProperty(state.connections, blockId, 'connections')
-      if (Result.isFailure(connections)) return Result.fail(connections.failure)
-      const parts: Array<ModelPart> = [modelPartAt(position, [6, 6, 6], [10, 10, 10])]
-      const arms: Readonly<Record<'down' | 'north' | 'east' | 'south' | 'west' | 'up', readonly [ModelPoint, ModelPoint]>> = {
-        down: [[6, 0, 6], [10, 6, 10]],
-        north: [[6, 6, 0], [10, 10, 6]],
-        east: [[10, 6, 6], [16, 10, 10]],
-        south: [[6, 6, 10], [10, 10, 16]],
-        west: [[0, 6, 6], [6, 10, 10]],
-        up: [[6, 10, 6], [10, 16, 10]],
-      }
-      for (const direction of ['down', 'north', 'east', 'south', 'west', 'up'] as const) {
-        const connected = connections.success[direction]
-        if (typeof connected !== 'boolean') {
-          return Result.fail({ _tag: 'InvalidBlockStateModelProperty', blockId, property: `connections.${direction}` })
-        }
-        if (connected) parts.push(modelPartAt(position, ...arms[direction]))
-      }
-      return Result.succeed(parts)
-    }
-    case 'end_crystal':
-      return Result.fail({ _tag: 'UnsupportedSpecialBlockModel', blockId, blockType })
-    default:
-      return Result.fail({ _tag: 'UnsupportedSpecialBlockModel', blockId, blockType })
+  const builder = SPECIAL_BLOCK_MODEL_BUILDERS[blockType]
+  if (typeof builder === 'undefined') {
+    return Result.fail({ _tag: 'UnsupportedSpecialBlockModel', blockId, blockType })
   }
+  return builder({ blockId, blockType, position, state })
 }
 
 const meshBlockModelCell = (

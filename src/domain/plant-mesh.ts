@@ -153,7 +153,8 @@ const modelPropertyFailureOf = (
   failure: PlantTextureStageFailure,
   blockType: PlantTextureBlockType,
 ): PlantMeshFailure => {
-  if (failure._tag !== 'InvalidPlantTextureStage') {
+  const { _tag: failureTag } = failure
+  if (failureTag !== 'InvalidPlantTextureStage') {
     return failure
   }
   return {

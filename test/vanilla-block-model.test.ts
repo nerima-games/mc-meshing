@@ -35,7 +35,7 @@ describe('vanilla block model classification', () => {
 
       const classification = classifyVanillaBlockType(blockType.success)
       if (Result.isFailure(classification)) {
-        failures.push(`${blockType.success}: ${classification.failure._tag}`)
+        failures.push(`${blockType.success}: classification failed`)
         continue
       }
       expect(MODEL_CLASSES.has(classification.success)).toBe(true)
