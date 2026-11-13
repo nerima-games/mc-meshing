@@ -15,6 +15,7 @@ import { Effect, Option, Result, SchemaParser } from 'effect'
 import { vi } from 'vitest'
 import * as FastCheck from 'fast-check'
 import {
+  BLOCK_IDS,
   BlockId as KernelBlockId,
   ChunkAxis as chunkAxis,
   blockIdOf,
@@ -33,6 +34,7 @@ import {
   emptyChunk,
 } from '../src/domain/chunk-view'
 import { MAX_BLOCK_ID } from '../src/domain/block-data'
+import { classifyVanillaBlockType } from '../src/domain/vanilla-block-model'
 import { meshChunk, meshChunkNaive, totalQuadArea, totalQuadCount } from '../src/domain/mesh'
 import { EMPTY_MESH_CONFIG, type MeshConfig } from '../src/domain/opacity'
 import {
@@ -77,6 +79,13 @@ const mesh = (chunk: ChunkView, config: MeshConfig = CONFIG) =>
 
 const meshNaive = (chunk: ChunkView, config: MeshConfig = CONFIG) =>
   Result.getOrThrow(meshChunkNaive(chunk, {}, config))
+
+const crossPlants = (chunk: ChunkView, config: MeshConfig = EMPTY_MESH_CONFIG) =>
+  Result.getOrThrow(meshCrossPlants({
+    chunk,
+    plantLookup: Result.getOrThrow(buildCrossPlantLookup(config)),
+    yLimit: chunk.height,
+  }))
 
 type CropBlockType = Exclude<PlantTextureStage['blockType'], 'sapling'>
 
@@ -437,7 +446,7 @@ describe('what a plant does to the six solid passes', () => {
 })
 
 describe('the injected set', () => {
-  it.effect('an empty crossPlantBlockIds explicitly disables plant geometry', () =>
+  it.effect('an empty injected set still models registry plants and leaves custom ids as cubes', () =>
     Effect.sync(() => {
       const withoutPlants: MeshConfig = {
         crossPlantBlockIds: new Set<BlockId>(),
@@ -460,16 +469,37 @@ describe('the injected set', () => {
         waterBlockIds: new Set(),
       }))
       expect(lookup.length).toBe(MAX_BLOCK_ID + 1)
-      expect(lookup.reduce((total, value) => total + value, 0)).toBe(0)
+      for (const currentBlockId of BLOCK_IDS) {
+        const blockType = blockTypeOfId(currentBlockId)
+        expect(Result.isFailure(blockType)).toBe(false)
+        if (Result.isFailure(blockType)) {
+          continue
+        }
+        const modelClass = classifyVanillaBlockType(blockType.success)
+        expect(Result.isFailure(modelClass)).toBe(false)
+        if (Result.isFailure(modelClass)) {
+          continue
+        }
+        expect(isCrossPlant(lookup, currentBlockId)).toBe(modelClass.success === 'cross' || modelClass.success === 'crop')
+      }
     }),
   )
 
-  it.effect('the flattened table agrees with the set on every representable id', () =>
+  it.effect('the flattened table combines vanilla model classes and injected ids', () =>
     Effect.sync(() => {
       const lookup = Result.getOrThrow(buildCrossPlantLookup(CONFIG))
       for (let rawBlockId = 0; rawBlockId <= MAX_BLOCK_ID; rawBlockId += 1) {
         const currentBlockId = blockId(rawBlockId)
-        expect(isCrossPlant(lookup, currentBlockId)).toBe(CONFIG.crossPlantBlockIds.has(currentBlockId))
+        const registeredType = blockTypeOfId(currentBlockId)
+        let vanillaPlant = false
+        if (!Result.isFailure(registeredType)) {
+          const modelClass = classifyVanillaBlockType(registeredType.success)
+          if (!Result.isFailure(modelClass)) {
+            vanillaPlant = modelClass.success === 'cross' || modelClass.success === 'crop'
+          }
+        }
+        const configuredPlant = CONFIG.crossPlantBlockIds.has(currentBlockId)
+        expect(isCrossPlant(lookup, currentBlockId)).toBe(vanillaPlant || configuredPlant)
       }
     }),
   )
@@ -508,6 +538,7 @@ describe('the injected set', () => {
 describe('crop texture stages', () => {
   it.effect('selects each crop age as its texture stage and validates the public result', () =>
     Effect.sync(() => {
+      const plantLookup = Result.getOrThrow(buildCrossPlantLookup(EMPTY_MESH_CONFIG))
       const cropAndAge = FastCheck.oneof(
         FastCheck.tuple(FastCheck.constant('wheat_crop' as const), FastCheck.integer({ min: 0, max: 7 })),
         FastCheck.tuple(FastCheck.constant('potato_crop' as const), FastCheck.integer({ min: 0, max: 7 })),
@@ -522,16 +553,88 @@ describe('crop texture stages', () => {
           }
           const stage = selected.success.value
           const schemaResult = SchemaParser.decodeUnknownResult(PlantTextureStageSchema)(stage)
+          const geometry = meshCrossPlants({ chunk, plantLookup, yLimit: chunk.height })
+          if (Result.isFailure(geometry)) {
+            return false
+          }
+          const vertices = geometry.success.flatMap((quad) => quad.vertices)
+          const yValues = vertices.map((vertex) => vertex[1])
           return (
             Result.isSuccess(schemaResult) &&
             stage.blockType === blockType &&
-            stage.stage === age
+            stage.stage === age &&
+            geometry.success.length === 4 &&
+            geometry.success.every((quad) => quad.textureStage?.blockType === blockType && quad.textureStage.stage === age) &&
+            Math.min(...yValues) === 30 - 1 / 16 &&
+            Math.max(...yValues) === 30 + 15 / 16
           )
         }),
         { numRuns: 120 },
       )
     }),
     PROPERTY_TIMEOUT_MS,
+  )
+
+  it.effect('keeps the vanilla crop model full-sized while stage textures provide their distinct silhouettes', () =>
+    Effect.sync(() => {
+      const low = cropChunk('wheat_crop', 0)
+      const high = cropChunk('wheat_crop', 7)
+      const plantLookup = Result.getOrThrow(buildCrossPlantLookup(EMPTY_MESH_CONFIG))
+      const lowQuads = Result.getOrThrow(meshCrossPlants({ chunk: low.chunk, plantLookup, yLimit: low.chunk.height }))
+      const highQuads = Result.getOrThrow(meshCrossPlants({ chunk: high.chunk, plantLookup, yLimit: high.chunk.height }))
+
+      // Vanilla's shared crop model is y=-1..15 for all ages. Its stage texture
+      // alpha carries the visible height; shortening this geometry would shrink
+      // the silhouette twice when mc-render selects that textureStage tile.
+      expect(lowQuads).toHaveLength(4)
+      expect(highQuads).toHaveLength(4)
+      expect(lowQuads.every((quad) => quad.textureStage?.stage === 0)).toBe(true)
+      expect(highQuads.every((quad) => quad.textureStage?.stage === 7)).toBe(true)
+      expect(lowQuads.map((quad) => quad.vertices)).toStrictEqual(highQuads.map((quad) => quad.vertices))
+      const layers = mesh(high.chunk, EMPTY_MESH_CONFIG)
+      expect(layers.crossPlants).toHaveLength(4)
+      expect(totalQuadCount(layers)).toBe(0)
+    }),
+  )
+
+  it.effect('builds crop planes at the four vanilla axis offsets', () =>
+    Effect.sync(() => {
+      const { chunk } = cropChunk('wheat_crop', 4)
+      const quads = crossPlants(chunk)
+      expect(quads).toHaveLength(4)
+      expect(quads.map((quad) => [quad.nx, quad.nz])).toStrictEqual([
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ])
+      const xCoordinates = quads.slice(0, 2).map((quad) => quad.vertices[0][0])
+      const zCoordinates = quads.slice(2).map((quad) => quad.vertices[0][2])
+      expect(xCoordinates).toStrictEqual([4 + 4 / 16, 4 + 12 / 16])
+      expect(zCoordinates).toStrictEqual([5 + 4 / 16, 5 + 12 / 16])
+    }),
+  )
+
+  it.effect('uses four axis-aligned planes for seagrass and diagonal planes for other crosses', () =>
+    Effect.sync(() => {
+      const seagrass = Option.getOrThrow(blockIdOf('seagrass'))
+      const amethyst = Option.getOrThrow(blockIdOf('amethyst_cluster'))
+      const cobweb = Option.getOrThrow(blockIdOf('cobweb'))
+      const sapling = Option.getOrThrow(blockIdOf('sapling'))
+      const chunks = chunkWith([
+        [2, 20, 3, seagrass],
+        [4, 20, 3, amethyst],
+        [6, 20, 3, cobweb],
+        [8, 20, 3, sapling],
+      ])
+      const quads = crossPlants(chunks)
+      expect(quads.filter((quad) => quad.blockId === seagrass)).toHaveLength(4)
+      expect(quads.filter((quad) => quad.blockId === amethyst)).toHaveLength(2)
+      expect(quads.filter((quad) => quad.blockId === cobweb)).toHaveLength(2)
+      expect(quads.filter((quad) => quad.blockId === sapling)).toHaveLength(2)
+      expect(quads.filter((quad) => quad.blockId === seagrass).every((quad) => quad.ny === 0)).toBe(true)
+      expect(quads.filter((quad) => quad.blockId === sapling).every((quad) => quad.textureStage?.blockType === 'sapling')).toBe(true)
+    }),
   )
 
   it.effect('selects representative wheat, potato, and nether wart textures', () =>
@@ -575,6 +678,9 @@ describe('crop texture stages', () => {
         expect(plantTextureStageAt(chunk, index)).toStrictEqual(
           Result.succeed(Option.some({ blockType: 'sapling', stage })),
         )
+        const quads = crossPlants(chunk)
+        expect(quads).toHaveLength(2)
+        expect(quads.every((quad) => quad.textureStage?.blockType === 'sapling' && quad.textureStage.stage === stage)).toBe(true)
       }
 
       const defaultBlocks = new Uint16Array(BLOCKS_PER_CHUNK)
@@ -627,28 +733,36 @@ describe('crop texture stages', () => {
     }),
   )
 
-  it('returns a typed failure if a kernel crop state has no texture stage', async () => {
+  it('returns the shared model-property failure for arbitrary out-of-range crop ages', async () => {
     vi.resetModules()
+    let age = -1
     vi.doMock('@nerima-games/mc-kernel', async () => {
       const kernel = await vi.importActual<typeof import('@nerima-games/mc-kernel')>('@nerima-games/mc-kernel')
       return {
         ...kernel,
         effectiveBlockStateOf: invalidFixture<typeof kernel.effectiveBlockStateOf>(
-          () => Result.succeed(invalidFixture<EffectiveBlockStateValues>({ age: 8 })),
+          () => Result.succeed(invalidFixture<EffectiveBlockStateValues>({ age })),
         ),
       }
     })
     try {
-      const { plantTextureStageAt: selectStage } = await import('../src/domain/plant-mesh.js')
-      const { chunk, index } = cropChunk('wheat_crop', 0)
-      expect(selectStage(chunk, index)).toMatchObject({
-        failure: {
-          _tag: 'InvalidPlantTextureStage',
-          blockType: 'wheat_crop',
-          blockId: Option.getOrThrow(blockIdOf('wheat_crop')),
-          stage: 8,
-        },
-      })
+      const { buildCrossPlantLookup: buildLookup, meshCrossPlants: meshPlants } = await import('../src/domain/plant-mesh.js')
+      const { chunk } = cropChunk('wheat_crop', 0)
+      const plantLookup = Result.getOrThrow(buildLookup(EMPTY_MESH_CONFIG))
+      const invalidAge = FastCheck.oneof(
+        FastCheck.integer({ min: -64, max: -1 }),
+        FastCheck.integer({ min: 8, max: 64 }),
+      )
+      FastCheck.assert(
+        FastCheck.property(invalidAge, (candidateAge) => {
+          age = candidateAge
+          const result = meshPlants({ chunk, plantLookup, yLimit: chunk.height })
+          return Result.isFailure(result) && result.failure._tag === 'InvalidBlockStateModelProperty' &&
+            result.failure.blockId === Option.getOrThrow(blockIdOf('wheat_crop')) &&
+            result.failure.property === 'age'
+        }),
+        { numRuns: 120 },
+      )
     } finally {
       vi.doUnmock('@nerima-games/mc-kernel')
       vi.resetModules()

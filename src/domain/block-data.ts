@@ -8,9 +8,11 @@ import {
   FLUID_LEVEL_STEP,
   type BlockId,
   type RenderKind,
+  blockTypeOfId,
   blockIdsWithOpacity as kernelBlockIdsWithOpacity,
   propertyOfBlockId,
 } from '@nerima-games/mc-kernel'
+import { classifyVanillaBlockType, type VanillaBlockModelClass } from './vanilla-block-model.js'
 
 export type { BlockId }
 
@@ -65,6 +67,26 @@ export const blockIdsWithRenderKind = (
     Result.map(propertyOfBlockId(blockId, 'renderKind'), (renderKind) => renderKind === kind),
   )
 
+const collectBlockIdsWithModelClass = (
+  modelClass: VanillaBlockModelClass,
+): Result.Result<ReadonlySet<BlockId>, BlockRegistryResolutionFailure | UnclassifiedVanillaBlockTypeFailure> => {
+  const blockIds = new Set<BlockId>()
+  for (const blockId of BLOCK_IDS) {
+    const blockType = blockTypeOfId(blockId)
+    if (Result.isFailure(blockType)) {
+      return Result.fail(blockType.failure)
+    }
+    const classification = classifyVanillaBlockType(blockType.success)
+    if (Result.isFailure(classification)) {
+      return Result.fail(classification.failure)
+    }
+    if (classification.success === modelClass) {
+      blockIds.add(blockId)
+    }
+  }
+  return Result.succeed(blockIds)
+}
+
 export const MINECRAFT_WATER_BLOCK_IDS: Result.Result<
   ReadonlySet<BlockId>,
   BlockRegistryResolutionFailure
@@ -81,8 +103,8 @@ export const MINECRAFT_TRANSPARENT_SOLID_BLOCK_IDS: Result.Result<
 
 export const MINECRAFT_CROSS_PLANT_BLOCK_IDS: Result.Result<
   ReadonlySet<BlockId>,
-  BlockRegistryResolutionFailure
-> = blockIdsWithRenderKind('cross')
+  BlockRegistryResolutionFailure | UnclassifiedVanillaBlockTypeFailure
+> = collectBlockIdsWithModelClass('cross')
 
 /** Overworld and End lava skips one fluid level between flowing blocks. */
 const LAVA_LEVELS_PER_BLOCK = 2
@@ -95,6 +117,13 @@ export type MissingFluidKindFailure = {
   readonly _tag: 'MissingFluidKind'
   readonly blockId: BlockId
 }
+
+type UnclassifiedVanillaBlockTypeFailure = ReturnType<typeof classifyVanillaBlockType> extends Result.Result<
+  VanillaBlockModelClass,
+  infer Failure
+>
+  ? Failure
+  : never
 
 export type BlockDataFailure = BlockRegistryResolutionFailure | MissingFluidKindFailure
 

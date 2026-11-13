@@ -1,4 +1,5 @@
 import { describe, expect, it } from './effect-test.js'
+import * as FastCheck from 'fast-check'
 import { Effect, Option, Result, Schema } from 'effect'
 import { vi } from 'vitest'
 import {
@@ -78,6 +79,21 @@ const SNOW = firstBlockIdWithType('snow')
 const LADDER = firstBlockIdWithType('ladder')
 const LEVER = firstBlockIdWithType('lever')
 const STONE_BUTTON = firstBlockIdWithType('stone_button')
+const TORCH = firstBlockIdWithType('torch')
+const REDSTONE_TORCH = firstBlockIdWithType('redstone_torch')
+const REDSTONE_WALL_TORCH = firstBlockIdWithType('redstone_wall_torch')
+const FARMLAND = firstBlockIdWithType('farmland')
+const CHEST = firstBlockIdWithType('chest')
+const ENDER_CHEST = firstBlockIdWithType('ender_chest')
+const BED = firstBlockIdWithType('bed')
+const CAULDRON = firstBlockIdWithType('cauldron')
+const WATER_CAULDRON = firstBlockIdWithType('water_cauldron')
+const END_PORTAL_FRAME = firstBlockIdWithType('end_portal_frame')
+const END_PORTAL_FRAME_FILLED = firstBlockIdWithType('end_portal_frame_filled')
+const END_PORTAL = firstBlockIdWithType('end_portal')
+const END_GATEWAY = firstBlockIdWithType('end_gateway')
+const END_CRYSTAL = firstBlockIdWithType('end_crystal')
+const NETHER_PORTAL = firstBlockIdWithType('nether_portal')
 
 const chunkWith = (cells: ReadonlyArray<readonly [number, number, number, number]>): ChunkView => {
   const blocks = new Uint16Array(BLOCKS_PER_CHUNK)
@@ -314,6 +330,91 @@ describe('kernel-defined special block geometry', () => {
       expect(isSpecialBlock(SPECIAL_LOOKUP, OPAQUE_CUBE)).toBe(false)
       expect(isSpecialBlock(SPECIAL_LOOKUP, SLAB)).toBe(true)
       expect(isSpecialBlock(SPECIAL_LOOKUP, PRESSURE_PLATE)).toBe(true)
+    }),
+  )
+
+  it.effect('meshes torch, farmland, chest, bed, and end-frame bounds from model dimensions', () =>
+    Effect.sync(() => {
+      const torchQuads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWith([[8, 64, 8, TORCH]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      const torchExpected = [
+        geometryFaceKey('yNeg', [[8 + 7 / 16, 64, 8 + 7 / 16], [8 + 9 / 16, 64, 8 + 7 / 16], [8 + 9 / 16, 64, 8 + 9 / 16], [8 + 7 / 16, 64, 8 + 9 / 16]]),
+        geometryFaceKey('yPos', [[8 + 7 / 16, 64 + 10 / 16, 8 + 9 / 16], [8 + 9 / 16, 64 + 10 / 16, 8 + 9 / 16], [8 + 9 / 16, 64 + 10 / 16, 8 + 7 / 16], [8 + 7 / 16, 64 + 10 / 16, 8 + 7 / 16]]),
+        geometryFaceKey('xNeg', [[8 + 7 / 16, 64, 8], [8 + 7 / 16, 64, 9], [8 + 7 / 16, 65, 9], [8 + 7 / 16, 65, 8]]),
+        geometryFaceKey('xPos', [[8 + 9 / 16, 64, 9], [8 + 9 / 16, 64, 8], [8 + 9 / 16, 65, 8], [8 + 9 / 16, 65, 9]]),
+        geometryFaceKey('zNeg', [[9, 64, 8 + 7 / 16], [8, 64, 8 + 7 / 16], [8, 65, 8 + 7 / 16], [9, 65, 8 + 7 / 16]]),
+        geometryFaceKey('zPos', [[8, 64, 8 + 9 / 16], [9, 64, 8 + 9 / 16], [9, 65, 8 + 9 / 16], [8, 65, 8 + 9 / 16]]),
+      ].sort()
+      expect(torchQuads.map((quad) => geometryFaceKey(quad.direction, quad.vertices)).sort()).toStrictEqual(torchExpected)
+      expect(torchQuads.every((quad) => quad.kind === 'blockModel')).toBe(true)
+
+      const farmlandQuads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates([[8, 64, 8, FARMLAND]], [[8, 64, 8, encodeState(FARMLAND, { moisture: 7 })]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(vertexBounds(farmlandQuads)).toStrictEqual({
+        minX: 8,
+        maxX: 9,
+        minY: 64,
+        maxY: 64 + 15 / 16,
+        minZ: 8,
+        maxZ: 9,
+      })
+
+      const chestQuads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates([[8, 64, 8, CHEST]], [[8, 64, 8, encodeState(CHEST, { facing: 'north', type: 'single' })]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(vertexBounds(chestQuads)).toStrictEqual({
+        minX: 8 + 1 / 16,
+        maxX: 8 + 15 / 16,
+        minY: 64,
+        maxY: 64 + 14 / 16,
+        minZ: 8 + 1 / 16,
+        maxZ: 8 + 15 / 16,
+      })
+
+      const bedQuads = Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates([[8, 64, 8, BED]], [[8, 64, 8, encodeState(BED, { facing: 'east', occupied: false, part: 'head' })]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(vertexBounds(bedQuads)).toStrictEqual({ minX: 8, maxX: 9, minY: 64, maxY: 64 + 9 / 16, minZ: 8, maxZ: 9 })
+
+      const frame = (blockId: BlockId, facing: 'north') => Result.getOrThrow(meshSpecialBlocks(
+        SPECIAL_LOOKUP,
+        chunkWithStates([[8, 64, 8, blockId]], [[8, 64, 8, encodeState(blockId, { facing })]]),
+        {},
+        CHUNK_HEIGHT,
+      ))
+      expect(vertexBounds(frame(END_PORTAL_FRAME, 'north')).maxY).toBe(64 + 13 / 16)
+      expect(vertexBounds(frame(END_PORTAL_FRAME_FILLED, 'north')).maxY).toBe(65)
+    }),
+  )
+
+  it.effect('meshes portal surfaces as planes and keeps entity-only crystal models typed', () =>
+    Effect.sync(() => {
+      const portalSurface = { minX: 8, maxX: 9, minY: 64 + 12 / 16, maxY: 64 + 12 / 16, minZ: 8, maxZ: 9 }
+      for (const blockId of [END_PORTAL, END_GATEWAY]) {
+        const quads = Result.getOrThrow(meshSpecialBlocks(SPECIAL_LOOKUP, chunkWith([[8, 64, 8, blockId]]), {}, CHUNK_HEIGHT))
+        expect(quads).toHaveLength(2)
+        expect(vertexBounds(quads)).toStrictEqual(portalSurface)
+        expect(quads.every((quad) => quad.kind === 'blockModel' && (quad.direction === 'yNeg' || quad.direction === 'yPos'))).toBe(true)
+      }
+      expect(meshSpecialBlocks(SPECIAL_LOOKUP, chunkWith([[8, 64, 8, END_CRYSTAL]]), {}, CHUNK_HEIGHT)).toStrictEqual(Result.fail({
+        _tag: 'UnsupportedSpecialBlockModel',
+        blockId: END_CRYSTAL,
+        blockType: 'end_crystal',
+      }))
     }),
   )
 

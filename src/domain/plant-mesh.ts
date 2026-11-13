@@ -78,6 +78,7 @@
  *    `test/plant-mesh.test.ts`.
  */
 import {
+  BLOCK_IDS,
   BlockId as KernelBlockId,
   blockIdOf,
   blockTypeOfId,
@@ -99,11 +100,21 @@ import {
 import { PlantTextureStageSchema, type CrossPlantQuad, type PlantTextureStage } from './plant-types.js'
 import { type MeshConfig } from './opacity.js'
 import { quadLightAt } from './light-sampling.js'
+import { classifyVanillaBlockType, type UnclassifiedVanillaBlockType } from './vanilla-block-model.js'
+import type { InvalidBlockStateModelPropertyFailure } from './special-types.js'
 
 export { PlantTextureStageSchema } from './plant-types.js'
 export type { CrossPlantQuad, PlantTextureStage, PlantVertex } from './plant-types.js'
 
 type PlantTextureBlockType = Extract<BlockType, 'sapling' | 'wheat_crop' | 'potato_crop' | 'nether_wart_crop'>
+type CropTextureBlockType = Exclude<PlantTextureBlockType, 'sapling'>
+
+const isPlantTextureBlockType = (blockType: BlockType): blockType is PlantTextureBlockType =>
+  blockType === 'sapling' || blockType === 'wheat_crop' || blockType === 'potato_crop' || blockType === 'nether_wart_crop'
+
+const isCropTextureBlockType = (blockType: BlockType | undefined): blockType is CropTextureBlockType =>
+  blockType === 'wheat_crop' || blockType === 'potato_crop' || blockType === 'nether_wart_crop'
+
 const TALL_GRASS_BLOCK_ID = blockIdOf('tall_grass')
 
 export type PlantTextureStageFailure =
@@ -117,6 +128,17 @@ export type PlantTextureStageFailure =
       readonly issue: SchemaIssue.Issue
     }
 
+export type PlantMeshFailure =
+  | BlockRegistryResolutionFailure
+  | ChunkViewFailure
+  | UnclassifiedVanillaBlockType
+  | InvalidBlockStateModelPropertyFailure
+  | {
+      readonly _tag: 'MissingPlantTextureStage'
+      readonly blockId: BlockId
+      readonly blockType: PlantTextureBlockType
+    }
+
 const plantTextureStageOf = (
   blockId: BlockId,
   blockType: PlantTextureBlockType,
@@ -126,6 +148,20 @@ const plantTextureStageOf = (
     SchemaParser.decodeUnknownResult(PlantTextureStageSchema)({ blockType, stage }),
     (issue) => ({ _tag: 'InvalidPlantTextureStage', stage, blockId, blockType, issue }),
   )
+
+const modelPropertyFailureOf = (
+  failure: PlantTextureStageFailure,
+  blockType: PlantTextureBlockType,
+): PlantMeshFailure => {
+  if (failure._tag !== 'InvalidPlantTextureStage') {
+    return failure
+  }
+  return {
+    _tag: 'InvalidBlockStateModelProperty',
+    blockId: failure.blockId,
+    property: blockType === 'sapling' ? 'stage' : 'age',
+  }
+}
 
 /** Select the texture stage for a crop or sapling at a chunk storage index. */
 export const plantTextureStageAt = (
@@ -205,12 +241,14 @@ const BLOCK_ID_TABLE_SIZE = MAX_BLOCK_ID + TABLE_SIZE_OFFSET
 /** Marker written into the table for "this id is a cross plant". */
 const CROSS_PLANT_MARKER = 1
 
-export type CrossPlantLookupFailure = ReturnType<typeof KernelBlockId.result> extends Result.Result<
+type KernelBlockIdFailure = ReturnType<typeof KernelBlockId.result> extends Result.Result<
   BlockId,
   infer Failure
 >
   ? Failure
   : never
+
+export type CrossPlantLookupFailure = KernelBlockIdFailure | BlockRegistryResolutionFailure | UnclassifiedVanillaBlockType
 
 export const buildCrossPlantLookup = (config: MeshConfig): Result.Result<Uint8Array, CrossPlantLookupFailure> => {
   for (const blockId of config.crossPlantBlockIds) {
@@ -220,6 +258,19 @@ export const buildCrossPlantLookup = (config: MeshConfig): Result.Result<Uint8Ar
     }
   }
   const lookup = new Uint8Array(BLOCK_ID_TABLE_SIZE)
+  for (const blockId of BLOCK_IDS) {
+    const blockType = blockTypeOfId(blockId)
+    if (Result.isFailure(blockType)) {
+      return Result.fail(blockType.failure)
+    }
+    const modelClass = classifyVanillaBlockType(blockType.success)
+    if (Result.isFailure(modelClass)) {
+      return Result.fail(modelClass.failure)
+    }
+    if (modelClass.success === 'cross' || modelClass.success === 'crop') {
+      lookup[blockId] = CROSS_PLANT_MARKER
+    }
+  }
   // Iterating the SET rather than every representable id, unlike `buildLayerLookup`. That
   // One has to visit every id because it must give every id an answer; this one
   // Defaults to "not a plant" and only the named ids differ.
@@ -299,6 +350,7 @@ type PlantPlateInput = {
   readonly y: number
   readonly lz: number
   readonly light: CrossPlantQuad['light']
+  readonly textureStage?: PlantTextureStage
 }
 
 type CrossPlantContext = {
@@ -350,7 +402,14 @@ const blockStatePropertiesOf = (blockState: CrossPlantQuad['blockState']): Pick<
   return {}
 }
 
-const platesFor = ({ blockState, blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
+const textureStagePropertiesOf = (textureStage: PlantTextureStage | undefined): Pick<CrossPlantQuad, 'textureStage'> => {
+  if (typeof textureStage !== 'undefined') {
+    return { textureStage }
+  }
+  return {}
+}
+
+const platesFor = ({ blockState, blockId, lx, y, lz, light, textureStage }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
   const x0 = lx + PLANT_INSET
   const x1 = lx + CELL_SIZE - PLANT_INSET
   const z0 = lz + PLANT_INSET
@@ -362,6 +421,7 @@ const platesFor = ({ blockState, blockId, lx, y, lz, light }: PlantPlateInput): 
       ao: 0,
       blockId,
       ...blockStatePropertiesOf(blockState),
+      ...textureStagePropertiesOf(textureStage),
       nx: 0,
       ny: 0,
       nz: 1,
@@ -378,6 +438,7 @@ const platesFor = ({ blockState, blockId, lx, y, lz, light }: PlantPlateInput): 
       ao: 0,
       blockId,
       ...blockStatePropertiesOf(blockState),
+      ...textureStagePropertiesOf(textureStage),
       nx: 1,
       ny: 0,
       nz: 0,
@@ -393,9 +454,122 @@ const platesFor = ({ blockState, blockId, lx, y, lz, light }: PlantPlateInput): 
   ]
 }
 
+const MODEL_PIXEL_SIZE = 16
+const CROP_TOP_MODEL_PIXEL = 15
+const CROP_BOTTOM_MODEL_PIXEL = -1
+const PLANE_INSET_MODEL_PIXELS = 4
+const PLANE_OPPOSITE_INSET_MODEL_PIXELS = MODEL_PIXEL_SIZE - PLANE_INSET_MODEL_PIXELS
+const modelPixel = (value: number): number => value / MODEL_PIXEL_SIZE
+
+const cropPlatesFor = ({ blockId, lx, y, lz, light, textureStage }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
+  const y0 = y + modelPixel(CROP_BOTTOM_MODEL_PIXEL)
+  const y1 = y + modelPixel(CROP_TOP_MODEL_PIXEL)
+  const x0 = lx + modelPixel(PLANE_INSET_MODEL_PIXELS)
+  const x1 = lx + modelPixel(PLANE_OPPOSITE_INSET_MODEL_PIXELS)
+  const z0 = lz + modelPixel(PLANE_INSET_MODEL_PIXELS)
+  const z1 = lz + modelPixel(PLANE_OPPOSITE_INSET_MODEL_PIXELS)
+  return [
+    {
+      ao: 0,
+      blockId,
+      ...textureStagePropertiesOf(textureStage),
+      nx: 1,
+      ny: 0,
+      nz: 0,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[x0, y0, lz], [x0, y1, lz], [x0, y1, lz + CELL_SIZE], [x0, y0, lz + CELL_SIZE]],
+    },
+    {
+      ao: 0,
+      blockId,
+      ...textureStagePropertiesOf(textureStage),
+      nx: -1,
+      ny: 0,
+      nz: 0,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[x1, y0, lz], [x1, y1, lz], [x1, y1, lz + CELL_SIZE], [x1, y0, lz + CELL_SIZE]],
+    },
+    {
+      ao: 0,
+      blockId,
+      ...textureStagePropertiesOf(textureStage),
+      nx: 0,
+      ny: 0,
+      nz: 1,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[lx, y0, z0], [lx, y1, z0], [lx + CELL_SIZE, y1, z0], [lx + CELL_SIZE, y0, z0]],
+    },
+    {
+      ao: 0,
+      blockId,
+      ...textureStagePropertiesOf(textureStage),
+      nx: 0,
+      ny: 0,
+      nz: -1,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[lx, y0, z1], [lx, y1, z1], [lx + CELL_SIZE, y1, z1], [lx + CELL_SIZE, y0, z1]],
+    },
+  ]
+}
+
+const seagrassPlatesFor = ({ blockId, lx, y, lz, light }: PlantPlateInput): ReadonlyArray<CrossPlantQuad> => {
+  const x0 = lx + modelPixel(PLANE_INSET_MODEL_PIXELS)
+  const x1 = lx + modelPixel(PLANE_OPPOSITE_INSET_MODEL_PIXELS)
+  const z0 = lz + modelPixel(PLANE_INSET_MODEL_PIXELS)
+  const z1 = lz + modelPixel(PLANE_OPPOSITE_INSET_MODEL_PIXELS)
+  const y0 = y
+  const y1 = y + CELL_SIZE
+  return [
+    {
+      ao: 0,
+      blockId,
+      nx: 1,
+      ny: 0,
+      nz: 0,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[x0, y0, lz], [x0, y1, lz], [x0, y1, lz + CELL_SIZE], [x0, y0, lz + CELL_SIZE]],
+    },
+    {
+      ao: 0,
+      blockId,
+      nx: -1,
+      ny: 0,
+      nz: 0,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[x1, y0, lz], [x1, y1, lz], [x1, y1, lz + CELL_SIZE], [x1, y0, lz + CELL_SIZE]],
+    },
+    {
+      ao: 0,
+      blockId,
+      nx: 0,
+      ny: 0,
+      nz: 1,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[lx, y0, z0], [lx, y1, z0], [lx + CELL_SIZE, y1, z0], [lx + CELL_SIZE, y0, z0]],
+    },
+    {
+      ao: 0,
+      blockId,
+      nx: 0,
+      ny: 0,
+      nz: -1,
+      role: 'side',
+      ...lightPropertiesOf(light),
+      vertices: [[lx, y0, z1], [lx, y1, z1], [lx + CELL_SIZE, y1, z1], [lx + CELL_SIZE, y0, z1]],
+    },
+  ]
+}
+
 export const meshCrossPlants = (
   options: CrossPlantOptions,
-): Result.Result<ReadonlyArray<CrossPlantQuad>, ChunkViewFailure> => {
+): Result.Result<ReadonlyArray<CrossPlantQuad>, PlantMeshFailure> => {
   const { chunk, maxX, maxY, maxZ, minX, minY, minZ, neighbours, plantLookup } = crossPlantContextOf(options)
   const plates: Array<CrossPlantQuad> = []
   for (let lx = minX; lx < maxX; lx += LOOP_STEP) {
@@ -404,23 +578,52 @@ export const meshCrossPlants = (
         const blockId = getBlock(chunk, lx, y, lz)
         if (isCrossPlant(plantLookup, blockId)) {
           let blockState: CrossPlantQuad['blockState']
-          if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
-            const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
-            if (Result.isFailure(state)) {
-              return Result.fail(state.failure)
+          let textureStage: PlantTextureStage | undefined
+          const registeredType = blockTypeOfId(blockId)
+          let blockType: BlockType | undefined
+          if (!Result.isFailure(registeredType) && typeof registeredType.success !== 'undefined') {
+            blockType = registeredType.success
+            const modelClass = classifyVanillaBlockType(blockType)
+            if (Result.isFailure(modelClass)) {
+              return Result.fail(modelClass.failure)
             }
-            blockState = state.success
+            if (isPlantTextureBlockType(blockType)) {
+              const index = blockIndex(lx, y, lz, chunk.height)
+              const selectedStage = plantTextureStageAt(chunk, index)
+              if (Result.isFailure(selectedStage)) {
+                return Result.fail(modelPropertyFailureOf(selectedStage.failure, blockType))
+              }
+              if (Option.isNone(selectedStage.success)) {
+                return Result.fail({ _tag: 'MissingPlantTextureStage', blockId, blockType })
+              }
+              textureStage = selectedStage.success.value
+            }
+            if (Option.isSome(TALL_GRASS_BLOCK_ID) && blockId === TALL_GRASS_BLOCK_ID.value) {
+              const state = blockStateAt(chunk, blockIndex(lx, y, lz, chunk.height))
+              if (Result.isFailure(state)) {
+                return Result.fail(state.failure)
+              }
+              blockState = state.success
+            }
           }
-          plates.push(
-            ...platesFor({
-              blockId,
-              blockState,
-              light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
-              lx,
-              lz,
-              y,
-            }),
-          )
+          const input = {
+            blockId,
+            blockState,
+            light: quadLightAt(chunk, neighbours, 'yPos', lx, y, lz),
+            lx,
+            lz,
+            textureStage,
+            y,
+          }
+          if (isCropTextureBlockType(blockType)) {
+            plates.push(...cropPlatesFor(input))
+          } else if (blockType === 'seagrass') {
+            plates.push(...seagrassPlatesFor(input))
+          } else {
+            plates.push(
+              ...platesFor(input),
+            )
+          }
         }
       }
     }
