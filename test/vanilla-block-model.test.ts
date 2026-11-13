@@ -53,6 +53,13 @@ describe('vanilla block model classification', () => {
     }
   })
 
+  it('classifies stateful piston bases as special models', () => {
+    for (const blockType of ['piston', 'sticky_piston'] as const) {
+      expect(EXPLICIT_CUBE_BLOCK_TYPES.has(blockType)).toBe(false)
+      expect(classifyVanillaBlockType(blockType)).toEqual(Result.succeed('special'))
+    }
+  })
+
   it('classifies air separately from block geometry', () => {
     expect(classifyVanillaBlockType('air')).toEqual(Result.succeed('air'))
   })

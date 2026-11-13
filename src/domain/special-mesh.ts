@@ -129,6 +129,8 @@ const STATEFUL_SPECIAL_KIND_BY_BLOCK_TYPE: Partial<Record<BlockType, SpecialRend
   torch: 'blockModel',
   redstone_torch: 'blockModel',
   redstone_wall_torch: 'blockModel',
+  piston: 'blockModel',
+  sticky_piston: 'blockModel',
   farmland: 'blockModel',
   chest: 'blockModel',
   ender_chest: 'blockModel',
@@ -2088,21 +2090,106 @@ const rotateModelPartY = (part: ModelPart, position: BlockPosition, turns: numbe
   }
 }
 
+type VanillaModelFaceName = 'down' | 'up' | 'north' | 'east' | 'south' | 'west'
+type VanillaModelElement = {
+  readonly from: ModelPoint
+  readonly to: ModelPoint
+  readonly faces: ReadonlyArray<VanillaModelFaceName>
+}
+
+const MODEL_ELEMENT_TILT_ORIGIN: ModelPoint = [0, 3.5, 8]
+const MODEL_ELEMENT_TILT_ANGLE = -Math.PI / 8
+const BLOCKSTATE_Y_TURNS: Readonly<Record<HorizontalFacing, number>> = { east: 0, north: 3, south: 1, west: 2 }
+const VANILLA_FACE_GEOMETRY: Readonly<Record<VanillaModelFaceName, { readonly axis: 0 | 1 | 2; readonly edge: 0 | 1; readonly direction: FaceDirection }>> = {
+  down: { axis: 1, edge: 0, direction: 'yNeg' },
+  up: { axis: 1, edge: 1, direction: 'yPos' },
+  north: { axis: 2, edge: 0, direction: 'zNeg' },
+  east: { axis: 0, edge: 1, direction: 'xPos' },
+  south: { axis: 2, edge: 1, direction: 'zPos' },
+  west: { axis: 0, edge: 0, direction: 'xNeg' },
+}
+
+const rotateModelFaceY = (face: FaceDirection, turns: number): FaceDirection => {
+  let direction = face
+  for (let turn = 0; turn < turns; turn += 1) {
+    direction = direction === 'xNeg' ? 'zNeg'
+      : direction === 'zNeg' ? 'xPos'
+        : direction === 'xPos' ? 'zPos'
+          : direction === 'zPos' ? 'xNeg'
+            : direction
+  }
+  return direction
+}
+
+const modelElementPartsAt = (
+  position: BlockPosition,
+  { from, to, faces }: VanillaModelElement,
+  facing: HorizontalFacing,
+): ReadonlyArray<ModelPart> => {
+  const [originX, originY] = MODEL_ELEMENT_TILT_ORIGIN
+  const cos = Math.cos(MODEL_ELEMENT_TILT_ANGLE)
+  const sin = Math.sin(MODEL_ELEMENT_TILT_ANGLE)
+  const turns = BLOCKSTATE_Y_TURNS[facing]
+  const corners: ReadonlyArray<ModelPoint> = [
+    [from[0], from[1], from[2]], [from[0], from[1], to[2]],
+    [from[0], to[1], from[2]], [from[0], to[1], to[2]],
+    [to[0], from[1], from[2]], [to[0], from[1], to[2]],
+    [to[0], to[1], from[2]], [to[0], to[1], to[2]],
+  ]
+  const transformed = corners.map(([x, y, z]): ModelPoint => {
+    const dx = x - originX
+    const dy = y - originY
+    const tiltedX = originX + cos * dx - sin * dy
+    const tiltedY = originY + sin * dx + cos * dy
+    const turned = turns === 0
+      ? [tiltedX, tiltedY, z] as const
+      : turns === 1
+        ? [16 - z, tiltedY, tiltedX] as const
+        : turns === 2
+          ? [16 - tiltedX, tiltedY, 16 - z] as const
+          : [z, tiltedY, 16 - tiltedX] as const
+    return turned
+  })
+  const [lx, y, lz] = position
+  return faces.map((name) => {
+    const face = VANILLA_FACE_GEOMETRY[name]
+    const coordinate = from[face.axis] + (to[face.axis] - from[face.axis]) * face.edge
+    const faceVertices = corners
+      .map((corner, index) => corner[face.axis] === coordinate ? transformed[index] : undefined)
+      .filter((point): point is ModelPoint => typeof point !== 'undefined')
+    return {
+      bounds: {
+        minX: lx + Math.min(...faceVertices.map(([x]) => x)) / 16,
+        maxX: lx + Math.max(...faceVertices.map(([x]) => x)) / 16,
+        minY: y + Math.min(...faceVertices.map(([, pointY]) => pointY)) / 16,
+        maxY: y + Math.max(...faceVertices.map(([, pointY]) => pointY)) / 16,
+        minZ: lz + Math.min(...faceVertices.map(([, , z]) => z)) / 16,
+        maxZ: lz + Math.max(...faceVertices.map(([, , z]) => z)) / 16,
+      },
+      faces: [rotateModelFaceY(face.direction, turns)],
+    }
+  })
+}
+
 const standingTorchPartsOf = (position: BlockPosition): ReadonlyArray<ModelPart> => [
-  modelPartAt(position, [7, 0, 7], [9, 10, 9], ['yNeg', 'yPos']),
-  modelPartAt(position, [7, 0, 0], [9, 16, 16], ['xNeg', 'xPos']),
-  modelPartAt(position, [0, 0, 7], [16, 16, 9], ['zNeg', 'zPos']),
+  modelPartAt(position, [7, 0, 7], [9, 10, 9]),
 ]
 
-const wallTorchPartsOf = (position: BlockPosition, facing: HorizontalFacing): ReadonlyArray<ModelPart> => {
-  const turns: Readonly<Record<HorizontalFacing, number>> = { east: 0, south: 1, west: 2, north: 3 }
-  const baseParts = [
-    modelPartAt(position, [7, 3, 1], [9, 13, 11], ['yNeg', 'yPos']),
-    modelPartAt(position, [7, 1, 1], [9, 13, 11], ['xNeg', 'xPos']),
-    modelPartAt(position, [3, 1, 7], [13, 13, 9], ['zNeg', 'zPos']),
-  ]
-  return baseParts.map((part) => rotateModelPartY(part, position, turns[facing]))
-}
+const REDSTONE_WALL_TORCH_ELEMENTS: ReadonlyArray<VanillaModelElement> = [
+  { from: [-1, 3.5, 7], to: [1, 13.5, 9], faces: ['down', 'up', 'north', 'east', 'south', 'west'] },
+  { from: [-1.5, 8, 6.5], to: [1.5, 11, 9.5], faces: ['up'] },
+  { from: [-1.5, 14, 6.5], to: [1.5, 17, 9.5], faces: ['down'] },
+  { from: [-1.5, 11, 3.5], to: [1.5, 14, 6.5], faces: ['south'] },
+  { from: [1.5, 11, 6.5], to: [4.5, 14, 9.5], faces: ['west'] },
+  { from: [-1.5, 11, 9.5], to: [1.5, 14, 12.5], faces: ['north'] },
+  { from: [-4.5, 11, 6.5], to: [-1.5, 14, 9.5], faces: ['east'] },
+]
+
+const wallTorchPartsOf = (
+  position: BlockPosition,
+  facing: HorizontalFacing,
+  elements: ReadonlyArray<VanillaModelElement>,
+): ReadonlyArray<ModelPart> => elements.flatMap((element) => modelElementPartsAt(position, element, facing))
 
 const chestPartsOf = (
   position: BlockPosition,
@@ -2150,13 +2237,18 @@ const BED_PILLOW_PARTS: Readonly<Record<HorizontalFacing, (position: BlockPositi
 const bedPillowPartOf = (position: BlockPosition, facing: HorizontalFacing): ModelPart =>
   BED_PILLOW_PARTS[facing](position)
 
-const anvilPartsOf = (position: BlockPosition, facing: HorizontalFacing): ReadonlyArray<ModelPart> => [
-  modelPartAt(position, [2, 0, 2], [14, 4, 14]),
-  modelPartAt(position, [4, 4, 4], [12, 10, 12]),
-  facing === 'north' || facing === 'south'
-    ? modelPartAt(position, [0, 10, 4], [16, 16, 12])
-    : modelPartAt(position, [4, 10, 0], [12, 16, 16]),
-]
+const anvilPartsOf = (position: BlockPosition, facing: HorizontalFacing): ReadonlyArray<ModelPart> => {
+  const turns: Readonly<Record<HorizontalFacing, number>> = { east: 0, south: 1, west: 2, north: 3 }
+  const horizontalParts = [
+    modelPartAt(position, [4, 4, 3], [12, 5, 13]),
+    modelPartAt(position, [6, 5, 4], [10, 10, 12]),
+    modelPartAt(position, [3, 10, 0], [13, 16, 16]),
+  ]
+  return [
+    modelPartAt(position, [2, 0, 2], [14, 4, 14]),
+    ...horizontalParts.map((part) => rotateModelPartY(part, position, turns[facing])),
+  ]
+}
 
 const cauldronPartsOf = (position: BlockPosition): ReadonlyArray<ModelPart> => [
   modelPartAt(position, [2, 0, 2], [14, 3, 14]),
@@ -2168,21 +2260,22 @@ const cauldronPartsOf = (position: BlockPosition): ReadonlyArray<ModelPart> => [
 
 const hopperPartsOf = (position: BlockPosition, facing: NonNullable<EffectiveBlockStateValues['facing']>): ReadonlyArray<ModelPart> => {
   const parts: Array<ModelPart> = [
-    modelPartAt(position, [0, 10, 0], [16, 16, 3]),
-    modelPartAt(position, [0, 10, 13], [16, 16, 16]),
-    modelPartAt(position, [0, 10, 3], [3, 16, 13]),
-    modelPartAt(position, [13, 10, 3], [16, 16, 13]),
+    modelPartAt(position, [0, 10, 0], [16, 11, 16]),
+    modelPartAt(position, [0, 11, 0], [2, 16, 16]),
+    modelPartAt(position, [14, 11, 0], [16, 16, 16]),
+    modelPartAt(position, [2, 11, 0], [14, 16, 2]),
+    modelPartAt(position, [2, 11, 14], [14, 16, 16]),
     modelPartAt(position, [4, 4, 4], [12, 10, 12]),
   ]
   const outlet = facing === 'down'
     ? modelPartAt(position, [6, 0, 6], [10, 4, 10])
     : facing === 'north'
-      ? modelPartAt(position, [6, 0, 0], [10, 4, 6])
+      ? modelPartAt(position, [6, 4, 0], [10, 8, 4])
       : facing === 'south'
-        ? modelPartAt(position, [6, 0, 10], [10, 4, 16])
+        ? modelPartAt(position, [6, 4, 12], [10, 8, 16])
         : facing === 'west'
-          ? modelPartAt(position, [0, 0, 6], [6, 4, 10])
-          : modelPartAt(position, [10, 0, 6], [16, 4, 10])
+          ? modelPartAt(position, [0, 4, 6], [4, 8, 10])
+          : modelPartAt(position, [12, 4, 6], [16, 8, 10])
   parts.push(outlet)
   return parts
 }
@@ -2233,6 +2326,26 @@ const pistonHeadPartsOf = (
   short: boolean,
 ): ReadonlyArray<ModelPart> => PISTON_HEAD_PARTS[facing](position, short ? 8 : 12)
 
+const PISTON_EXTENDED_BASE_BOUNDS: Readonly<Record<ModelFacing, readonly [ModelPoint, ModelPoint]>> = {
+  up: [[0, 0, 0], [16, 12, 16]],
+  down: [[0, 4, 0], [16, 16, 16]],
+  north: [[0, 0, 4], [16, 16, 16]],
+  south: [[0, 0, 0], [16, 16, 12]],
+  west: [[4, 0, 0], [16, 16, 16]],
+  east: [[0, 0, 0], [12, 16, 16]],
+}
+
+const pistonBaseModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
+  const facing = modelFacingOf(state, blockId)
+  if (Result.isFailure(facing)) return Result.fail(facing.failure)
+  const extended = modelBooleanStateOf(state.extended, blockId, 'extended')
+  if (Result.isFailure(extended)) return Result.fail(extended.failure)
+  const [from, to]: readonly [ModelPoint, ModelPoint] = extended.success
+    ? PISTON_EXTENDED_BASE_BOUNDS[facing.success]
+    : [[0, 0, 0], [16, 16, 16]]
+  return Result.succeed([modelPartAt(position, from, to)])
+}
+
 // For Wiki pages without model elements, use explicit visual estimates rather than collision bounds.
 type BlockModelBuildContext = {
   readonly blockId: BlockId
@@ -2249,14 +2362,17 @@ const staticBlockModelBuilder = (
 
 const redstoneTorchModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
   const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
-  return Result.map(lit, () => standingTorchPartsOf(position))
+  return Result.map(lit, () => [
+    ...standingTorchPartsOf(position),
+    modelPartAt(position, [6.5, 7.5, 6.5], [9.5, 10.5, 9.5]),
+  ])
 }
 
 const redstoneWallTorchModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
   const facing = horizontalFacingOf(state, blockId)
   if (Result.isFailure(facing)) return Result.fail(facing.failure)
   const lit = modelBooleanStateOf(state.lit, blockId, 'lit')
-  return Result.map(lit, () => wallTorchPartsOf(position, facing.success))
+  return Result.map(lit, () => wallTorchPartsOf(position, facing.success, REDSTONE_WALL_TORCH_ELEMENTS))
 }
 
 const farmlandModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): Result.Result<ReadonlyArray<ModelPart>, SpecialMeshFailure> => {
@@ -2286,9 +2402,14 @@ const bedModelPartsOf = ({ blockId, position, state }: BlockModelBuildContext): 
   }
   const occupied = modelBooleanStateOf(state.occupied, blockId, 'occupied')
   if (Result.isFailure(occupied)) return Result.fail(occupied.failure)
+  const bedFeet: Readonly<Record<'head' | 'foot', ReadonlyArray<readonly [ModelPoint, ModelPoint]>>> = {
+    head: [[[0, 0, 0], [3, 3, 3]], [[13, 0, 0], [16, 3, 3]]],
+    foot: [[[0, 0, 13], [3, 3, 16]], [[13, 0, 13], [16, 3, 16]]],
+  }
+  const turns: Readonly<Record<HorizontalFacing, number>> = { north: 0, east: 1, south: 2, west: 3 }
   return Result.succeed([
-    modelPartAt(position, [0, 0, 0], [16, 5, 16]),
-    modelPartAt(position, [0, 5, 0], [16, 9, 16]),
+    modelPartAt(position, [0, 3, 0], [16, 9, 16]),
+    ...bedFeet[part.success].map(([from, to]) => rotateModelPartY(modelPartAt(position, from, to), position, turns[facing.success])),
     ...(part.success === 'head' ? [bedPillowPartOf(position, facing.success)] : []),
   ])
 }
@@ -2473,6 +2594,8 @@ const SPECIAL_BLOCK_MODEL_BUILDERS: Readonly<Partial<Record<BlockType, BlockMode
   torch: staticBlockModelBuilder(standingTorchPartsOf),
   redstone_torch: redstoneTorchModelPartsOf,
   redstone_wall_torch: redstoneWallTorchModelPartsOf,
+  piston: pistonBaseModelPartsOf,
+  sticky_piston: pistonBaseModelPartsOf,
   farmland: farmlandModelPartsOf,
   chest: chestModelPartsOf,
   ender_chest: chestModelPartsOf,
